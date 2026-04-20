@@ -96,6 +96,13 @@ def test_install_status_reports_clean_system_after_migration(client: TestClient)
     assert payload["schema_ready"] is True
     assert payload["is_installed"] is False
     assert payload["superuser_exists"] is False
+    assert set(payload["capabilities"].keys()) == {"pg_trgm", "pgvector"}
+    for capability_name in ("pg_trgm", "pgvector"):
+        capability = payload["capabilities"][capability_name]
+        assert capability["available"] is True
+        assert capability["installed"] is True
+        assert capability["default_version"] is not None
+        assert capability["installed_version"] is not None
 
 
 def test_bootstrap_creates_first_superuser(

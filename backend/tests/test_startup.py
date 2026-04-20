@@ -91,3 +91,9 @@ def test_readiness_reports_schema_status(client: TestClient) -> None:
     assert payload["database"] == "up"
     assert payload["schema_ready"] is True
     assert set(payload["capabilities"].keys()) == {"pg_trgm", "pgvector"}
+    for capability_name in ("pg_trgm", "pgvector"):
+        capability = payload["capabilities"][capability_name]
+        assert capability["available"] is True
+        assert capability["installed"] is True
+        assert capability["default_version"] is not None
+        assert capability["installed_version"] is not None

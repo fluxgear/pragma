@@ -33,13 +33,17 @@ def get_extension_capabilities(connection: Connection) -> dict[str, dict[str, An
         psycopg.Error: If PostgreSQL query execution fails.
     """
 
+    capability_to_extension = {
+        "pg_trgm": "pg_trgm",
+        "pgvector": "vector",
+    }
     rows = connection.execute(
         """
         SELECT name, default_version, installed_version
         FROM pg_available_extensions
         WHERE name = ANY(%s)
         """,
-        (_CAPABILITY_NAMES,),
+        (list(capability_to_extension.values()),),
     ).fetchall()
 
     capabilities = {
@@ -51,8 +55,13 @@ def get_extension_capabilities(connection: Connection) -> dict[str, dict[str, An
         }
         for name in _CAPABILITY_NAMES
     }
+    extension_to_capability = {
+        extension_name: capability_name
+        for capability_name, extension_name in capability_to_extension.items()
+    }
     for row in rows:
-        capabilities[row["name"]] = {
+        capability_name = extension_to_capability[row["name"]]
+        capabilities[capability_name] = {
             "available": True,
             "installed": row["installed_version"] is not None,
             "default_version": row["default_version"],

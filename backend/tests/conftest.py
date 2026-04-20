@@ -59,7 +59,7 @@ def _create_database(values: dict[str, str], database_name: str) -> None:
         None.
 
     Raises:
-        psycopg.Error: If PostgreSQL cannot create the database.
+        psycopg.Error: If PostgreSQL cannot create the database or provision required extensions.
     """
 
     admin_dsn = build_database_dsn(values, values["PRAGMA_DATABASE_ADMIN_DATABASE"])
@@ -67,6 +67,11 @@ def _create_database(values: dict[str, str], database_name: str) -> None:
         connection.execute(
             sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name))
         )
+
+    database_dsn = build_database_dsn(values, database_name)
+    with psycopg.connect(database_dsn, autocommit=True) as connection:
+        connection.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
 
 def _drop_database(values: dict[str, str], database_name: str) -> None:
