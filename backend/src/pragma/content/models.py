@@ -222,7 +222,7 @@ class ContentTypeCreateRequest(BaseModel):
         ValidationError: If payload fields are invalid.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str = Field(min_length=1, max_length=120)
     slug: str | None = Field(default=None, min_length=1, max_length=160)
@@ -243,7 +243,7 @@ class ContentTypeUpdateRequest(BaseModel):
         ValidationError: If payload fields are invalid.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str = Field(min_length=1, max_length=120)
     slug: str | None = Field(default=None, min_length=1, max_length=160)

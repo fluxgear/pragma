@@ -12,6 +12,7 @@ htmlcov/
 .venv/
 .env
 .env.*
+!backend/.env.example
 
 # Node
 node_modules/

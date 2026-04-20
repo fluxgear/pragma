@@ -277,6 +277,77 @@ def test_content_type_crud_flow(
     assert final_list_response.json()['total'] == 0
 
 
+def test_content_type_create_rejects_blank_name(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify content-type creation rejects whitespace-only names.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    payload = _content_type_payload()
+    payload['name'] = '   '
+    payload['slug'] = 'articles'
+
+    response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': 'Request validation failed',
+        'code': 'VALIDATION_ERROR',
+    }
+
+
+def test_content_type_update_rejects_blank_name(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify content-type updates reject whitespace-only names.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    payload = _content_type_payload()
+    payload['name'] = '   '
+    payload['slug'] = 'articles'
+
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': 'Request validation failed',
+        'code': 'VALIDATION_ERROR',
+    }
+
+
 def test_entry_crud_flow_and_publish_state(
     client: TestClient,
     bootstrap_payload: dict[str, str],
@@ -378,7 +449,49 @@ def test_entry_validation_rejects_invalid_payload(
     client: TestClient,
     bootstrap_payload: dict[str, str],
 ) -> None:
-    """Verify entry validation rejects type and shape mismatches explicitly.
+    """Verify unknown entry fields are rejected explicitly.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Hello World',
+                'body': '<p>Hello</p>',
+                'views': 1,
+                'extra': 'unexpected',
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'detail': 'Unknown field(s) for this content type: extra',
+        'code': 'ENTRY_FIELD_UNKNOWN',
+    }
+
+
+def test_entry_validation_rejects_missing_required_field(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify entry validation rejects missing required fields explicitly.
 
     Args:
         client: FastAPI test client.
@@ -402,16 +515,56 @@ def test_entry_validation_rejects_invalid_payload(
             'status': 'draft',
             'payload': {
                 'body': '<p>Hello</p>',
-                'views': 'many',
-                'extra': 'unexpected',
+                'views': 1,
             },
         },
     )
 
     assert response.status_code == 400
     assert response.json() == {
-        'detail': 'Unknown field(s) for this content type: extra',
-        'code': 'ENTRY_FIELD_UNKNOWN',
+        'detail': "Field 'title' is required",
+        'code': 'ENTRY_FIELD_REQUIRED',
+    }
+
+
+def test_entry_validation_rejects_invalid_field_type(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify entry validation rejects field values of the wrong type.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Hello World',
+                'body': '<p>Hello</p>',
+                'views': 'many',
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'detail': "Field 'views' must be an integer",
+        'code': 'ENTRY_FIELD_INVALID',
     }
 
 

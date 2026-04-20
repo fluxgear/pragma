@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.1 — 2026-04-20
+
+### Fixed
+- Rejected whitespace-only content-type names during request validation for create and update flows
+- Added focused M2 content validation coverage for blank names, unknown fields, missing required fields, and wrong-type field values
+- Removed the Alembic `path_separator` deprecation warning and restored standalone `alembic upgrade head` verification from the local backend workspace configuration
+- Updated backend package metadata wording and version references for the M2 audit patch release
+
 ## v0.2.0 — 2026-04-20
 
 ### Added
