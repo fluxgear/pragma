@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from pragma import __version__
 from pragma.auth.router import router as auth_router
 from pragma.config import Settings, get_settings
+from pragma.content.router import router as content_router
 from pragma.errors import register_exception_handlers
 from pragma.install.router import router as install_router
 from pragma.storage.pool import DatabasePool
@@ -110,4 +111,5 @@ def create_app() -> FastAPI:
     app.include_router(system_router, prefix="/api/v1")
     app.include_router(install_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(content_router, prefix="/api/v1")
     return app

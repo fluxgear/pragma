@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Marc Mironescu / FluxGear. MIT License.
-"""Pragma backend package.
+"""Content engine package for Pragma.
 
 Args:
     None.
@@ -10,5 +10,3 @@ Returns:
 Raises:
     None.
 """
-
-__version__ = "0.2.0"
