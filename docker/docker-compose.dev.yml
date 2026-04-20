@@ -1,0 +1,26 @@
+services:
+  postgres:
+    build:
+      context: ./postgres
+    container_name: pragma-postgres-dev
+    environment:
+      POSTGRES_DB: ${PRAGMA_DB_NAME:-pragma}
+      POSTGRES_USER: ${PRAGMA_DB_USER:-pragma}
+      POSTGRES_PASSWORD: ${PRAGMA_DB_PASSWORD:-change-me}
+    ports:
+      - "${PRAGMA_DB_PORT:-5433}:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - pragma-postgres-dev-data:/var/lib/postgresql
+
+volumes:
+  pragma-postgres-dev-data:
