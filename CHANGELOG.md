@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.1 — 2026-04-21
+
+### Fixed
+- Routed the admin content API helpers through the active bearer access token so protected `/api/v1/content/*` requests no longer fail after login
+- Preserved unchanged legacy `rich_text` HTML during entry updates and content-type revalidation while keeping strict M4 validation for new or modified rich-text payloads
+- Added focused frontend and backend regression coverage for protected content API auth propagation and legacy rich-text round-tripping
+- Replaced the shared admin-shell milestone label with the generic `Admin workbench` text
+- Split the admin production bundle into smaller chunks so the previous Vite chunk-size warning no longer appears during builds
+
 ## v0.4.0 — 2026-04-21
 
 ### Added

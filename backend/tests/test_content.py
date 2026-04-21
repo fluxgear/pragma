@@ -13,6 +13,7 @@ Raises:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import psycopg
@@ -127,6 +128,33 @@ def _create_content_type(client: TestClient, headers: dict[str, str]) -> dict[st
     response = client.post('/api/v1/content/types', headers=headers, json=_content_type_payload())
     assert response.status_code == 201
     return response.json()
+
+
+def _overwrite_entry_payload(
+    migrated_database: dict[str, str],
+    entry_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """Overwrite an entry payload directly for legacy-compatibility tests.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        entry_id: Stored content-entry identifier.
+        payload: Replacement JSON payload to persist.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot update the stored payload.
+    """
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn) as connection, connection.transaction():
+        connection.execute(
+            "UPDATE pragma_content_entries SET payload = %s::jsonb WHERE id = %s",
+            (json.dumps(payload), entry_id),
+        )
 
 
 def test_migrations_create_content_schema(migrated_database: dict[str, str]) -> None:
@@ -858,6 +886,135 @@ def test_entry_slug_conflict_returns_structured_error(
         'detail': 'An entry with this slug already exists for the content type',
         'code': 'ENTRY_SLUG_CONFLICT',
     }
+
+
+def test_legacy_rich_text_entry_update_preserves_unchanged_html(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify legacy rich-text HTML can round-trip unchanged during entry updates.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Legacy Entry',
+                'body': '<p>Original</p>',
+                'views': 1,
+            },
+        },
+    )
+    assert create_response.status_code == 201
+    entry = create_response.json()
+
+    legacy_body = '<p class="legacy">Original</p>'
+    _overwrite_entry_payload(
+        migrated_database,
+        entry['id'],
+        {
+            **entry['payload'],
+            'body': legacy_body,
+        },
+    )
+
+    update_response = client.put(
+        f"/api/v1/content/entries/{entry['id']}",
+        headers=headers,
+        json={
+            'status': 'draft',
+            'payload': {
+                'title': 'Legacy Entry',
+                'body': legacy_body,
+                'views': 2,
+            },
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()['payload']['body'] == legacy_body
+    assert update_response.json()['payload']['views'] == 2
+
+
+def test_content_type_update_allows_existing_legacy_rich_text_html(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify content-type updates do not strand legacy rich-text entries.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Legacy Entry',
+                'body': '<p>Original</p>',
+                'views': 1,
+            },
+        },
+    )
+    assert create_response.status_code == 201
+    entry = create_response.json()
+
+    legacy_body = '<p class="legacy">Original</p>'
+    _overwrite_entry_payload(
+        migrated_database,
+        entry['id'],
+        {
+            **entry['payload'],
+            'body': legacy_body,
+        },
+    )
+
+    update_response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json={
+            'name': 'Blog Posts',
+            'slug': 'blog-posts',
+            'description': 'Updated content type',
+            'field_definitions': _content_type_payload()['field_definitions'],
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()['description'] == 'Updated content type'
 
 
 def test_content_type_delete_rejects_types_with_entries(

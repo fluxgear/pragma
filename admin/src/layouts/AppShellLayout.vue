@@ -5,7 +5,7 @@
         <div class="shell__toolbar-start">
           <div>
             <strong>Pragma Admin</strong>
-            <div class="muted">M4 content workspace</div>
+            <div class="muted">Admin workbench</div>
           </div>
           <Tag severity="success" value="Installed" />
         </div>

@@ -14,6 +14,39 @@ export default defineConfig(({ mode }) => {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) {
+              return undefined
+            }
+            if (id.includes('/@tiptap/')) {
+              return 'tiptap'
+            }
+            if (id.includes('/primevue/')) {
+              const [, primevuePath] = id.split('/primevue/')
+              const [componentName] = primevuePath.split('/')
+              return `primevue-${componentName}`
+            }
+            if (id.includes('/@primeuix/')) {
+              return 'primeuix'
+            }
+            if (id.includes('/primeicons/')) {
+              return 'primeicons'
+            }
+            if (
+              id.includes('/vue/')
+              || id.includes('/vue-router/')
+              || id.includes('/pinia/')
+            ) {
+              return 'vue'
+            }
+            return 'vendor'
+          },
+        },
+      },
+    },
     server: proxyTarget
       ? {
           proxy: {

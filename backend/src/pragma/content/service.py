@@ -555,12 +555,21 @@ def _validate_datetime_value(value: str, field_name: str) -> str:
     return parsed.isoformat()
 
 
-def _validate_field_value(field_definition: FieldDefinitionModel, value: Any) -> Any:
+def _validate_field_value(
+    field_definition: FieldDefinitionModel,
+    value: Any,
+    *,
+    existing_value: Any = None,
+    allow_legacy_rich_text_passthrough: bool = False,
+) -> Any:
     """Validate a single entry-field value against its definition.
 
     Args:
         field_definition: Parsed field definition.
         value: Raw field value from the entry payload.
+        existing_value: Existing stored field value for update flows.
+        allow_legacy_rich_text_passthrough: Whether unchanged legacy ``rich_text``
+            values may bypass the strict M4 HTML validator.
 
     Returns:
         Any: Normalized field value ready for JSONB storage.
@@ -589,6 +598,12 @@ def _validate_field_value(field_definition: FieldDefinitionModel, value: Any) ->
         normalized_value = value
         length_value = len(value)
         if field_definition.kind == "rich_text":
+            if (
+                allow_legacy_rich_text_passthrough
+                and isinstance(existing_value, str)
+                and value == existing_value
+            ):
+                return value
             normalized_value, length_value = _validate_rich_text_html(value, field_name)
 
         if field_definition.min_length is not None and length_value < field_definition.min_length:
@@ -697,12 +712,18 @@ def _validate_field_value(field_definition: FieldDefinitionModel, value: Any) ->
 def _validate_entry_payload(
     payload: Mapping[str, Any],
     field_definitions: Sequence[FieldDefinitionModel],
+    *,
+    existing_payload: Mapping[str, Any] | None = None,
+    legacy_rich_text_fields: set[str] | None = None,
 ) -> dict[str, Any]:
     """Validate an entry payload against content-type field definitions.
 
     Args:
         payload: Raw entry payload mapping.
         field_definitions: Parsed field definitions for the content type.
+        existing_payload: Existing stored payload for update-validation flows.
+        legacy_rich_text_fields: Rich-text field names allowed to preserve an
+            unchanged legacy HTML value.
 
     Returns:
         dict[str, Any]: Normalized payload ready for JSONB storage.
@@ -714,7 +735,7 @@ def _validate_entry_payload(
     field_map = {field_definition.name: field_definition for field_definition in field_definitions}
     unknown_fields = sorted(set(payload) - set(field_map))
     if unknown_fields:
-        names = ", ".join(unknown_fields)
+        names = ', '.join(unknown_fields)
         raise ContentError(
             detail=f"Unknown field(s) for this content type: {names}",
             code="ENTRY_FIELD_UNKNOWN",
@@ -730,7 +751,17 @@ def _validate_entry_payload(
                 )
             continue
         normalized_payload[field_definition.name] = _validate_field_value(
-            field_definition, payload[field_definition.name]
+            field_definition,
+            payload[field_definition.name],
+            existing_value=(
+                existing_payload.get(field_definition.name)
+                if existing_payload is not None
+                else None
+            ),
+            allow_legacy_rich_text_passthrough=(
+                legacy_rich_text_fields is not None
+                and field_definition.name in legacy_rich_text_fields
+            ),
         )
     return normalized_payload
 
@@ -1067,6 +1098,21 @@ def update_content_type_record(
                     status_code=HTTPStatus.NOT_FOUND,
                 )
 
+            existing_field_definitions = _field_definitions_from_rows(
+                get_field_definitions(connection, content_type_id)
+            )
+            legacy_rich_text_fields = {
+                field_definition.name
+                for field_definition in existing_field_definitions
+                if isinstance(field_definition, TextFieldDefinition)
+                and field_definition.kind == "rich_text"
+            } & {
+                field_definition.name
+                for field_definition in field_definitions
+                if isinstance(field_definition, TextFieldDefinition)
+                and field_definition.kind == "rich_text"
+            }
+
             conflicting_type = get_content_type_by_slug(connection, slug)
             if conflicting_type is not None and conflicting_type["id"] != content_type_id:
                 raise ContentError(
@@ -1076,10 +1122,13 @@ def update_content_type_record(
                 )
 
             for entry_row in list_entries_for_content_type_validation(connection, content_type_id):
+                entry_payload = cast(dict[str, Any], entry_row["payload"])
                 try:
                     _validate_entry_payload(
-                        cast(dict[str, Any], entry_row["payload"]),
+                        entry_payload,
                         field_definitions,
+                        existing_payload=entry_payload,
+                        legacy_rich_text_fields=legacy_rich_text_fields,
                     )
                 except ContentError as exc:
                     raise ContentError(
@@ -1378,7 +1427,19 @@ def update_entry_record(
             field_definitions = _field_definitions_from_rows(
                 get_field_definitions(connection, existing_entry["content_type_id"])
             )
-            validated_payload = _validate_entry_payload(payload.payload, field_definitions)
+            existing_payload = cast(dict[str, Any], existing_entry["payload"])
+            legacy_rich_text_fields = {
+                field_definition.name
+                for field_definition in field_definitions
+                if isinstance(field_definition, TextFieldDefinition)
+                and field_definition.kind == "rich_text"
+            }
+            validated_payload = _validate_entry_payload(
+                payload.payload,
+                field_definitions,
+                existing_payload=existing_payload,
+                legacy_rich_text_fields=legacy_rich_text_fields,
+            )
             slug = _resolve_entry_slug(
                 content_type_id=existing_entry["content_type_id"],
                 content_type_slug=cast(str, existing_entry["content_type_slug"]),
