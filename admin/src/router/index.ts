@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import AppShellLayout from '@/layouts/AppShellLayout.vue'
 import AuthLayout from '@/layouts/AuthLayout.vue'
-import { evaluateNavigation } from '@/router/guards'
+import { resolveNavigation } from '@/router/guards'
 import { useAuthStore } from '@/stores/auth'
 import { useInstallStore } from '@/stores/install'
 import BootView from '@/views/BootView.vue'
@@ -74,19 +74,14 @@ router.beforeEach(async (to) => {
   const installStore = useInstallStore()
   const authStore = useAuthStore()
 
-  await installStore.ensureStatus()
-  await authStore.ensureInitialized(installStore.isInstalled)
-
-  return evaluateNavigation(
+  return resolveNavigation(
     {
       name: to.name,
       fullPath: to.fullPath,
       meta: to.meta,
     },
-    {
-      isInstalled: installStore.isInstalled,
-      isAuthenticated: authStore.isAuthenticated,
-    },
+    installStore,
+    authStore,
   )
 })
 

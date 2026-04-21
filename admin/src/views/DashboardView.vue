@@ -85,6 +85,7 @@ import { storeToRefs } from 'pinia'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Tag from 'primevue/tag'
+import { useRoute, useRouter } from 'vue-router'
 
 import { getApiBase } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
@@ -92,6 +93,8 @@ import { useInstallStore } from '@/stores/install'
 
 const authStore = useAuthStore()
 const installStore = useInstallStore()
+const route = useRoute()
+const router = useRouter()
 
 const { accessToken, user } = storeToRefs(authStore)
 const { readiness, readinessOk, schemaReady } = storeToRefs(installStore)
@@ -99,8 +102,20 @@ const { readiness, readinessOk, schemaReady } = storeToRefs(installStore)
 const apiBase = getApiBase()
 const capabilityEntries = computed(() => Object.entries(readiness.value?.capabilities ?? {}))
 
+async function redirectToLogin(): Promise<void> {
+  await router.replace({
+    name: 'login',
+    query: {
+      redirect: route.fullPath,
+    },
+  })
+}
+
 async function refreshIdentity(): Promise<void> {
-  await authStore.syncCurrentUser()
+  const currentUser = await authStore.syncCurrentUser()
+  if (currentUser === null) {
+    await redirectToLogin()
+  }
 }
 
 async function refreshReadiness(): Promise<void> {
@@ -108,6 +123,9 @@ async function refreshReadiness(): Promise<void> {
 }
 
 onMounted(async () => {
-  await Promise.all([authStore.syncCurrentUser(), installStore.loadReadiness()])
+  const [currentUser] = await Promise.all([authStore.syncCurrentUser(), installStore.loadReadiness()])
+  if (currentUser === null) {
+    await redirectToLogin()
+  }
 })
 </script>

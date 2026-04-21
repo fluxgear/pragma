@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { evaluateNavigation } from '@/router/guards'
+import { evaluateNavigation, resolveNavigation } from '@/router/guards'
 
 function makeRoute(
   name: string,
@@ -68,5 +68,103 @@ describe('evaluateNavigation', () => {
         isAuthenticated: true,
       }),
     ).toEqual({ name: 'dashboard' })
+  })
+})
+
+describe('resolveNavigation', () => {
+  it('routes non-home navigation back to the boot screen when install status checks fail', async () => {
+    const installStore = {
+      isInstalled: true,
+      ensureStatus: vi.fn().mockRejectedValue(new Error('Backend unavailable')),
+    }
+    const authStore = {
+      initialized: false,
+      isAuthenticated: false,
+      errorMessage: null,
+      startupError: null,
+      ensureInitialized: vi.fn(),
+    }
+
+    await expect(
+      resolveNavigation(makeRoute('dashboard', { requiresAuth: true }, '/app'), installStore, authStore),
+    ).resolves.toEqual({ name: 'home' })
+    expect(authStore.ensureInitialized).not.toHaveBeenCalled()
+  })
+
+  it('routes non-home navigation back to the boot screen when session restoration records a startup error', async () => {
+    const installStore = {
+      isInstalled: true,
+      ensureStatus: vi.fn().mockResolvedValue(undefined),
+    }
+    const authStore = {
+      initialized: false,
+      isAuthenticated: false,
+      errorMessage: null as string | null,
+      startupError: null as string | null,
+      ensureInitialized: vi.fn().mockImplementation(async () => {
+        authStore.errorMessage = 'Backend unavailable'
+        authStore.startupError = 'Backend unavailable'
+      }),
+    }
+
+    await expect(
+      resolveNavigation(makeRoute('dashboard', { requiresAuth: true }, '/app'), installStore, authStore),
+    ).resolves.toEqual({ name: 'home' })
+    expect(authStore.ensureInitialized).toHaveBeenCalledWith(true)
+  })
+
+  it('keeps routing through the boot screen while a startup error persists after initialization', async () => {
+    const installStore = {
+      isInstalled: true,
+      ensureStatus: vi.fn().mockResolvedValue(undefined),
+    }
+    const authStore = {
+      initialized: true,
+      isAuthenticated: false,
+      errorMessage: 'Backend unavailable',
+      startupError: 'Backend unavailable',
+      ensureInitialized: vi.fn(),
+    }
+
+    await expect(
+      resolveNavigation(makeRoute('dashboard', { requiresAuth: true }, '/app'), installStore, authStore),
+    ).resolves.toEqual({ name: 'home' })
+  })
+
+  it('does not treat non-startup auth errors as boot failures', async () => {
+    const installStore = {
+      isInstalled: true,
+      ensureStatus: vi.fn().mockResolvedValue(undefined),
+    }
+    const authStore = {
+      initialized: true,
+      isAuthenticated: false,
+      errorMessage: 'Invalid credentials',
+      startupError: null,
+      ensureInitialized: vi.fn(),
+    }
+
+    await expect(
+      resolveNavigation(makeRoute('dashboard', { requiresAuth: true }, '/app'), installStore, authStore),
+    ).resolves.toEqual({
+      name: 'login',
+      query: { redirect: '/app' },
+    })
+  })
+
+  it('allows the boot route to render when startup checks fail', async () => {
+    const installStore = {
+      isInstalled: false,
+      ensureStatus: vi.fn().mockRejectedValue(new Error('Backend unavailable')),
+    }
+    const authStore = {
+      initialized: false,
+      isAuthenticated: false,
+      errorMessage: null,
+      startupError: null,
+      ensureInitialized: vi.fn(),
+    }
+
+    await expect(resolveNavigation(makeRoute('home', {}, '/'), installStore, authStore)).resolves.toBe(true)
   })
 })

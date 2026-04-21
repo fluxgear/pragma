@@ -19,6 +19,23 @@ export interface GuardState {
   isAuthenticated: boolean
 }
 
+export interface NavigationInstallStore {
+  isInstalled: boolean
+  ensureStatus(): Promise<unknown>
+}
+
+export interface NavigationAuthStore {
+  initialized: boolean
+  isAuthenticated: boolean
+  errorMessage: string | null
+  startupError: string | null
+  ensureInitialized(shouldRestore: boolean): Promise<void>
+}
+
+function fallbackToBoot(route: GuardRoute): true | RouteLocationRaw {
+  return typeof route.name === 'string' && route.name === 'home' ? true : { name: 'home' }
+}
+
 export function evaluateNavigation(
   route: GuardRoute,
   state: GuardState,
@@ -51,4 +68,26 @@ export function evaluateNavigation(
   }
 
   return true
+}
+
+export async function resolveNavigation(
+  route: GuardRoute,
+  installStore: NavigationInstallStore,
+  authStore: NavigationAuthStore,
+): Promise<true | RouteLocationRaw> {
+  try {
+    await installStore.ensureStatus()
+    await authStore.ensureInitialized(installStore.isInstalled)
+  } catch {
+    return fallbackToBoot(route)
+  }
+
+  if (installStore.isInstalled && authStore.startupError) {
+    return fallbackToBoot(route)
+  }
+
+  return evaluateNavigation(route, {
+    isInstalled: installStore.isInstalled,
+    isAuthenticated: authStore.isAuthenticated,
+  })
 }

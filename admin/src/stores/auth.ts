@@ -12,6 +12,7 @@ export const useAuthStore = defineStore('auth', () => {
   const initialized = ref(false)
   const loading = ref(false)
   const errorMessage = ref<string | null>(null)
+  const startupError = ref<string | null>(null)
 
   const isAuthenticated = computed(() => accessToken.value !== null && user.value !== null)
 
@@ -21,6 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = payload.user
     initialized.value = true
     errorMessage.value = null
+    startupError.value = null
   }
 
   function clearSession(markInitialized = true): void {
@@ -28,11 +30,13 @@ export const useAuthStore = defineStore('auth', () => {
     expiresIn.value = null
     user.value = null
     initialized.value = markInitialized
+    startupError.value = null
   }
 
   async function login(payload: LoginRequest): Promise<TokenResponse> {
     loading.value = true
     errorMessage.value = null
+    startupError.value = null
 
     try {
       const response = await loginUser(payload)
@@ -51,15 +55,19 @@ export const useAuthStore = defineStore('auth', () => {
   async function restoreSession(): Promise<boolean> {
     loading.value = true
     errorMessage.value = null
+    startupError.value = null
 
     try {
       const response = await refreshSession()
       setSession(response)
       return true
     } catch (error) {
-      clearSession()
-      errorMessage.value =
+      const message =
         error instanceof ApiClientError && error.status === 401 ? null : asUserMessage(error)
+
+      clearSession()
+      errorMessage.value = message
+      startupError.value = message
       return false
     } finally {
       loading.value = false
@@ -117,6 +125,7 @@ export const useAuthStore = defineStore('auth', () => {
     initialized,
     loading,
     errorMessage,
+    startupError,
     isAuthenticated,
     login,
     restoreSession,

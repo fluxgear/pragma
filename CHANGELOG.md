@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.1 — 2026-04-21
+
+### Fixed
+- Kept installed systems on the boot error/retry flow whenever startup or session-restore failures persist, instead of falling through to non-boot routes after initialization
+- Redirected the protected dashboard back to login immediately when post-mount identity sync fails
+- Added targeted frontend regression coverage for startup guard failures, persisted startup errors, non-startup auth errors, and dashboard auth-loss redirects
+
 ## v0.3.0 — 2026-04-20
 
 ### Added
