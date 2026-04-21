@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0 — 2026-04-20
+
+### Added
+- Added the `admin/` Vue 3 + TypeScript + Vite workspace for the Pragma admin SPA
+- Added centralized frontend API clients for install status, bootstrap, readiness, login, refresh, logout, and current-user flows under `admin/src/api/`
+- Added Pinia auth/install stores plus install-aware and auth-aware Vue Router guards for admin navigation
+- Added the M3 phase-1 setup wizard, login flow, and dashboard/workbench shell with PrimeVue-based layout primitives
+- Added frontend coverage for route-guard behavior, auth-store session handling, and setup-wizard success/conflict flows
+
+### Fixed
+- Suppressed the expected anonymous-state `401` refresh failure during session restore so the login screen no longer shows a spurious `Refresh token is required` banner after protected-route redirects or logout
+
 ## v0.2.1 — 2026-04-20
 
 ### Fixed
