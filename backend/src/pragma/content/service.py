@@ -18,6 +18,7 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
+from html.parser import HTMLParser
 from http import HTTPStatus
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -84,7 +85,254 @@ _RESERVED_FIELD_NAMES = {
     "content_type_id",
 }
 _TEXT_FIELD_KINDS = {"text", "long_text", "rich_text"}
+_ALLOWED_RICH_TEXT_TAGS = {
+    "blockquote",
+    "br",
+    "code",
+    "em",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "s",
+    "strong",
+    "ul",
+}
+_VOID_RICH_TEXT_TAGS = {"br", "hr"}
 _MULTI_HYPHEN_PATTERN = re.compile(r"-{2,}")
+
+
+class _RichTextHTMLValidator(HTMLParser):
+    """Validate Pragma's restricted rich-text HTML contract.
+
+    Args:
+        HTMLParser: Standard-library HTML parser base class.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If the HTML fragment violates the allowed tag contract.
+    """
+
+    def __init__(self) -> None:
+        """Initialize rich-text validation state.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+
+        super().__init__(convert_charrefs=True)
+        self._stack: list[str] = []
+        self.text_parts: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        """Validate a start tag.
+
+        Args:
+            tag: Lowercase tag name.
+            attrs: Tag attribute pairs.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the tag or its attributes are not allowed.
+        """
+
+        if tag not in _ALLOWED_RICH_TEXT_TAGS:
+            raise ValueError(f"contains unsupported rich-text HTML tag '{tag}'")
+        if attrs:
+            raise ValueError(
+                f"contains unsupported rich-text HTML attributes on '<{tag}>'"
+            )
+        if tag not in _VOID_RICH_TEXT_TAGS:
+            self._stack.append(tag)
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        """Validate a self-closing tag.
+
+        Args:
+            tag: Lowercase tag name.
+            attrs: Tag attribute pairs.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the tag or its attributes are not allowed.
+        """
+
+        if tag not in _VOID_RICH_TEXT_TAGS:
+            raise ValueError(f"contains unsupported self-closing rich-text HTML tag '{tag}'")
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        """Validate an end tag.
+
+        Args:
+            tag: Lowercase tag name.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the tag order is invalid.
+        """
+
+        if tag in _VOID_RICH_TEXT_TAGS:
+            raise ValueError(f"contains an unexpected closing tag '</{tag}>'")
+        if not self._stack:
+            raise ValueError(f"contains an unexpected closing tag '</{tag}>'")
+        expected_tag = self._stack.pop()
+        if expected_tag != tag:
+            raise ValueError(
+                "contains mismatched rich-text HTML tags: expected "
+                f"'</{expected_tag}>' before '</{tag}>'"
+            )
+
+    def handle_data(self, data: str) -> None:
+        """Record text content for plain-text length checks.
+
+        Args:
+            data: Text node content.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+
+        self.text_parts.append(data)
+
+    def handle_comment(self, data: str) -> None:
+        """Reject HTML comments.
+
+        Args:
+            data: Comment payload.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: Always, because comments are not supported.
+        """
+
+        raise ValueError("contains unsupported rich-text HTML comments")
+
+    def handle_decl(self, decl: str) -> None:
+        """Reject HTML declarations.
+
+        Args:
+            decl: Declaration payload.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: Always, because declarations are not supported.
+        """
+
+        raise ValueError("contains unsupported rich-text HTML declarations")
+
+    def unknown_decl(self, data: str) -> None:
+        """Reject unknown HTML declarations.
+
+        Args:
+            data: Declaration payload.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: Always, because declarations are not supported.
+        """
+
+        raise ValueError("contains unsupported rich-text HTML declarations")
+
+    def handle_pi(self, data: str) -> None:
+        """Reject processing instructions.
+
+        Args:
+            data: Processing-instruction payload.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: Always, because processing instructions are not supported.
+        """
+
+        raise ValueError("contains unsupported rich-text processing instructions")
+
+    def close(self) -> None:
+        """Finalize parsing and reject unclosed tags.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If any non-void tags remain unclosed.
+        """
+
+        super().close()
+        if self._stack:
+            unclosed_tag = self._stack[-1]
+            raise ValueError(f"contains an unclosed rich-text HTML tag '<{unclosed_tag}>'")
+
+
+def _validate_rich_text_html(value: str, field_name: str) -> tuple[str, int]:
+    """Validate restricted rich-text HTML and compute plain-text length.
+
+    Args:
+        value: Raw HTML fragment from the request payload.
+        field_name: Field name for structured error messages.
+
+    Returns:
+        tuple[str, int]: Original HTML plus normalized plain-text character count.
+
+    Raises:
+        ContentError: If the HTML fragment violates the rich-text contract.
+    """
+
+    parser = _RichTextHTMLValidator()
+
+    try:
+        parser.feed(value)
+        parser.close()
+    except ValueError as exc:
+        raise ContentError(
+            detail=f"Field '{field_name}' {exc}",
+            code="ENTRY_FIELD_INVALID",
+        ) from exc
+
+    normalized_text = re.sub(r"\s+", " ", "".join(parser.text_parts)).strip()
+    return value, len(normalized_text)
 
 
 def _normalize_slug(value: str, error_code: str) -> str:
@@ -337,7 +585,13 @@ def _validate_field_value(field_definition: FieldDefinitionModel, value: Any) ->
                 detail=f"Field '{field_name}' must be a string",
                 code="ENTRY_FIELD_INVALID",
             )
-        if field_definition.min_length is not None and len(value) < field_definition.min_length:
+
+        normalized_value = value
+        length_value = len(value)
+        if field_definition.kind == "rich_text":
+            normalized_value, length_value = _validate_rich_text_html(value, field_name)
+
+        if field_definition.min_length is not None and length_value < field_definition.min_length:
             raise ContentError(
                 detail=(
                     f"Field '{field_name}' must be at least "
@@ -345,7 +599,7 @@ def _validate_field_value(field_definition: FieldDefinitionModel, value: Any) ->
                 ),
                 code="ENTRY_FIELD_INVALID",
             )
-        if field_definition.max_length is not None and len(value) > field_definition.max_length:
+        if field_definition.max_length is not None and length_value > field_definition.max_length:
             raise ContentError(
                 detail=(
                     f"Field '{field_name}' must be at most "
@@ -353,7 +607,7 @@ def _validate_field_value(field_definition: FieldDefinitionModel, value: Any) ->
                 ),
                 code="ENTRY_FIELD_INVALID",
             )
-        return value
+        return normalized_value
 
     if isinstance(field_definition, IntegerFieldDefinition):
         if isinstance(value, bool) or not isinstance(value, int):

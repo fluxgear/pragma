@@ -568,6 +568,241 @@ def test_entry_validation_rejects_invalid_field_type(
     }
 
 
+def test_rich_text_entry_round_trips_html(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify rich-text HTML persists cleanly across create, load, and update flows.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    body_html = '<h2>Hello</h2><p><strong>World</strong></p><ul><li>One</li><li>Two</li></ul>'
+
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'published',
+            'payload': {
+                'title': 'Rich Entry',
+                'body': body_html,
+                'views': 1,
+            },
+        },
+    )
+
+    assert create_response.status_code == 201
+    entry = create_response.json()
+    assert entry['payload']['body'] == body_html
+
+    get_response = client.get(
+        f"/api/v1/content/entries/{entry['id']}",
+        headers=headers,
+    )
+
+    assert get_response.status_code == 200
+    assert get_response.json()['payload']['body'] == body_html
+
+    updated_body_html = (
+        '<blockquote><p>Updated</p></blockquote>'
+        '<pre><code>print("hi")</code></pre><hr>'
+    )
+    update_response = client.put(
+        f"/api/v1/content/entries/{entry['id']}",
+        headers=headers,
+        json={
+            'status': 'published',
+            'payload': {
+                'title': 'Rich Entry',
+                'body': updated_body_html,
+                'views': 2,
+            },
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()['payload']['body'] == updated_body_html
+
+
+def test_entry_validation_rejects_empty_rich_text_document(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify required rich-text fields reject empty editor documents.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Hello World',
+                'body': '<p></p>',
+                'views': 1,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'detail': "Field 'body' must be at least 1 characters",
+        'code': 'ENTRY_FIELD_INVALID',
+    }
+
+
+def test_entry_validation_rejects_unsupported_rich_text_tag(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify rich-text payloads reject unsupported HTML tags.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Hello World',
+                'body': '<script>alert(1)</script>',
+                'views': 1,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'detail': "Field 'body' contains unsupported rich-text HTML tag 'script'",
+        'code': 'ENTRY_FIELD_INVALID',
+    }
+
+
+def test_entry_validation_rejects_rich_text_attributes(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify rich-text payloads reject unsupported HTML attributes.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Hello World',
+                'body': '<p class="lead">Hello</p>',
+                'views': 1,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'detail': "Field 'body' contains unsupported rich-text HTML attributes on '<p>'",
+        'code': 'ENTRY_FIELD_INVALID',
+    }
+
+
+def test_entry_validation_rejects_malformed_rich_text_html(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify rich-text payloads reject malformed HTML fragments.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Hello World',
+                'body': '<p><strong>Hello</p>',
+                'views': 1,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'detail': (
+            "Field 'body' contains mismatched rich-text HTML tags: "
+            "expected '</strong>' before '</p>'"
+        ),
+        'code': 'ENTRY_FIELD_INVALID',
+    }
+
+
 def test_entry_slug_conflict_returns_structured_error(
     client: TestClient,
     bootstrap_payload: dict[str, str],

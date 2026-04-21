@@ -24,7 +24,8 @@ a {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -136,6 +137,13 @@ textarea {
   font-weight: 600;
 }
 
+.field__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.75rem;
+}
+
 .status-list {
   display: flex;
   flex-direction: column;
@@ -163,6 +171,99 @@ textarea {
   font-family: 'JetBrains Mono', 'SFMono-Regular', monospace;
 }
 
+.content-workspace__header {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.content-workspace__field-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.content-workspace__table {
+  margin-top: 1rem;
+}
+
+.content-workspace__empty-state {
+  padding: 1rem;
+  text-align: center;
+}
+
+.rich-text-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.rich-text-editor--disabled {
+  opacity: 0.8;
+}
+
+.rich-text-editor__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.rich-text-editor__content {
+  border: 1px solid #d1d5db;
+  border-radius: 0.75rem;
+  background: #ffffff;
+}
+
+.rich-text-editor__content .tiptap {
+  min-height: 16rem;
+  padding: 1rem;
+  outline: none;
+}
+
+.rich-text-editor__content .tiptap > *:first-child {
+  margin-top: 0;
+}
+
+.rich-text-editor__content .tiptap p,
+.rich-text-editor__content .tiptap ul,
+.rich-text-editor__content .tiptap ol,
+.rich-text-editor__content .tiptap blockquote,
+.rich-text-editor__content .tiptap pre,
+.rich-text-editor__content .tiptap h2,
+.rich-text-editor__content .tiptap h3 {
+  margin: 0 0 0.75rem;
+}
+
+.rich-text-editor__content .tiptap ul,
+.rich-text-editor__content .tiptap ol {
+  padding-left: 1.5rem;
+}
+
+.rich-text-editor__content .tiptap blockquote {
+  border-left: 4px solid #c7d2fe;
+  padding-left: 1rem;
+  color: #4b5563;
+}
+
+.rich-text-editor__content .tiptap pre {
+  background: #111827;
+  color: #f9fafb;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+
+.rich-text-editor__content .tiptap hr {
+  border: 0;
+  border-top: 1px solid #d1d5db;
+  margin: 1rem 0;
+}
+
+.rich-text-editor__hint {
+  display: block;
+}
+
 @media (max-width: 960px) {
   .shell__body {
     grid-template-columns: 1fr;
@@ -171,5 +272,9 @@ textarea {
   .shell__nav {
     border-right: 0;
     border-bottom: 1px solid #e5e7eb;
+  }
+
+  .content-workspace__header {
+    flex-direction: column;
   }
 }

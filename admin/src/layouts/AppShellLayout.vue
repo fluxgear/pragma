@@ -5,7 +5,7 @@
         <div class="shell__toolbar-start">
           <div>
             <strong>Pragma Admin</strong>
-            <div class="muted">M3 workbench shell</div>
+            <div class="muted">M4 content workspace</div>
           </div>
           <Tag severity="success" value="Installed" />
         </div>
@@ -62,7 +62,7 @@ const router = useRouter()
 
 const navigationItems = [
   { label: 'Dashboard', icon: 'pi pi-home', routeName: 'dashboard', disabled: false },
-  { label: 'Content (M4)', icon: 'pi pi-file-edit', routeName: 'dashboard', disabled: true },
+  { label: 'Content', icon: 'pi pi-file-edit', routeName: 'content', disabled: false },
   { label: 'Media (M5)', icon: 'pi pi-images', routeName: 'dashboard', disabled: true },
   { label: 'Themes (M6)', icon: 'pi pi-palette', routeName: 'dashboard', disabled: true },
 ]

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.0 — 2026-04-21
+
+### Added
+- Added a new admin content-entry workspace under `/app/content` with content-type selection, entry listing, and create/edit dialogs
+- Added dynamic admin field rendering for content entries, including TipTap 2-backed editing for `rich_text` fields
+- Added admin content API client helpers and TypeScript contracts for content types and content entries
+- Added frontend verification for rich-text editor integration, form serialization, and content workspace flows
+
+### Fixed
+- Enforced a backend rich-text HTML contract for `rich_text` fields so unsupported tags, attributes, malformed fragments, and visually empty required documents now fail cleanly
+- Verified rich-text save/load round-tripping across create, reload, and update flows without changing the existing JSONB content-entry schema
+
 ## v0.3.1 — 2026-04-21
 
 ### Fixed

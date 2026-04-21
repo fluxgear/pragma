@@ -6,6 +6,7 @@ import { resolveNavigation } from '@/router/guards'
 import { useAuthStore } from '@/stores/auth'
 import { useInstallStore } from '@/stores/install'
 import BootView from '@/views/BootView.vue'
+import ContentEntriesView from '@/views/ContentEntriesView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import LoginView from '@/views/LoginView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
@@ -54,6 +55,12 @@ export const router = createRouter({
           name: 'dashboard',
           component: DashboardView,
           meta: { requiresAuth: true, title: 'Dashboard' },
+        },
+        {
+          path: 'content',
+          name: 'content',
+          component: ContentEntriesView,
+          meta: { requiresAuth: true, title: 'Content entries' },
         },
         {
           path: ':pathMatch(.*)*',
