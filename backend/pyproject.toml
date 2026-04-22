@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pragma-backend"
-version = "0.5.1"
+version = "0.6.0"
 description = "Pragma backend for the PostgreSQL-native CMS"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.16.0,<2.0.0",
   "fastapi>=0.115.0,<1.0.0",
+  "jinja2>=3.1.6,<4.0.0",
   "psycopg[binary]>=3.2.0,<4.0.0",
   "psycopg-pool>=3.2.0,<4.0.0",
   "pydantic-settings>=2.8.0,<3.0.0",

@@ -68,6 +68,9 @@ class Settings(BaseSettings):
         min_length=1,
     )
     base_url: str = Field(min_length=1)
+    theme_root: str = Field(default='../themes', min_length=1)
+    theme_active_id: str = Field(default='default', min_length=1)
+    theme_default_id: str = Field(default='default', min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
 
     @model_validator(mode='after')
@@ -184,6 +187,25 @@ class Settings(BaseSettings):
         """
 
         root = Path(self.media_root)
+        if root.is_absolute():
+            return root.resolve()
+        return (_BACKEND_ROOT / root).resolve()
+
+    @property
+    def theme_root_path(self) -> Path:
+        """Resolve the configured theme root into an absolute filesystem path.
+
+        Args:
+            None.
+
+        Returns:
+            Path: Absolute theme root path.
+
+        Raises:
+            None.
+        """
+
+        root = Path(self.theme_root)
         if root.is_absolute():
             return root.resolve()
         return (_BACKEND_ROOT / root).resolve()

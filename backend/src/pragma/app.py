@@ -60,7 +60,10 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
         None.
     """
 
+    from pragma.themes import build_theme_runtime
+
     storage = DatabasePool(settings)
+    theme_runtime = build_theme_runtime(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -77,6 +80,7 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
         """
 
         app.state.settings = settings
+        app.state.theme_runtime = theme_runtime
         storage.open()
         app.state.storage = storage
         try:

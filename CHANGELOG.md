@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.0 — 2026-04-22
+
+### Added
+- Added the M6 backend theme engine with config-backed theme selection via `PRAGMA_THEME_ROOT`, `PRAGMA_THEME_ACTIVE_ID`, and `PRAGMA_THEME_DEFAULT_ID`
+- Added filesystem theme discovery, manifest validation, deterministic template and asset resolution, and lazy active-to-default fallback behavior under `backend/src/pragma/themes/`
+- Added Jinja2-backed template loading so broken active-theme templates fall back cleanly to the default theme when possible
+- Added focused backend coverage for theme discovery, activation, template precedence, broken-template fallback, asset lookup, and startup wiring
+
 ## v0.5.1 — 2026-04-22
 
 ### Fixed
