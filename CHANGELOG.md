@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.0 — 2026-04-21
+
+### Added
+- Added the M5 media library with a new backend media module, pluggable storage backend abstraction, and local filesystem storage as the default backend
+- Added authenticated media APIs for upload, browse, detail, content retrieval, and delete under `/api/v1/media/assets`
+- Added image metadata extraction and stable media selection payloads suitable for later editor integration
+- Added an admin media workspace under `/app/media` with upload, preview, browse, and delete flows plus focused frontend coverage
+- Added Alembic schema/index support for media assets and backend integration coverage for migration, auth enforcement, validation, storage persistence, and derivative-failure isolation
+
 ## v0.4.1 — 2026-04-21
 
 ### Fixed

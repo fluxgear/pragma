@@ -60,7 +60,7 @@
         <template #content>
           <div class="form-stack">
             <p class="muted">
-              M3 establishes the admin shell. Content authoring, media management, and theme editing unlock in later milestones.
+              M5 brings the media library online. Content authoring and media management are now available from the authenticated workbench.
             </p>
             <div class="status-list">
               <div class="status-row">
@@ -69,7 +69,7 @@
               </div>
               <div class="status-row">
                 <span>Next milestone target</span>
-                <Tag severity="info" value="M4 rich-text editor" />
+                <Tag severity="info" value="M6 theme engine" />
               </div>
             </div>
           </div>

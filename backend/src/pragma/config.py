@@ -38,10 +38,10 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="PRAGMA_",
-        env_file=_BACKEND_ROOT / ".env",
+        env_prefix='PRAGMA_',
+        env_file=_BACKEND_ROOT / '.env',
         case_sensitive=False,
-        extra="ignore",
+        extra='ignore',
     )
 
     database_host: str = Field(min_length=1)
@@ -49,19 +49,26 @@ class Settings(BaseSettings):
     database_name: str = Field(min_length=1)
     database_user: str = Field(min_length=1)
     database_password: str = Field(min_length=1)
-    database_admin_database: str = Field(default="postgres", min_length=1)
+    database_admin_database: str = Field(default='postgres', min_length=1)
     database_pool_min_size: int = Field(default=1, ge=1)
     database_pool_max_size: int = Field(default=10, ge=1)
     jwt_secret_key: str = Field(min_length=16)
-    jwt_algorithm: str = Field(default="HS256", min_length=3)
+    jwt_algorithm: str = Field(default='HS256', min_length=3)
     jwt_access_token_ttl_minutes: int = Field(default=15, ge=1)
     jwt_refresh_token_ttl_days: int = Field(default=7, ge=1)
-    refresh_cookie_name: str = Field(default="pragma_refresh_token", min_length=1)
-    refresh_cookie_path: str = Field(default="/api/v1/auth", min_length=1)
+    refresh_cookie_name: str = Field(default='pragma_refresh_token', min_length=1)
+    refresh_cookie_path: str = Field(default='/api/v1/auth', min_length=1)
     refresh_cookie_secure: bool = False
-    refresh_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    refresh_cookie_samesite: Literal['lax', 'strict', 'none'] = 'lax'
+    media_storage_backend: Literal['local'] = 'local'
+    media_root: str = Field(default='media', min_length=1)
+    media_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    media_allowed_mime_types: str = Field(
+        default='image/jpeg,image/png,image/gif,image/webp',
+        min_length=1,
+    )
     base_url: str = Field(min_length=1)
-    log_level: str = Field(default="INFO", min_length=1)
+    log_level: str = Field(default='INFO', min_length=1)
 
     @property
     def database_dsn(self) -> str:
@@ -77,11 +84,11 @@ class Settings(BaseSettings):
             None.
         """
 
-        user = quote(self.database_user, safe="")
-        password = quote(self.database_password, safe="")
+        user = quote(self.database_user, safe='')
+        password = quote(self.database_password, safe='')
         return (
-            f"postgresql://{user}:{password}@{self.database_host}:"
-            f"{self.database_port}/{self.database_name}"
+            f'postgresql://{user}:{password}@{self.database_host}:'
+            f'{self.database_port}/{self.database_name}'
         )
 
     @property
@@ -98,11 +105,11 @@ class Settings(BaseSettings):
             None.
         """
 
-        user = quote(self.database_user, safe="")
-        password = quote(self.database_password, safe="")
+        user = quote(self.database_user, safe='')
+        password = quote(self.database_password, safe='')
         return (
-            f"postgresql://{user}:{password}@{self.database_host}:"
-            f"{self.database_port}/{self.database_admin_database}"
+            f'postgresql://{user}:{password}@{self.database_host}:'
+            f'{self.database_port}/{self.database_admin_database}'
         )
 
     @property
@@ -119,11 +126,11 @@ class Settings(BaseSettings):
             None.
         """
 
-        user = quote(self.database_user, safe="")
-        password = quote(self.database_password, safe="")
+        user = quote(self.database_user, safe='')
+        password = quote(self.database_password, safe='')
         return (
-            f"postgresql+psycopg://{user}:{password}@{self.database_host}:"
-            f"{self.database_port}/{self.database_name}"
+            f'postgresql+psycopg://{user}:{password}@{self.database_host}:'
+            f'{self.database_port}/{self.database_name}'
         )
 
     @property
@@ -141,6 +148,46 @@ class Settings(BaseSettings):
         """
 
         return self.jwt_refresh_token_ttl_days * 24 * 60 * 60
+
+    @property
+    def media_root_path(self) -> Path:
+        """Resolve the configured media root into an absolute filesystem path.
+
+        Args:
+            None.
+
+        Returns:
+            Path: Absolute media root path.
+
+        Raises:
+            None.
+        """
+
+        root = Path(self.media_root)
+        if root.is_absolute():
+            return root.resolve()
+        return (_BACKEND_ROOT / root).resolve()
+
+    @property
+    def media_allowed_mime_type_set(self) -> frozenset[str]:
+        """Return configured media MIME types as a normalized set.
+
+        Args:
+            None.
+
+        Returns:
+            frozenset[str]: Normalized allowed MIME types.
+
+        Raises:
+            None.
+        """
+
+        values = {
+            part.strip().lower()
+            for part in self.media_allowed_mime_types.split(',')
+            if part.strip()
+        }
+        return frozenset(values)
 
 
 @lru_cache(maxsize=1)

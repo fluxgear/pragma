@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Marc Mironescu / FluxGear. MIT License.
-"""Pragma backend package.
+"""Media subsystem for the Pragma backend.
 
 Args:
     None.
@@ -10,5 +10,3 @@ Returns:
 Raises:
     None.
 """
-
-__version__ = "0.5.0"

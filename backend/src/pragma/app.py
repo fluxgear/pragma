@@ -25,6 +25,7 @@ from pragma.config import Settings, get_settings
 from pragma.content.router import router as content_router
 from pragma.errors import register_exception_handlers
 from pragma.install.router import router as install_router
+from pragma.media.router import router as media_router
 from pragma.storage.pool import DatabasePool
 from pragma.system.router import router as system_router
 
@@ -103,13 +104,14 @@ def create_app() -> FastAPI:
     _configure_logging(settings)
 
     app = FastAPI(
-        title="Pragma API",
+        title='Pragma API',
         version=__version__,
         lifespan=build_lifespan(settings),
     )
     register_exception_handlers(app)
-    app.include_router(system_router, prefix="/api/v1")
-    app.include_router(install_router, prefix="/api/v1")
-    app.include_router(auth_router, prefix="/api/v1")
-    app.include_router(content_router, prefix="/api/v1")
+    app.include_router(system_router, prefix='/api/v1')
+    app.include_router(install_router, prefix='/api/v1')
+    app.include_router(auth_router, prefix='/api/v1')
+    app.include_router(content_router, prefix='/api/v1')
+    app.include_router(media_router, prefix='/api/v1')
     return app

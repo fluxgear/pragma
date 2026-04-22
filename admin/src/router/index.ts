@@ -9,6 +9,7 @@ import BootView from '@/views/BootView.vue'
 import ContentEntriesView from '@/views/ContentEntriesView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import LoginView from '@/views/LoginView.vue'
+import MediaLibraryView from '@/views/MediaLibraryView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
 import SetupWizardView from '@/views/SetupWizardView.vue'
 
@@ -61,6 +62,12 @@ export const router = createRouter({
           name: 'content',
           component: ContentEntriesView,
           meta: { requiresAuth: true, title: 'Content entries' },
+        },
+        {
+          path: 'media',
+          name: 'media',
+          component: MediaLibraryView,
+          meta: { requiresAuth: true, title: 'Media library' },
         },
         {
           path: ':pathMatch(.*)*',

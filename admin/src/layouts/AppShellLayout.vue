@@ -63,7 +63,7 @@ const router = useRouter()
 const navigationItems = [
   { label: 'Dashboard', icon: 'pi pi-home', routeName: 'dashboard', disabled: false },
   { label: 'Content', icon: 'pi pi-file-edit', routeName: 'content', disabled: false },
-  { label: 'Media (M5)', icon: 'pi pi-images', routeName: 'dashboard', disabled: true },
+  { label: 'Media', icon: 'pi pi-images', routeName: 'media', disabled: false },
   { label: 'Themes (M6)', icon: 'pi pi-palette', routeName: 'dashboard', disabled: true },
 ]
 

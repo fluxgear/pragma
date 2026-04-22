@@ -160,3 +160,40 @@ export interface ContentEntryUpdateRequest {
   status: ContentEntryStatus
   payload: Record<string, unknown>
 }
+
+export interface MediaSelection {
+  id: string
+  filename: string
+  mime_type: string
+  width: number | null
+  height: number | null
+  alt_text: string | null
+  content_url: string
+}
+
+export interface MediaAssetResponse {
+  id: string
+  original_filename: string
+  storage_key: string
+  mime_type: string
+  size_bytes: number
+  width: number | null
+  height: number | null
+  alt_text: string | null
+  caption: string | null
+  description: string | null
+  variants: Record<string, string>
+  uploader_user_id: string | null
+  created_at: string
+  updated_at: string
+  content_url: string
+  is_image: boolean
+  selection: MediaSelection
+}
+
+export interface MediaAssetListResponse {
+  items: MediaAssetResponse[]
+  total: number
+  limit: number
+  offset: number
+}
