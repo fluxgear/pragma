@@ -38,8 +38,62 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+_ERROR_RESPONSE_SCHEMA = {
+    'type': 'object',
+    'required': ['detail', 'code'],
+    'properties': {
+        'detail': {'type': 'string'},
+        'code': {'type': 'string'},
+    },
+}
+_COMMON_MEDIA_ERROR_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: {
+        'description': 'Authentication required',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        'description': 'Request validation failed',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        'description': 'Storage backend unavailable',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+}
+_UPLOAD_MEDIA_ERROR_RESPONSES = {
+    **_COMMON_MEDIA_ERROR_RESPONSES,
+    status.HTTP_400_BAD_REQUEST: {
+        'description': 'Upload validation failed',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+    status.HTTP_409_CONFLICT: {
+        'description': 'Media conflict',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+    status.HTTP_413_CONTENT_TOO_LARGE: {
+        'description': 'Upload exceeded configured size limit',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+    status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {
+        'description': 'Uploaded media type is unsupported or disallowed',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+}
+_DETAIL_MEDIA_ERROR_RESPONSES = {
+    **_COMMON_MEDIA_ERROR_RESPONSES,
+    status.HTTP_404_NOT_FOUND: {
+        'description': 'Media asset or content was not found',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+}
 
-@router.post('/assets', response_model=MediaAssetResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    '/assets',
+    response_model=MediaAssetResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=_UPLOAD_MEDIA_ERROR_RESPONSES,
+)
 async def upload_media_asset(
     request: Request,
     filename: Annotated[str, Query(min_length=1, max_length=255)],
@@ -85,7 +139,11 @@ async def upload_media_asset(
     )
 
 
-@router.get('/assets', response_model=MediaAssetListResponse)
+@router.get(
+    '/assets',
+    response_model=MediaAssetListResponse,
+    responses=_COMMON_MEDIA_ERROR_RESPONSES,
+)
 def list_media_library_assets(
     params: Annotated[MediaAssetListParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -106,7 +164,11 @@ def list_media_library_assets(
     return list_media_assets(storage, params)
 
 
-@router.get('/assets/{media_id}', response_model=MediaAssetResponse)
+@router.get(
+    '/assets/{media_id}',
+    response_model=MediaAssetResponse,
+    responses=_DETAIL_MEDIA_ERROR_RESPONSES,
+)
 def get_media_library_asset(
     media_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -128,7 +190,10 @@ def get_media_library_asset(
     return get_media_asset(storage, media_id)
 
 
-@router.get('/assets/{media_id}/content')
+@router.get(
+    '/assets/{media_id}/content',
+    responses=_DETAIL_MEDIA_ERROR_RESPONSES,
+)
 def get_media_library_content(
     media_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -153,7 +218,11 @@ def get_media_library_content(
     return FileResponse(path=path, media_type=mime_type, filename=filename)
 
 
-@router.delete('/assets/{media_id}', status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    '/assets/{media_id}',
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=_DETAIL_MEDIA_ERROR_RESPONSES,
+)
 def delete_media_library_asset(
     media_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],

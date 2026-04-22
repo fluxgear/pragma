@@ -169,7 +169,7 @@
           </Column>
 
           <template #empty>
-            <div class="media-library__empty-state muted">
+            <div v-if="!pageErrorMessage" class="media-library__empty-state muted">
               No media has been uploaded yet.
             </div>
           </template>

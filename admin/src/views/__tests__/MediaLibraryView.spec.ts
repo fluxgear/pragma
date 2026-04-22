@@ -124,6 +124,16 @@ describe('MediaLibraryView', () => {
     expect(wrapper.text()).toContain('hero.png')
     expect(wrapper.text()).toContain('Hero image')
   })
+  it('shows an error when loading media fails instead of empty-state text', async () => {
+    mediaApiMocks.listMediaAssets.mockRejectedValueOnce(new Error('Media service is unavailable'))
+
+    const { wrapper } = await mountView()
+
+    expect(mediaApiMocks.listMediaAssets).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('Media service is unavailable')
+    expect(wrapper.text()).not.toContain('No media has been uploaded yet.')
+  })
+
 
   it('uploads the selected file with metadata and reloads the list', async () => {
     const { wrapper } = await mountView()

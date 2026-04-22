@@ -37,9 +37,30 @@ describe('media API helpers', () => {
 
     await listMediaAssets({
       mime_type: 'image/png',
+      limit: 25,
+      offset: 25,
+      order_by: 'created_at',
     })
 
-    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith('/media/assets?mime_type=image%2Fpng', {
+    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith(
+      '/media/assets?mime_type=image%2Fpng&limit=25&offset=25&order_by=created_at',
+      {
+        accessToken,
+      },
+    )
+  })
+
+  it('omits query params when listing without filters', async () => {
+    apiClientMocks.apiRequest.mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
+
+    await listMediaAssets()
+
+    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith('/media/assets', {
       accessToken,
     })
   })

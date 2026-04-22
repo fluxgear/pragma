@@ -5,6 +5,9 @@ import { useAuthStore } from '@/stores/auth'
 
 export interface ListMediaAssetsParams {
   mime_type?: string
+  limit?: number
+  offset?: number
+  order_by?: 'created_at' | 'updated_at' | 'original_filename' | 'size_bytes'
 }
 
 export interface UploadMediaAssetOptions {
@@ -28,8 +31,20 @@ function buildMediaListQuery(params: ListMediaAssetsParams = {}): string {
     searchParams.set('mime_type', params.mime_type)
   }
 
+  if (params.limit !== undefined) {
+    searchParams.set('limit', String(params.limit))
+  }
+
+  if (params.offset !== undefined) {
+    searchParams.set('offset', String(params.offset))
+  }
+
+  if (params.order_by) {
+    searchParams.set('order_by', params.order_by)
+  }
+
   const query = searchParams.toString()
-  return query.length > 0 ? `/media/assets?${query}` : '/media/assets'
+  return query.length > 0 ? '/media/assets?' + query : '/media/assets'
 }
 
 function buildUploadPath(file: File, options: UploadMediaAssetOptions): string {

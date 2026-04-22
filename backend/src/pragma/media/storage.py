@@ -178,10 +178,12 @@ class LocalFilesystemStorageBackend(StorageBackend):
             f"{created_at:%m}",
             f"{media_id}-{slug}{extension}",
         )
-        absolute_path = self._root_path / relative_path
+        storage_key = relative_path.as_posix()
+        absolute_path = self.resolve(storage_key)
 
         try:
             absolute_path.parent.mkdir(parents=True, exist_ok=True)
+            absolute_path = self.resolve(storage_key)
             absolute_path.write_bytes(data)
         except OSError as exc:
             raise StorageError(
@@ -190,7 +192,7 @@ class LocalFilesystemStorageBackend(StorageBackend):
             ) from exc
 
         return StoredMedia(
-            storage_key=relative_path.as_posix(),
+            storage_key=storage_key,
             filesystem_path=absolute_path,
         )
 

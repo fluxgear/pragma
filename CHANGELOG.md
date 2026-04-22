@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.1 — 2026-04-22
+
+### Fixed
+- Enforced a valid refresh-cookie policy so `SameSite=None` now requires secure cookies
+- Hardened local media writes against symlink escapes outside the configured media root and made failed file deletion abort the metadata delete instead of silently orphaning bytes
+- Published structured media API error responses in router metadata and aligned the M5 media migration indexes with the default `updated_at` listing contract
+- Added focused backend regression coverage for media policy validation, upload failure paths, missing files, storage escape attempts, delete failure semantics, and media OpenAPI metadata
+- Extended the admin media API helpers with `limit`, `offset`, and `order_by` support plus regression coverage for query serialization
+- Corrected the admin media library UI so load failures no longer render the empty-state message and added a focused regression test
+
 ## v0.5.0 — 2026-04-21
 
 ### Added

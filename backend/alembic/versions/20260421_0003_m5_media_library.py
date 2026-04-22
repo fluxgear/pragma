@@ -80,21 +80,21 @@ def upgrade() -> None:
         unique=True,
     )
     op.create_index(
-        'ix_pragma_media_assets_created_at',
+        'ix_pragma_media_assets_updated_at',
         'pragma_media_assets',
-        ['created_at'],
+        ['updated_at'],
         unique=False,
     )
     op.create_index(
-        'ix_pragma_media_assets_mime_type_created_at',
+        'ix_pragma_media_assets_mime_type_updated_at',
         'pragma_media_assets',
-        ['mime_type', 'created_at'],
+        ['mime_type', 'updated_at'],
         unique=False,
     )
     op.create_index(
-        'ix_pragma_media_assets_uploader_created_at',
+        'ix_pragma_media_assets_uploader_updated_at',
         'pragma_media_assets',
-        ['uploader_user_id', 'created_at'],
+        ['uploader_user_id', 'updated_at'],
         unique=False,
     )
 
@@ -112,8 +112,8 @@ def downgrade() -> None:
         None.
     """
 
-    op.drop_index('ix_pragma_media_assets_uploader_created_at', table_name='pragma_media_assets')
-    op.drop_index('ix_pragma_media_assets_mime_type_created_at', table_name='pragma_media_assets')
-    op.drop_index('ix_pragma_media_assets_created_at', table_name='pragma_media_assets')
+    op.drop_index('ix_pragma_media_assets_uploader_updated_at', table_name='pragma_media_assets')
+    op.drop_index('ix_pragma_media_assets_mime_type_updated_at', table_name='pragma_media_assets')
+    op.drop_index('ix_pragma_media_assets_updated_at', table_name='pragma_media_assets')
     op.drop_index('ix_pragma_media_assets_storage_key', table_name='pragma_media_assets')
     op.drop_table('pragma_media_assets')

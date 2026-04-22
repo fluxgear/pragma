@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -69,6 +69,26 @@ class Settings(BaseSettings):
     )
     base_url: str = Field(min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
+
+    @model_validator(mode='after')
+    def validate_refresh_cookie_policy(self) -> Settings:
+        """Validate refresh-cookie security policy compatibility.
+
+        Args:
+            None.
+
+        Returns:
+            Settings: Validated settings object.
+
+        Raises:
+            ValueError: If SameSite=None is configured without secure cookies.
+        """
+
+        if self.refresh_cookie_samesite == 'none' and not self.refresh_cookie_secure:
+            raise ValueError(
+                'refresh_cookie_secure must be true when refresh_cookie_samesite is "none"'
+            )
+        return self
 
     @property
     def database_dsn(self) -> str:

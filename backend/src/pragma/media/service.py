@@ -229,20 +229,13 @@ def delete_media_asset(storage: DatabasePool, settings: Settings, media_id: UUID
     try:
         with storage.connection() as connection, connection.transaction():
             row = _get_media_row(connection=connection, media_id=media_id)
+            backend.delete(str(row['storage_key']))
             media_queries.delete_media(connection, media_id)
     except PsycopgError as exc:
         raise StorageError(
             detail='Unable to delete the requested media asset',
             code='MEDIA_DELETE_FAILED',
         ) from exc
-
-    try:
-        backend.delete(str(row['storage_key']))
-    except StorageError:
-        logger.warning(
-            'Media metadata deleted but file cleanup failed',
-            extra={'media_id': str(media_id), 'storage_key': str(row['storage_key'])},
-        )
 
 
 def resolve_media_content(
