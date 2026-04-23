@@ -1,0 +1,28 @@
+{% set testimonials = testimonials|default([], true) %}
+<section class="section section--muted" id="testimonials">
+    <div class="shell-container">
+        <div class="section-intro">
+            <p class="eyebrow">Trust</p>
+            <h2>Social proof that feels executive, not ornamental.</h2>
+            <p>Testimonials render as cards and degrade cleanly when no live data has been wired in yet.</p>
+        </div>
+        {% if testimonials %}
+        <div class="quote-grid">
+            {% for item in testimonials %}
+            <blockquote class="quote-card">
+                <p>“{{ item.quote|default('Client feedback will appear here.', true) }}”</p>
+                <footer>
+                    <strong>{{ item.name|default('Anonymous client', true) }}</strong>
+                    <span>{{ item.role|default('Leadership team', true) }}</span>
+                </footer>
+            </blockquote>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-panel">
+            <h3>Testimonials can be enabled later.</h3>
+            <p>No testimonial entries are currently available.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>

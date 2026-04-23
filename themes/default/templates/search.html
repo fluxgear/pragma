@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% set query = query|default('', true) %}
+{% set results = results|default([], true) %}
+{% set search_enabled = search_enabled|default(false, true) %}
+{% block content %}
+<section class="section" id="search">
+    <div class="shell-container search-shell">
+        <div class="section-intro">
+            <p class="eyebrow">Search</p>
+            <h1>Find pages, posts, and ideas quickly.</h1>
+            <p>The search template includes intentional empty, unavailable, and no-results states so it remains stable before full search rollout.</p>
+        </div>
+        <form class="search-form" action="{{ search_url|default('#', true) }}" method="get">
+            <label for="site-search">Search query</label>
+            <input class="input" id="site-search" name="q" type="search" value="{{ query }}" placeholder="Search the site">
+            <button class="button button--primary" type="submit">Search</button>
+        </form>
+        {% if not search_enabled %}
+        <div class="empty-panel">
+            <h2>Search is not enabled yet.</h2>
+            <p>M8 owns the real search backend. This template is in place and ready for it.</p>
+        </div>
+        {% elif results %}
+        <div class="results-list">
+            {% for item in results %}
+            <article class="panel-card result-card">
+                <p class="eyebrow">{{ item.type|default('Result', true) }}</p>
+                <h2><a href="{{ item.url|default('#', true) }}">{{ item.title|default('Untitled result', true) }}</a></h2>
+                <p>{{ item.excerpt|default('No summary is available for this result.', true) }}</p>
+            </article>
+            {% endfor %}
+        </div>
+        {% elif query %}
+        <div class="empty-panel">
+            <h2>No results matched “{{ query }}”.</h2>
+            <p>Try a broader phrase or explore the archive instead.</p>
+        </div>
+        {% else %}
+        <div class="empty-panel">
+            <h2>Enter a search term to begin.</h2>
+            <p>This view stays informative even before a query is submitted.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

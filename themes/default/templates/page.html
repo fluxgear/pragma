@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% set page = page|default({}, true) %}
+{% set toc = toc|default(page.toc|default([], true), true) %}
+{% set sidebar_sections = sidebar_sections|default(page.sidebar_sections|default([], true), true) %}
+{% set body_html = page.body_html|default('', true) %}
+{% block content %}
+<section class="section">
+    <div class="shell-container article-shell">
+        <article class="article-main">
+            <nav class="breadcrumbs" aria-label="Breadcrumb">
+                <a href="{{ home_url|default('/', true) }}">Home</a>
+                <span>/</span>
+                <span>{{ page.title|default('Page', true) }}</span>
+            </nav>
+            <p class="eyebrow">{{ page.kicker|default('Page template', true) }}</p>
+            <h1>{{ page.title|default('A flexible page layout for polished long-form content.', true) }}</h1>
+            <p class="article-lead">{{ page.subtitle|default('Use this template for service pages, company overviews, or editorial landing pages with optional sidebars and a table of contents.', true) }}</p>
+            {% if body_html %}
+            <div class="content-prose">
+                {# SECURITY: sanitized via nh3 #}
+                {{ body_html|safe }}
+            </div>
+            {% else %}
+            <div class="empty-panel">
+                <h2>Content is not available yet.</h2>
+                <p>This page template intentionally handles missing rich content without collapsing the surrounding layout.</p>
+            </div>
+            {% endif %}
+        </article>
+        <aside class="article-sidebar">
+            {% if toc %}
+            <section class="sidebar-panel">
+                <p class="sidebar-panel__heading">On this page</p>
+                <ul class="toc-list">
+                    {% for item in toc %}
+                    <li><a href="{{ item.href|default('#', true) }}">{{ item.label|default('Section', true) }}</a></li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% endif %}
+            {% if sidebar_sections %}
+                {% for section in sidebar_sections %}
+                <section class="sidebar-panel">
+                    <p class="sidebar-panel__heading">{{ section.title|default('Sidebar', true) }}</p>
+                    <p>{{ section.text|default('Additional context can be rendered here when provided.', true) }}</p>
+                </section>
+                {% endfor %}
+            {% else %}
+            <section class="sidebar-panel">
+                <p class="sidebar-panel__heading">Layout note</p>
+                <p>Optional sidebars, calls to action, and table-of-contents blocks can be attached later without changing the base presentation pattern.</p>
+            </section>
+            {% endif %}
+        </aside>
+    </div>
+</section>
+{% endblock %}

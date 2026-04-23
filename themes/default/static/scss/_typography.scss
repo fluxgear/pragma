@@ -1,0 +1,83 @@
+body {
+  margin: 0;
+  font-family: $font-sans;
+  background: linear-gradient(180deg, rgba(53, 89, 230, 0.05), transparent 24rem), var(--site-bg);
+  color: var(--site-text);
+  line-height: 1.65;
+}
+
+a {
+  color: inherit;
+  text-decoration-color: rgba(53, 89, 230, 0.32);
+}
+
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+}
+
+h1 {
+  font-size: clamp(2.7rem, 6vw, 4.9rem);
+}
+
+h2 {
+  font-size: clamp(2rem, 4vw, 3.1rem);
+}
+
+h3 {
+  font-size: clamp(1.3rem, 2vw, 1.7rem);
+}
+
+p,
+ul,
+ol {
+  margin: 0;
+}
+
+.content-prose {
+  display: grid;
+  gap: 1rem;
+}
+
+.content-prose h2,
+.content-prose h3 {
+  margin-top: 1rem;
+}
+
+.content-prose ul,
+.content-prose ol {
+  padding-left: 1.2rem;
+}
+
+.eyebrow {
+  margin-bottom: 0.75rem;
+  color: var(--site-primary);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  padding: 0;
+  margin-top: 1rem;
+  list-style: none;
+  color: var(--site-muted);
+  font-size: 0.94rem;
+}

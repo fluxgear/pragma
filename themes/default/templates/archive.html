@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% set archive = archive|default({}, true) %}
+{% set items = items|default([], true) %}
+{% set filters = filters|default([{'label': 'All'}, {'label': 'Strategy'}, {'label': 'Operations'}, {'label': 'Product'}], true) %}
+{% set pagination = pagination|default({}, true) %}
+{% block content %}
+<section class="section" id="archive">
+    <div class="shell-container">
+        <div class="section-intro">
+            <p class="eyebrow">Archive</p>
+            <h1>{{ archive.title|default('Browse the publication archive.', true) }}</h1>
+            <p>{{ archive.description|default('Cards, filters, and pagination remain usable whether the archive is densely populated or currently empty.', true) }}</p>
+        </div>
+        <div class="archive-toolbar">
+            <div class="pill-row">
+                {% for item in filters %}
+                <span class="pill">{{ item.label|default('Filter', true) }}</span>
+                {% endfor %}
+            </div>
+            <p class="archive-count">{{ pagination.total|default(items|length, true) }} entries</p>
+        </div>
+        {% if items %}
+        <div class="panel-grid panel-grid--three">
+            {% for entry in items %}
+            {% with post = entry %}
+            {% include 'partials/blog-card.html' %}
+            {% endwith %}
+            {% endfor %}
+        </div>
+        <nav class="pagination" aria-label="Archive pagination">
+            <a class="button button--secondary" href="{{ pagination.prev_url|default('#', true) }}">Previous</a>
+            <span>Page {{ pagination.page|default(1, true) }}</span>
+            <a class="button button--secondary" href="{{ pagination.next_url|default('#', true) }}">Next</a>
+        </nav>
+        {% else %}
+        <div class="empty-panel">
+            <h2>No archive entries are available.</h2>
+            <p>This state is intentional and ready for M13 public route wiring and M8 search integration.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

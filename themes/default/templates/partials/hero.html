@@ -1,0 +1,35 @@
+{% set hero = hero|default({}, true) %}
+{% set stats = hero.stats|default([{'value': '32%', 'label': 'faster publishing cycles'}, {'value': '4.8/5', 'label': 'client satisfaction'}, {'value': '24/7', 'label': 'operational confidence'}], true) %}
+<section class="hero-section" id="home">
+    <div class="shell-container hero-grid">
+        <div class="hero-copy">
+            <p class="eyebrow">{{ hero.eyebrow|default('Premium digital presence', true) }}</p>
+            <h1>{{ hero.title|default('A default theme that looks ready for the boardroom, not the backlog.', true) }}</h1>
+            <p class="hero-copy__lead">{{ hero.subtitle|default('Pragma ships with a polished public-facing theme built for service firms, SaaS vendors, and modern editorial teams that want strong presentation out of the gate.', true) }}</p>
+            <div class="button-row">
+                <a class="button button--primary" href="{{ hero.primary_cta.href|default('#services', true) }}">{{ hero.primary_cta.label|default('Explore capabilities', true) }}</a>
+                <a class="button button--secondary" href="{{ hero.secondary_cta.href|default('#contact', true) }}">{{ hero.secondary_cta.label|default('Speak with the team', true) }}</a>
+            </div>
+            <ul class="metric-grid">
+                {% for item in stats %}
+                <li class="metric-card">
+                    <strong>{{ item.value|default('—', true) }}</strong>
+                    <span>{{ item.label|default('Metric', true) }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div class="hero-visual">
+            <div class="visual-panel">
+                <p class="eyebrow">{{ hero.panel_eyebrow|default('Operational clarity', true) }}</p>
+                <h2>{{ hero.panel_title|default('Intentional presentation for every public page type.', true) }}</h2>
+                <p>{{ hero.panel_text|default('Home, generic page, blog post, archive, search, and 404 templates share a common design language with responsive layouts, dark mode, and graceful fallbacks.', true) }}</p>
+                <div class="visual-panel__stack">
+                    <div><span>Layout system</span><strong>8px rhythm</strong></div>
+                    <div><span>Typography</span><strong>System-first</strong></div>
+                    <div><span>Color mode</span><strong>Light + dark</strong></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>

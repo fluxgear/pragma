@@ -1,0 +1,31 @@
+{% set services = services|default([], true) %}
+<section class="section" id="services">
+    <div class="shell-container">
+        <div class="section-intro">
+            <p class="eyebrow">Capabilities</p>
+            <h2>Built for polished public storytelling and disciplined content operations.</h2>
+            <p>Use the default theme to present services, expertise, editorial publishing, and conversion pathways without looking like a starter template.</p>
+        </div>
+        {% if services %}
+        <div class="panel-grid panel-grid--three">
+            {% for service in services %}
+            <article class="panel-card">
+                <p class="pill">{{ service.kicker|default('Service', true) }}</p>
+                <h3>{{ service.title|default('Untitled capability', true) }}</h3>
+                <p>{{ service.description|default('Describe the client-facing capability here.', true) }}</p>
+                <ul class="feature-list">
+                    {% for point in service.points|default([], true) %}
+                    <li>{{ point }}</li>
+                    {% endfor %}
+                </ul>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-panel">
+            <h3>Services are ready for configuration.</h3>
+            <p>No service entries are available yet. Add them when public content assembly is in place.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>

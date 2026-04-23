@@ -1,0 +1,26 @@
+{% set site = site|default({}, true) %}
+{% set site_name = site.name|default('Pragma', true) %}
+{% set theme_static = theme_static|default('/themes/default/static', true) %}
+{% set theme_mode = theme_mode|default('light', true) %}
+{% set page_title = page_title|default(site_name, true) %}
+{% set page_description = page_description|default('Commercial-grade publishing and presentation for modern teams.', true) %}
+<!doctype html>
+<html lang="{{ site.lang|default('en', true) }}" data-bs-theme="{{ theme_mode }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{{ page_description }}">
+    <meta name="color-scheme" content="light dark">
+    <title>{{ page_title }} · {{ site_name }}</title>
+    <link rel="stylesheet" href="{{ theme_static }}/css/main.css">
+</head>
+<body class="site-shell">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    {% include 'partials/header.html' %}
+    <main id="main-content" class="site-main" tabindex="-1">
+        {% block content %}{% endblock %}
+    </main>
+    {% include 'partials/footer.html' %}
+    <script src="{{ theme_static }}/js/theme.js" defer></script>
+</body>
+</html>

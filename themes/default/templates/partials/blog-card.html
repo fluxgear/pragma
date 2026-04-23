@@ -1,0 +1,18 @@
+{% set post = post|default({}, true) %}
+<article class="panel-card blog-card">
+    {% if post.image_url %}
+    <div class="blog-card__media">
+        <img src="{{ post.image_url }}" alt="{{ post.image_alt|default(post.title|default('Article image', true), true) }}">
+    </div>
+    {% endif %}
+    <div class="blog-card__body">
+        <p class="eyebrow">{{ post.category|default('Insight', true) }}</p>
+        <h3><a href="{{ post.url|default('#', true) }}">{{ post.title|default('Untitled article', true) }}</a></h3>
+        <p>{{ post.excerpt|default('A concise overview of the article appears here when summary content is available.', true) }}</p>
+        <ul class="meta-list">
+            <li>{{ post.author|default('Editorial Team', true) }}</li>
+            <li>{{ post.published_at|default('Available soon', true) }}</li>
+            <li>{{ post.reading_time|default('4 min read', true) }}</li>
+        </ul>
+    </div>
+</article>

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.0 — 2026-04-22
+
+### Added
+- Added the checked-in `themes/default/` flagship theme with a strict manifest, full required public-page coverage, shared partials, dark-mode support, and premium corporate styling
+- Added theme-owned static assets under `themes/default/static/`, including shipped runtime CSS, SCSS source structure, a minimal theme-toggle script, and supporting SVG artwork
+- Added repo-backed backend smoke tests for checked-in theme discovery, required template coverage, sparse-context rendering, asset resolution, and app startup against the real default theme tree
+
 ## v0.6.1 — 2026-04-22
 
 ### Fixed

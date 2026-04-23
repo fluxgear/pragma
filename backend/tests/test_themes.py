@@ -101,6 +101,22 @@ def _write_theme(
     return theme_path
 
 
+def _repo_theme_root() -> Path:
+    """Return the checked-in repo theme root.
+
+    Args:
+        None.
+
+    Returns:
+        Path: Absolute path to the repository theme root.
+
+    Raises:
+        None.
+    """
+
+    return Path(__file__).resolve().parents[2] / 'themes'
+
+
 def test_theme_runtime_discovers_valid_themes_and_skips_invalid_duplicates(
     example_env_values: dict[str, str],
     apply_runtime_env: Callable[[dict[str, str]], None],
@@ -689,3 +705,155 @@ def test_create_app_attaches_theme_runtime_without_checked_in_themes(
         runtime = client.app.state.theme_runtime
 
     assert runtime.list_themes() == ()
+
+
+def test_checked_in_default_theme_is_discoverable_and_selected(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+) -> None:
+    """Verify the checked-in default theme is discoverable and selected.
+
+    Args:
+        example_env_values: Parsed example environment values.
+        apply_runtime_env: Helper that applies runtime environment values.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = _repo_theme_root()
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_checked_in_default',
+        )
+    )
+
+    runtime = build_theme_runtime(get_settings())
+
+    manifests = runtime.list_themes()
+    assert any(manifest.id == 'default' for manifest in manifests)
+    assert runtime.resolve_default_theme().root_path == theme_root / 'default'
+    assert runtime.resolve_default_theme().manifest.name == 'Pragma Default Theme'
+
+
+def test_checked_in_default_theme_covers_required_templates_and_assets(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+) -> None:
+    """Verify the checked-in default theme exposes required templates and assets.
+
+    Args:
+        example_env_values: Parsed example environment values.
+        apply_runtime_env: Helper that applies runtime environment values.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = _repo_theme_root()
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_checked_in_assets',
+        )
+    )
+
+    runtime = build_theme_runtime(get_settings())
+
+    assert {
+        'home.html',
+        'page.html',
+        'post.html',
+        'archive.html',
+        'search.html',
+        '404.html',
+    }.issubset(set(runtime.environment.list_templates()))
+
+    resolved_asset = runtime.resolve_asset_path('css/main.css')
+    assert resolved_asset.theme_id == 'default'
+    assert resolved_asset.filesystem_path == theme_root / 'default' / 'static' / 'css' / 'main.css'
+
+
+def test_checked_in_default_theme_templates_render_with_sparse_context(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+) -> None:
+    """Verify required checked-in templates render cleanly with sparse context.
+
+    Args:
+        example_env_values: Parsed example environment values.
+        apply_runtime_env: Helper that applies runtime environment values.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = _repo_theme_root()
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_checked_in_render',
+        )
+    )
+
+    runtime = build_theme_runtime(get_settings())
+
+    expected_fragments = {
+        'home.html': 'A public-facing foundation with the finish of a commercial product.',
+        'page.html': 'A flexible page layout for polished long-form content.',
+        'post.html': 'A refined article template with metadata, media, and related reading.',
+        'archive.html': 'Browse the publication archive.',
+        'search.html': 'Search is not enabled yet.',
+        '404.html': 'The page you requested has gone missing.',
+    }
+
+    for template_name, fragment in expected_fragments.items():
+        rendered = runtime.render_template(
+            template_name,
+            {'theme_static': '/themes/default/static'},
+        )
+        assert fragment in rendered
+
+
+def test_create_app_attaches_checked_in_default_theme_runtime(
+    runtime_database: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+) -> None:
+    """Verify app startup attaches the checked-in default theme runtime.
+
+    Args:
+        runtime_database: Environment values for the isolated test database.
+        apply_runtime_env: Helper that applies runtime environment values.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = _repo_theme_root()
+    env_values = dict(runtime_database)
+    env_values['PRAGMA_THEME_ROOT'] = str(theme_root)
+    env_values['PRAGMA_THEME_ACTIVE_ID'] = 'default'
+    env_values['PRAGMA_THEME_DEFAULT_ID'] = 'default'
+    apply_runtime_env(env_values)
+
+    with TestClient(create_app()) as client:
+        runtime = client.app.state.theme_runtime
+
+    assert runtime.resolve_default_theme().manifest.id == 'default'
+    assert 'home.html' in runtime.environment.list_templates()

@@ -1,0 +1,29 @@
+{% set team = team|default([], true) %}
+<section class="section" id="team">
+    <div class="shell-container">
+        <div class="section-intro">
+            <p class="eyebrow">Leadership</p>
+            <h2>Human, credible, and ready for a commercial brand narrative.</h2>
+            <p>Use the team section for founders, practice leads, or editorial leadership. If no records exist yet, the template still holds its structure.</p>
+        </div>
+        {% if team %}
+        <div class="team-grid">
+            {% for person in team %}
+            {% set person_name = person.name|default('Team member', true) %}
+            {% set avatar_text = person.initials|default(person_name, true) %}
+            <article class="team-card">
+                <div class="team-card__avatar">{{ avatar_text[:1] }}</div>
+                <h3>{{ person_name }}</h3>
+                <p class="team-card__role">{{ person.role|default('Role pending', true) }}</p>
+                <p>{{ person.bio|default('A short professional biography appears here when available.', true) }}</p>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-panel">
+            <h3>Your team section is ready.</h3>
+            <p>Add leadership profiles to turn this placeholder state into a people-driven credibility block.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>

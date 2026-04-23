@@ -1,0 +1,38 @@
+{% set site = site|default({}, true) %}
+{% set site_name = site.name|default('Pragma', true) %}
+{% set theme_static = theme_static|default('/themes/default/static', true) %}
+{% set footer_links = footer_links|default(site.footer_links|default([{'label': 'Home', 'href': '/'}, {'label': 'Services', 'href': '#services'}, {'label': 'Archive', 'href': '#archive'}, {'label': 'Search', 'href': '#search'}], true), true) %}
+{% set social_links = social_links|default(site.social_links|default([{'label': 'LinkedIn', 'href': '#'}, {'label': 'GitHub', 'href': '#'}, {'label': 'Email', 'href': 'mailto:hello@example.com'}], true), true) %}
+<footer class="site-footer">
+    <div class="shell-container footer-grid">
+        <div class="footer-brand">
+            <a class="brand brand--footer" href="{{ site.home_url|default('/', true) }}">
+                <img class="brand-mark" src="{{ theme_static }}/img/logo-mark.svg" alt="">
+                <span>
+                    <strong>{{ site.brand|default(site_name, true) }}</strong>
+                    <small>{{ site.footer_blurb|default('A refined default theme for B2B sites, publications, and product storytelling.', true) }}</small>
+                </span>
+            </a>
+        </div>
+        <div>
+            <p class="footer-heading">Navigate</p>
+            <ul class="footer-list">
+                {% for item in footer_links %}
+                <li><a href="{{ item.href|default('#', true) }}">{{ item.label|default('Link', true) }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div>
+            <p class="footer-heading">Connect</p>
+            <ul class="footer-list">
+                {% for item in social_links %}
+                <li><a href="{{ item.href|default('#', true) }}">{{ item.label|default('Social', true) }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    <div class="shell-container footer-meta">
+        <p>© {{ year|default('2026', true) }} {{ site_name }}. Built for commercial-grade publishing.</p>
+        <p>Dark mode, responsive layout, and graceful empty states included.</p>
+    </div>
+</footer>

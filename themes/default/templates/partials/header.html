@@ -1,0 +1,30 @@
+{% set site = site|default({}, true) %}
+{% set site_name = site.name|default('Pragma', true) %}
+{% set theme_static = theme_static|default('/themes/default/static', true) %}
+{% set navigation = navigation|default(site.navigation|default([{'label': 'Services', 'href': '#services'}, {'label': 'Testimonials', 'href': '#testimonials'}, {'label': 'Team', 'href': '#team'}, {'label': 'Insights', 'href': '#insights'}, {'label': 'Contact', 'href': '#contact'}], true), true) %}
+{% set header_cta = header_cta|default(site.header_cta|default({'label': 'Book a consultation', 'href': '#contact'}, true), true) %}
+<header class="site-header">
+    <div class="shell-container header-bar">
+        <a class="brand" href="{{ site.home_url|default('/', true) }}" aria-label="{{ site_name }} home">
+            <img class="brand-mark" src="{{ theme_static }}/img/logo-mark.svg" alt="">
+            <span>
+                <strong>{{ site.brand|default(site_name, true) }}</strong>
+                <small>{{ site.tagline|default('PostgreSQL-native publishing', true) }}</small>
+            </span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+            <ul>
+                {% for item in navigation %}
+                <li><a href="{{ item.href|default('#', true) }}">{{ item.label|default('Link', true) }}</a></li>
+                {% endfor %}
+            </ul>
+        </nav>
+        <div class="header-actions">
+            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color mode" aria-pressed="{{ 'true' if theme_mode == 'dark' else 'false' }}">
+                <span class="theme-toggle__label">Theme</span>
+                <span class="theme-toggle__value">{{ 'Dark' if theme_mode == 'dark' else 'Light' }}</span>
+            </button>
+            <a class="button button--primary" href="{{ header_cta.href|default('#contact', true) }}">{{ header_cta.label|default('Contact', true) }}</a>
+        </div>
+    </div>
+</header>

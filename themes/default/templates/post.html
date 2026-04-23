@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% set post = post|default({}, true) %}
+{% set body_html = post.body_html|default('', true) %}
+{% set related_posts = related_posts|default([], true) %}
+{% block content %}
+<section class="section">
+    <div class="shell-container post-shell">
+        <article class="article-main">
+            <nav class="breadcrumbs" aria-label="Breadcrumb">
+                <a href="{{ home_url|default('/', true) }}">Home</a>
+                <span>/</span>
+                <a href="{{ archive_url|default('#archive', true) }}">Archive</a>
+                <span>/</span>
+                <span>{{ post.title|default('Post', true) }}</span>
+            </nav>
+            <p class="eyebrow">{{ post.category|default('Journal', true) }}</p>
+            <h1>{{ post.title|default('A refined article template with metadata, media, and related reading.', true) }}</h1>
+            <ul class="meta-list">
+                <li>{{ post.author|default('Editorial Team', true) }}</li>
+                <li>{{ post.published_at|default('Publication date pending', true) }}</li>
+                <li>{{ post.reading_time|default('5 min read', true) }}</li>
+            </ul>
+            {% if post.featured_image_url %}
+            <figure class="featured-media">
+                <img src="{{ post.featured_image_url }}" alt="{{ post.featured_image_alt|default(post.title|default('Featured image', true), true) }}">
+            </figure>
+            {% endif %}
+            {% if body_html %}
+            <div class="content-prose">
+                {# SECURITY: sanitized via nh3 #}
+                {{ body_html|safe }}
+            </div>
+            {% else %}
+            <div class="empty-panel">
+                <h2>Post content is unavailable.</h2>
+                <p>The theme keeps article framing, metadata, and related-content areas intact even when the main body has not been supplied.</p>
+            </div>
+            {% endif %}
+        </article>
+        <aside class="article-sidebar">
+            <section class="sidebar-panel">
+                <p class="sidebar-panel__heading">About this article</p>
+                <p>{{ post.summary|default('Use this space for a dek, an executive summary, or author-side context when public assembly is available.', true) }}</p>
+            </section>
+            <section class="sidebar-panel">
+                <p class="sidebar-panel__heading">Reading experience</p>
+                <p>Built for long-form editorial and product storytelling with restrained typography and generous spacing.</p>
+            </section>
+        </aside>
+    </div>
+</section>
+{% if related_posts %}
+<section class="section section--muted">
+    <div class="shell-container">
+        <div class="section-intro">
+            <p class="eyebrow">Related posts</p>
+            <h2>Continue the story.</h2>
+        </div>
+        <div class="panel-grid panel-grid--three">
+            {% for item in related_posts %}
+            {% with post = item %}
+            {% include 'partials/blog-card.html' %}
+            {% endwith %}
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endif %}
+{% endblock %}

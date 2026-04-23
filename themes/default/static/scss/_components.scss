@@ -1,0 +1,301 @@
+.shell-container {
+  width: min(calc(100% - 2rem), var(--site-max));
+  margin: 0 auto;
+}
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  backdrop-filter: blur(18px);
+  background: rgba(245, 247, 251, 0.72);
+  border-bottom: 1px solid var(--site-border);
+}
+
+[data-bs-theme='dark'] .site-header {
+  background: rgba(9, 17, 31, 0.72);
+}
+
+.header-bar,
+.header-actions,
+.button-row,
+.archive-toolbar,
+.pagination,
+.section-intro--inline,
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.header-bar {
+  padding: 1rem 0;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+  text-decoration: none;
+}
+
+.brand span {
+  display: grid;
+}
+
+.brand small,
+.footer-meta,
+.archive-count,
+.form-note,
+.team-card__role,
+.blog-card__body p,
+.contact-list span,
+.breadcrumbs {
+  color: var(--site-muted);
+}
+
+.brand-mark {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.site-nav ul,
+.footer-list,
+.contact-list,
+.quick-links,
+.feature-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.site-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+}
+
+.site-nav a,
+.footer-list a,
+.quick-links a {
+  text-decoration: none;
+}
+
+.theme-toggle,
+.button,
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.theme-toggle {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--site-border);
+  background: var(--site-surface);
+  color: var(--site-text);
+}
+
+.button {
+  padding: 0.9rem 1.25rem;
+  border: 1px solid transparent;
+  text-decoration: none;
+}
+
+.button--primary {
+  background: linear-gradient(135deg, var(--site-primary), var(--site-accent));
+  color: #fff;
+  box-shadow: 0 18px 38px rgba(53, 89, 230, 0.2);
+}
+
+.button--secondary {
+  border-color: var(--site-border);
+  background: var(--site-surface);
+}
+
+.button--ghost {
+  padding-inline: 0;
+  border: 0;
+}
+
+.section {
+  padding: var(--space-6) 0;
+}
+
+.section--muted {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+[data-bs-theme='dark'] .section--muted {
+  background: rgba(12, 20, 34, 0.48);
+}
+
+.section-intro {
+  display: grid;
+  gap: 1rem;
+  max-width: 42rem;
+  margin-bottom: var(--space-4);
+}
+
+.panel-grid,
+.quote-grid,
+.team-grid,
+.footer-grid,
+.contact-grid,
+.article-shell {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.panel-card,
+.quote-card,
+.team-card,
+.sidebar-panel,
+.empty-panel,
+.contact-form,
+.not-found-card,
+.cta-banner {
+  border: 1px solid var(--site-border);
+  border-radius: var(--site-radius);
+  background: var(--site-surface);
+  box-shadow: var(--site-shadow);
+}
+
+.panel-card,
+.quote-card,
+.team-card,
+.sidebar-panel,
+.empty-panel,
+.not-found-card {
+  padding: 1.5rem;
+}
+
+.pill {
+  padding: 0.45rem 0.8rem;
+  background: rgba(53, 89, 230, 0.1);
+  color: var(--site-primary);
+  font-size: 0.82rem;
+}
+
+.feature-list,
+.contact-list,
+.quick-links,
+.results-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.blog-card {
+  display: grid;
+  overflow: hidden;
+}
+
+.blog-card__media img {
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.blog-card__body {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.team-card__avatar {
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(53, 89, 230, 0.18), rgba(16, 180, 210, 0.18));
+  color: var(--site-primary);
+  font-weight: 700;
+}
+
+.contact-form {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1.5rem;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--site-border);
+  border-radius: 1rem;
+  background: var(--site-surface-strong);
+  color: var(--site-text);
+  box-sizing: border-box;
+}
+
+.site-footer {
+  padding: 0 0 2rem;
+}
+
+.footer-grid {
+  padding: 2rem 0;
+  border-top: 1px solid var(--site-border);
+}
+
+.footer-heading,
+.sidebar-panel__heading {
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.footer-list,
+.quick-links {
+  gap: 0.65rem;
+}
+
+.footer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 1rem;
+}
+
+.cta-banner,
+.not-found-card {
+  padding: 2rem;
+}
+
+.search-form {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+@media (min-width: 48rem) {
+  .panel-grid--three,
+  .quote-grid,
+  .team-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .footer-grid,
+  .contact-grid,
+  .article-shell,
+  .hero-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .article-shell {
+    align-items: start;
+    grid-template-columns: minmax(0, 1.6fr) minmax(18rem, 0.8fr);
+  }
+
+  .search-form {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+}
