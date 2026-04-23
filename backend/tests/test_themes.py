@@ -450,6 +450,215 @@ def test_theme_runtime_resolves_assets_with_fallback_and_path_validation(
     assert exc_info.value.code == 'THEME_ASSET_PATH_INVALID'
 
 
+def test_theme_runtime_falls_back_to_default_template_when_active_render_fails(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+) -> None:
+    """Verify render-time failures in the active theme fall back to default.
+
+    Args:
+        example_env_values: Parsed example environment values.
+        apply_runtime_env: Helper that applies runtime environment values.
+        tmp_path: Temporary filesystem root.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = tmp_path / 'themes'
+    _write_theme(
+        theme_root,
+        'default',
+        {'id': 'default', 'name': 'Default Theme', 'version': '1.0.0'},
+        templates={'page.html': 'default {{ title }}'},
+    )
+    _write_theme(
+        theme_root,
+        'custom',
+        {'id': 'custom', 'name': 'Custom Theme', 'version': '1.0.0'},
+        templates={'page.html': '{{ 1 / 0 }}'},
+    )
+
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_render_failure',
+            active_theme_id='custom',
+            default_theme_id='default',
+        )
+    )
+
+    runtime = build_theme_runtime(get_settings())
+
+    assert runtime.render_template('page.html', {'title': 'Recovered'}) == 'default Recovered'
+
+
+def test_theme_runtime_keeps_nested_default_fallback_theme_local(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+) -> None:
+    """Verify nested lookups stay in the default theme after fallback.
+
+    Args:
+        example_env_values: Parsed example environment values.
+        apply_runtime_env: Helper that applies runtime environment values.
+        tmp_path: Temporary filesystem root.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = tmp_path / 'themes'
+    _write_theme(
+        theme_root,
+        'default',
+        {'id': 'default', 'name': 'Default Theme', 'version': '1.0.0'},
+        templates={
+            'base.html': 'DEFAULT BASE [{% block body %}{% endblock %}]',
+            'fragment.html': 'DEFAULT FRAGMENT',
+            'page.html': (
+                '{% extends "base.html" %}'
+                '{% block body %}{% include "fragment.html" %}{% endblock %}'
+            ),
+        },
+    )
+    _write_theme(
+        theme_root,
+        'custom',
+        {'id': 'custom', 'name': 'Custom Theme', 'version': '1.0.0'},
+        templates={
+            'base.html': 'CUSTOM BASE [{% block body %}{% endblock %}]',
+            'fragment.html': 'CUSTOM FRAGMENT',
+        },
+    )
+
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_nested_fallback',
+            active_theme_id='custom',
+            default_theme_id='default',
+        )
+    )
+
+    runtime = build_theme_runtime(get_settings())
+
+    assert runtime.render_template('page.html') == 'DEFAULT BASE [DEFAULT FRAGMENT]'
+
+
+def test_theme_runtime_normalizes_configured_theme_ids_before_resolution(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+) -> None:
+    """Verify configured theme identifiers are normalized before lookup.
+
+    Args:
+        example_env_values: Parsed example environment values.
+        apply_runtime_env: Helper that applies runtime environment values.
+        tmp_path: Temporary filesystem root.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = tmp_path / 'themes'
+    _write_theme(
+        theme_root,
+        'default',
+        {'id': 'default', 'name': 'Default Theme', 'version': '1.0.0'},
+        templates={'page.html': 'default {{ title }}'},
+    )
+    _write_theme(
+        theme_root,
+        'custom',
+        {'id': 'custom', 'name': 'Custom Theme', 'version': '1.0.0'},
+        templates={'page.html': 'custom {{ title }}'},
+    )
+
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_id_normalization',
+            active_theme_id=' Custom ',
+            default_theme_id=' Default ',
+        )
+    )
+
+    settings = get_settings()
+    runtime = build_theme_runtime(settings)
+
+    assert settings.theme_active_id == 'custom'
+    assert settings.theme_default_id == 'default'
+    assert runtime.resolve_active_theme().manifest.id == 'custom'
+    assert runtime.resolve_default_theme().manifest.id == 'default'
+
+
+def test_theme_runtime_reports_render_failure_after_fallback_exhaustion(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+) -> None:
+    """Verify a stable theme error is raised when all render attempts fail.
+
+    Args:
+        example_env_values: Parsed example environment values.
+        apply_runtime_env: Helper that applies runtime environment values.
+        tmp_path: Temporary filesystem root.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = tmp_path / 'themes'
+    _write_theme(
+        theme_root,
+        'default',
+        {'id': 'default', 'name': 'Default Theme', 'version': '1.0.0'},
+        templates={'page.html': '{{ 1 / 0 }}'},
+    )
+    _write_theme(
+        theme_root,
+        'custom',
+        {'id': 'custom', 'name': 'Custom Theme', 'version': '1.0.0'},
+        templates={'page.html': '{{ 1 / 0 }}'},
+    )
+
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_render_failure_exhausted',
+            active_theme_id='custom',
+            default_theme_id='default',
+        )
+    )
+
+    runtime = build_theme_runtime(get_settings())
+
+    with pytest.raises(ThemeError) as exc_info:
+        runtime.render_template('page.html')
+
+    assert exc_info.value.code == 'THEME_TEMPLATE_RENDER_FAILED'
+
+
 def test_create_app_attaches_theme_runtime_without_checked_in_themes(
     runtime_database: dict[str, str],
     apply_runtime_env: Callable[[dict[str, str]], None],

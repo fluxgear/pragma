@@ -73,6 +73,51 @@ class Settings(BaseSettings):
     theme_default_id: str = Field(default='default', min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
 
+    @staticmethod
+    def _normalize_theme_identifier(value: str) -> str:
+        """Normalize and validate a configured theme identifier.
+
+        Args:
+            value: Theme identifier from configuration.
+
+        Returns:
+            str: Normalized theme identifier.
+
+        Raises:
+            ValueError: If the identifier format is invalid.
+        """
+
+        normalized = value.strip().lower()
+        is_valid = (
+            1 <= len(normalized) <= 64
+            and normalized[0].isalnum()
+            and normalized[-1].isalnum()
+            and all(character.isalnum() or character in {'-', '_'} for character in normalized)
+        )
+        if not is_valid:
+            raise ValueError(
+                'Theme id must use lowercase letters, numbers, hyphens, or underscores'
+            )
+        return normalized
+
+    @model_validator(mode='after')
+    def normalize_theme_identifiers(self) -> Settings:
+        """Normalize configured theme identifiers before runtime lookup.
+
+        Args:
+            None.
+
+        Returns:
+            Settings: Validated settings object.
+
+        Raises:
+            ValueError: If a configured theme identifier is invalid.
+        """
+
+        self.theme_active_id = self._normalize_theme_identifier(self.theme_active_id)
+        self.theme_default_id = self._normalize_theme_identifier(self.theme_default_id)
+        return self
+
     @model_validator(mode='after')
     def validate_refresh_cookie_policy(self) -> Settings:
         """Validate refresh-cookie security policy compatibility.

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.1 — 2026-04-22
+
+### Fixed
+- Fixed M6 theme rendering fallback so active-theme render-time failures now retry the default theme instead of surfacing raw exceptions
+- Fixed M6 nested template fallback locality so default-theme fallback no longer mixes active-theme `extends` or `include` fragments into the rendered output
+- Normalized configured theme IDs before runtime lookup so padded or mixed-case `PRAGMA_THEME_ACTIVE_ID` and `PRAGMA_THEME_DEFAULT_ID` values resolve deterministically
+- Added focused regression coverage for render-time fallback, nested fallback locality, theme ID normalization, and fallback-exhaustion error reporting
+
 ## v0.6.0 — 2026-04-22
 
 ### Added

@@ -254,19 +254,32 @@ class ThemeRuntime:
             name,
             kind='template',
             code='THEME_TEMPLATE_PATH_INVALID',
-        ).as_posix()
-        try:
-            return self._environment.get_template(normalized)
-        except ThemeError:
-            raise
-        except TemplateNotFound as exc:
-            raise ThemeError(
-                detail=(
-                    f'Theme template {normalized} was not found in the active or default '
-                    'theme'
-                ),
-                code='THEME_TEMPLATE_NOT_FOUND',
-            ) from exc
+        )
+        attempts = self._iter_template_attempts(normalized)
+        if not attempts:
+            raise self._template_not_found_error(normalized)
+
+        last_error: ThemeError | None = None
+        for resolved_path, candidate_themes in attempts:
+            environment = self._build_environment(candidate_themes)
+            try:
+                return self._compile_template(
+                    environment,
+                    normalized.as_posix(),
+                    resolved_path,
+                )
+            except ThemeError as exc:
+                logger.warning(
+                    'Skipping unusable theme template %s from theme %s: %s',
+                    resolved_path.relative_path,
+                    resolved_path.theme_id,
+                    exc.detail,
+                )
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+        raise self._template_not_found_error(normalized)
 
     def render_template(self, name: str, context: dict[str, Any] | None = None) -> str:
         """Render a template to a string.
@@ -282,8 +295,195 @@ class ThemeRuntime:
             ThemeError: If the template cannot be resolved or compiled.
         """
 
-        template = self.get_template(name)
-        return template.render({} if context is None else context)
+        normalized = _normalize_lookup_path(
+            name,
+            kind='template',
+            code='THEME_TEMPLATE_PATH_INVALID',
+        )
+        attempts = self._iter_template_attempts(normalized)
+        if not attempts:
+            raise self._template_not_found_error(normalized)
+
+        render_context = {} if context is None else context
+        last_error: ThemeError | None = None
+        for resolved_path, candidate_themes in attempts:
+            environment = self._build_environment(candidate_themes)
+            try:
+                template = self._compile_template(
+                    environment,
+                    normalized.as_posix(),
+                    resolved_path,
+                )
+                return template.render(render_context)
+            except ThemeError as exc:
+                logger.warning(
+                    'Skipping unusable theme template %s from theme %s: %s',
+                    resolved_path.relative_path,
+                    resolved_path.theme_id,
+                    exc.detail,
+                )
+                last_error = exc
+            except Exception as exc:
+                logger.warning(
+                    'Skipping render-failed theme template %s from theme %s: %s',
+                    resolved_path.relative_path,
+                    resolved_path.theme_id,
+                    exc,
+                )
+                last_error = ThemeError(
+                    detail=(
+                        f'Theme template {normalized.as_posix()} could not be rendered in '
+                        'the active or default theme'
+                    ),
+                    code='THEME_TEMPLATE_RENDER_FAILED',
+                )
+
+        if last_error is not None:
+            raise last_error
+        raise self._template_not_found_error(normalized)
+
+    def _build_environment(
+        self,
+        candidate_themes: tuple[DiscoveredTheme, ...] | None = None,
+    ) -> Environment:
+        """Build a Jinja environment for a specific theme fallback chain.
+
+        Args:
+            candidate_themes: Ordered fallback chain for template resolution.
+
+        Returns:
+            Environment: Jinja environment bound to the requested theme chain.
+
+        Raises:
+            None.
+        """
+
+        if candidate_themes is None:
+            return self._environment
+        return self._environment.overlay(loader=_ThemeTemplateLoader(self, candidate_themes))
+
+    def _iter_template_attempts(
+        self,
+        relative_path: PurePosixPath,
+    ) -> tuple[tuple[ResolvedThemePath, tuple[DiscoveredTheme, ...]], ...]:
+        """Return root-template attempts with theme-local fallback chains.
+
+        Args:
+            relative_path: Normalized relative template lookup path.
+
+        Returns:
+            tuple[tuple[ResolvedThemePath, tuple[DiscoveredTheme, ...]], ...]:
+                Resolution attempts ordered from active theme to default theme.
+
+        Raises:
+            ThemeError: If no usable active/default theme exists.
+        """
+
+        attempts: list[tuple[ResolvedThemePath, tuple[DiscoveredTheme, ...]]] = []
+        candidate_themes = self._candidate_themes()
+        for index, theme in enumerate(candidate_themes):
+            resolved = self._resolve_existing_paths(
+                relative_path,
+                path_getter=lambda candidate: candidate.templates_path,
+                code='THEME_TEMPLATE_PATH_INVALID',
+                themes=(theme,),
+            )
+            if not resolved:
+                continue
+            attempts.append((resolved[0], candidate_themes[index:]))
+        return tuple(attempts)
+
+
+    def _compile_template(
+        self,
+        environment: Environment,
+        name: str,
+        resolved_path: ResolvedThemePath,
+        globals: dict[str, Any] | None = None,
+    ) -> Template:
+        """Compile a resolved template path inside the provided environment.
+
+        Args:
+            environment: Jinja environment that will own the compiled template.
+            name: Normalized template lookup path.
+            resolved_path: Resolved template metadata.
+            globals: Optional template globals.
+
+        Returns:
+            Template: Compiled template bound to the provided environment.
+
+        Raises:
+            ThemeError: If the template cannot be read or compiled.
+        """
+
+        try:
+            source = resolved_path.filesystem_path.read_text(encoding='utf-8')
+        except OSError as exc:
+            raise ThemeError(
+                detail=(
+                    f'Theme template {name} could not be read from the active or default '
+                    'theme'
+                ),
+                code='THEME_TEMPLATE_READ_FAILED',
+            ) from exc
+
+        try:
+            code = environment.compile(
+                source,
+                name,
+                str(resolved_path.filesystem_path),
+            )
+        except TemplateSyntaxError as exc:
+            raise ThemeError(
+                detail=(
+                    f'Theme template {name} could not be compiled in the active or default '
+                    'theme'
+                ),
+                code='THEME_TEMPLATE_INVALID',
+            ) from exc
+
+        def uptodate(path: Path = resolved_path.filesystem_path) -> bool:
+            """Report whether the compiled template source is unchanged.
+
+            Args:
+                path: Filesystem path for the compiled template.
+
+            Returns:
+                bool: True when the template source is unchanged.
+
+            Raises:
+                None.
+            """
+
+            return path.is_file()
+
+        return environment.template_class.from_code(
+            environment,
+            code,
+            {} if globals is None else globals,
+            uptodate,
+        )
+
+    def _template_not_found_error(self, relative_path: PurePosixPath) -> ThemeError:
+        """Build a stable not-found error for unresolved templates.
+
+        Args:
+            relative_path: Normalized relative template lookup path.
+
+        Returns:
+            ThemeError: Stable template-not-found error.
+
+        Raises:
+            None.
+        """
+
+        return ThemeError(
+            detail=(
+                f'Theme template {relative_path.as_posix()} was not found in the active or '
+                'default theme'
+            ),
+            code='THEME_TEMPLATE_NOT_FOUND',
+        )
 
     def _candidate_themes(self) -> tuple[DiscoveredTheme, ...]:
         """Return fallback themes in deterministic resolution order.
@@ -318,6 +518,7 @@ class ThemeRuntime:
         *,
         path_getter: Callable[[DiscoveredTheme], Path],
         code: str,
+        themes: tuple[DiscoveredTheme, ...] | None = None,
     ) -> tuple[ResolvedThemePath, ...]:
         """Resolve existing theme-owned files for a relative lookup path.
 
@@ -325,6 +526,7 @@ class ThemeRuntime:
             relative_path: Relative lookup path.
             path_getter: Callable returning the owning base directory for a theme.
             code: Stable machine-readable error code for containment failures.
+            themes: Optional explicit theme chain override.
 
         Returns:
             tuple[ResolvedThemePath, ...]: Existing candidate paths.
@@ -335,7 +537,8 @@ class ThemeRuntime:
 
         resolved: list[ResolvedThemePath] = []
         last_path_error: ThemeError | None = None
-        for theme in self._candidate_themes():
+        selected_themes = self._candidate_themes() if themes is None else themes
+        for theme in selected_themes:
             try:
                 candidate = resolve_theme_relative_path(
                     path_getter(theme),
@@ -380,8 +583,30 @@ class _ThemeTemplateLoader(BaseLoader):
         None.
     """
 
-    def __init__(self, runtime: ThemeRuntime) -> None:
+    def __init__(
+        self,
+        runtime: ThemeRuntime,
+        candidate_themes: tuple[DiscoveredTheme, ...] | None = None,
+    ) -> None:
         self._runtime = runtime
+        self._candidate_themes = candidate_themes
+
+    def _selected_themes(self) -> tuple[DiscoveredTheme, ...]:
+        """Return the loader's effective fallback chain.
+
+        Args:
+            None.
+
+        Returns:
+            tuple[DiscoveredTheme, ...]: Effective theme chain for this loader.
+
+        Raises:
+            ThemeError: If no usable active/default theme exists.
+        """
+
+        if self._candidate_themes is not None:
+            return self._candidate_themes
+        return self._runtime._candidate_themes()
 
     def load(
         self,
@@ -408,75 +633,39 @@ class _ThemeTemplateLoader(BaseLoader):
             name,
             kind='template',
             code='THEME_TEMPLATE_PATH_INVALID',
-        ).as_posix()
-        last_syntax_error: TemplateSyntaxError | None = None
-        last_read_error: OSError | None = None
+        )
+        try:
+            candidate_themes = self._selected_themes()
+        except ThemeError as exc:
+            raise TemplateNotFound(normalized.as_posix()) from exc
 
-        for candidate in self._runtime.iter_template_candidates(normalized):
+        last_error: ThemeError | None = None
+        candidates = self._runtime._resolve_existing_paths(
+            normalized,
+            path_getter=lambda theme: theme.templates_path,
+            code='THEME_TEMPLATE_PATH_INVALID',
+            themes=candidate_themes,
+        )
+        for candidate in candidates:
             try:
-                source = candidate.filesystem_path.read_text(encoding='utf-8')
-            except OSError as exc:
+                return self._runtime._compile_template(
+                    environment,
+                    normalized.as_posix(),
+                    candidate,
+                    globals,
+                )
+            except ThemeError as exc:
                 logger.warning(
-                    'Skipping unreadable theme template %s from theme %s: %s',
+                    'Skipping unusable theme template %s from theme %s: %s',
                     candidate.relative_path,
                     candidate.theme_id,
-                    exc,
+                    exc.detail,
                 )
-                last_read_error = exc
-                continue
+                last_error = exc
 
-            template_path = candidate.filesystem_path
-            try:
-                code = environment.compile(source, normalized, str(template_path))
-            except TemplateSyntaxError as exc:
-                logger.warning(
-                    'Skipping invalid theme template %s from theme %s: %s',
-                    candidate.relative_path,
-                    candidate.theme_id,
-                    exc,
-                )
-                last_syntax_error = exc
-                continue
-
-            def uptodate(path: Path = template_path) -> bool:
-                """Report whether the compiled template source is unchanged.
-
-                Args:
-                    path: Filesystem path for the compiled template.
-
-                Returns:
-                    bool: True when the template source is unchanged.
-
-                Raises:
-                    None.
-                """
-
-                return path.is_file()
-
-            return environment.template_class.from_code(
-                environment,
-                code,
-                {} if globals is None else globals,
-                uptodate,
-            )
-
-        if last_syntax_error is not None:
-            raise ThemeError(
-                detail=(
-                    f'Theme template {normalized} could not be compiled in the active or '
-                    'default theme'
-                ),
-                code='THEME_TEMPLATE_INVALID',
-            ) from last_syntax_error
-        if last_read_error is not None:
-            raise ThemeError(
-                detail=(
-                    f'Theme template {normalized} could not be read from the active or '
-                    'default theme'
-                ),
-                code='THEME_TEMPLATE_READ_FAILED',
-            ) from last_read_error
-        raise TemplateNotFound(normalized)
+        if last_error is not None:
+            raise last_error
+        raise TemplateNotFound(normalized.as_posix())
 
     def list_templates(self) -> list[str]:
         """List all discoverable templates across active/default theme directories.
@@ -493,7 +682,7 @@ class _ThemeTemplateLoader(BaseLoader):
 
         names: set[str] = set()
         try:
-            candidate_themes = self._runtime._candidate_themes()
+            candidate_themes = self._selected_themes()
         except ThemeError:
             return []
 
