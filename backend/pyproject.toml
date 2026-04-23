@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pragma-backend"
-version = "0.7.0"
+version = "0.7.1"
 description = "Pragma backend for the PostgreSQL-native CMS"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -31,6 +31,12 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pragma"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"../themes" = "themes"
+
+[tool.hatch.build.targets.wheel.shared-data]
+"themes" = "lib/themes"
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"

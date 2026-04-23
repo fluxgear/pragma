@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.1 — 2026-04-23
+
+### Fixed
+- Shipped the checked-in `themes/` tree in backend release artifacts via Hatch sdist and wheel packaging so installed environments resolve the default theme without manual `PRAGMA_THEME_ROOT` overrides
+- Fixed default-theme sparse-render behavior by removing duplicate fallback titles, routing shared fallback navigation through working home/archive/search URLs, and keeping 404/post recovery links functional off the home page
+- Preserved the server-rendered theme mode in `themes/default/static/js/theme.js`, aligned the shipped CSS/SCSS selector surface including `post-shell` and `meta-list`, restored the required copyright header in `backend/src/pragma/config.py`, and expanded backend theme verification coverage for packaging and sparse-render contracts
+
 ## v0.7.0 — 2026-04-22
 
 ### Added

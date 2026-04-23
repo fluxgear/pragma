@@ -1,5 +1,7 @@
 {% extends 'base.html' %}
 {% set post = post|default({}, true) %}
+{% set home_url = home_url|default('/', true) %}
+{% set archive_url = archive_url|default(home_url ~ '#archive', true) %}
 {% set body_html = post.body_html|default('', true) %}
 {% set related_posts = related_posts|default([], true) %}
 {% block content %}
@@ -7,9 +9,9 @@
     <div class="shell-container post-shell">
         <article class="article-main">
             <nav class="breadcrumbs" aria-label="Breadcrumb">
-                <a href="{{ home_url|default('/', true) }}">Home</a>
+                <a href="{{ home_url }}">Home</a>
                 <span>/</span>
-                <a href="{{ archive_url|default('#archive', true) }}">Archive</a>
+                <a href="{{ archive_url }}">Archive</a>
                 <span>/</span>
                 <span>{{ post.title|default('Post', true) }}</span>
             </nav>
@@ -27,7 +29,7 @@
             {% endif %}
             {% if body_html %}
             <div class="content-prose">
-                {# SECURITY: sanitized via nh3 #}
+                {# SECURITY: rendered with |safe after backend rich-text allowlist validation #}
                 {{ body_html|safe }}
             </div>
             {% else %}

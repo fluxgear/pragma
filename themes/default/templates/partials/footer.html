@@ -1,12 +1,15 @@
 {% set site = site|default({}, true) %}
 {% set site_name = site.name|default('Pragma', true) %}
 {% set theme_static = theme_static|default('/themes/default/static', true) %}
-{% set footer_links = footer_links|default(site.footer_links|default([{'label': 'Home', 'href': '/'}, {'label': 'Services', 'href': '#services'}, {'label': 'Archive', 'href': '#archive'}, {'label': 'Search', 'href': '#search'}], true), true) %}
+{% set home_url = site.home_url|default(home_url|default('/', true), true) %}
+{% set archive_url = archive_url|default(home_url ~ '#archive', true) %}
+{% set search_url = search_url|default(home_url ~ '#search', true) %}
+{% set footer_links = footer_links|default(site.footer_links|default([{'label': 'Home', 'href': home_url}, {'label': 'Services', 'href': home_url ~ '#services'}, {'label': 'Archive', 'href': archive_url}, {'label': 'Search', 'href': search_url}], true), true) %}
 {% set social_links = social_links|default(site.social_links|default([{'label': 'LinkedIn', 'href': '#'}, {'label': 'GitHub', 'href': '#'}, {'label': 'Email', 'href': 'mailto:hello@example.com'}], true), true) %}
 <footer class="site-footer">
     <div class="shell-container footer-grid">
         <div class="footer-brand">
-            <a class="brand brand--footer" href="{{ site.home_url|default('/', true) }}">
+            <a class="brand brand--footer" href="{{ home_url }}">
                 <img class="brand-mark" src="{{ theme_static }}/img/logo-mark.svg" alt="">
                 <span>
                     <strong>{{ site.brand|default(site_name, true) }}</strong>
@@ -18,7 +21,7 @@
             <p class="footer-heading">Navigate</p>
             <ul class="footer-list">
                 {% for item in footer_links %}
-                <li><a href="{{ item.href|default('#', true) }}">{{ item.label|default('Link', true) }}</a></li>
+                <li><a href="{{ item.href|default(home_url, true) }}">{{ item.label|default('Link', true) }}</a></li>
                 {% endfor %}
             </ul>
         </div>

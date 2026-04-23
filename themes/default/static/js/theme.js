@@ -3,7 +3,22 @@
   const toggle = document.getElementById('theme-toggle');
   const storageKey = 'pragma-theme-mode';
 
-  const systemMode = () => (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const resolveServerMode = () => {
+    const value = root.getAttribute('data-bs-theme');
+    return value === 'light' || value === 'dark' ? value : null;
+  };
+
+  const resolveSystemMode = () => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return 'light';
+    }
+
+    try {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch (error) {
+      return 'light';
+    }
+  };
 
   const applyMode = (mode) => {
     root.setAttribute('data-bs-theme', mode);
@@ -17,14 +32,14 @@
     }
   };
 
-  let mode = systemMode();
+  let mode = resolveServerMode() || resolveSystemMode();
   try {
     const stored = window.localStorage.getItem(storageKey);
     if (stored === 'light' || stored === 'dark') {
       mode = stored;
     }
   } catch (error) {
-    mode = systemMode();
+    // Ignore storage errors and keep resolved preference.
   }
 
   applyMode(mode);

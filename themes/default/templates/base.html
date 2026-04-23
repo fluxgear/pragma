@@ -2,8 +2,9 @@
 {% set site_name = site.name|default('Pragma', true) %}
 {% set theme_static = theme_static|default('/themes/default/static', true) %}
 {% set theme_mode = theme_mode|default('light', true) %}
-{% set page_title = page_title|default(site_name, true) %}
+{% set page_title = page_title|default('', true) %}
 {% set page_description = page_description|default('Commercial-grade publishing and presentation for modern teams.', true) %}
+{% set full_title = site_name if not page_title else page_title ~ ' · ' ~ site_name %}
 <!doctype html>
 <html lang="{{ site.lang|default('en', true) }}" data-bs-theme="{{ theme_mode }}">
 <head>
@@ -11,7 +12,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="{{ page_description }}">
     <meta name="color-scheme" content="light dark">
-    <title>{{ page_title }} · {{ site_name }}</title>
+    <title>{{ full_title }}</title>
     <link rel="stylesheet" href="{{ theme_static }}/css/main.css">
 </head>
 <body class="site-shell">

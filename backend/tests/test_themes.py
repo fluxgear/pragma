@@ -10,10 +10,10 @@ Returns:
 Raises:
     None.
 """
-
 from __future__ import annotations
 
 import json
+import tomllib
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -745,7 +745,7 @@ def test_checked_in_default_theme_covers_required_templates_and_assets(
     example_env_values: dict[str, str],
     apply_runtime_env: Callable[[dict[str, str]], None],
 ) -> None:
-    """Verify the checked-in default theme exposes required templates and assets.
+    """Verify the checked-in default theme exposes required templates, partials, and assets.
 
     Args:
         example_env_values: Parsed example environment values.
@@ -768,6 +768,7 @@ def test_checked_in_default_theme_covers_required_templates_and_assets(
     )
 
     runtime = build_theme_runtime(get_settings())
+    discovered_templates = set(runtime.environment.list_templates())
 
     assert {
         'home.html',
@@ -776,18 +777,36 @@ def test_checked_in_default_theme_covers_required_templates_and_assets(
         'archive.html',
         'search.html',
         '404.html',
-    }.issubset(set(runtime.environment.list_templates()))
+    }.issubset(discovered_templates)
 
-    resolved_asset = runtime.resolve_asset_path('css/main.css')
-    assert resolved_asset.theme_id == 'default'
-    assert resolved_asset.filesystem_path == theme_root / 'default' / 'static' / 'css' / 'main.css'
+    assert {
+        'partials/header.html',
+        'partials/footer.html',
+        'partials/hero.html',
+        'partials/services.html',
+        'partials/testimonials.html',
+        'partials/team.html',
+        'partials/contact.html',
+        'partials/blog-card.html',
+    }.issubset(discovered_templates)
+
+    for relative_path in (
+        'css/main.css',
+        'js/theme.js',
+        'img/logo-mark.svg',
+        'img/hero-grid.svg',
+    ):
+        resolved_asset = runtime.resolve_asset_path(relative_path)
+        assert resolved_asset.theme_id == 'default'
+        assert resolved_asset.filesystem_path == theme_root / 'default' / 'static' / relative_path
+        assert resolved_asset.filesystem_path.is_file()
 
 
 def test_checked_in_default_theme_templates_render_with_sparse_context(
     example_env_values: dict[str, str],
     apply_runtime_env: Callable[[dict[str, str]], None],
 ) -> None:
-    """Verify required checked-in templates render cleanly with sparse context.
+    """Verify sparse renders keep titles clean and fallback navigation actionable.
 
     Args:
         example_env_values: Parsed example environment values.
@@ -810,6 +829,17 @@ def test_checked_in_default_theme_templates_render_with_sparse_context(
     )
 
     runtime = build_theme_runtime(get_settings())
+    runtime = build_theme_runtime(get_settings())
+    render_context = {'theme_static': '/themes/default/static'}
+
+    rendered = {
+        'home.html': runtime.render_template('home.html', render_context),
+        'page.html': runtime.render_template('page.html', render_context),
+        'post.html': runtime.render_template('post.html', render_context),
+        'archive.html': runtime.render_template('archive.html', render_context),
+        'search.html': runtime.render_template('search.html', render_context),
+        '404.html': runtime.render_template('404.html', render_context),
+    }
 
     expected_fragments = {
         'home.html': 'A public-facing foundation with the finish of a commercial product.',
@@ -821,11 +851,77 @@ def test_checked_in_default_theme_templates_render_with_sparse_context(
     }
 
     for template_name, fragment in expected_fragments.items():
-        rendered = runtime.render_template(
-            template_name,
-            {'theme_static': '/themes/default/static'},
-        )
-        assert fragment in rendered
+        assert fragment in rendered[template_name]
+
+    assert '<title>Pragma</title>' in rendered['page.html']
+    assert 'Pragma · Pragma' not in rendered['page.html']
+    assert 'href="/#services"' in rendered['page.html']
+    assert 'href="/#contact"' in rendered['page.html']
+    assert 'href="/#search"' in rendered['page.html']
+    assert 'href="#services"' not in rendered['page.html']
+    assert 'href="#contact"' not in rendered['page.html']
+    assert 'href="#search"' not in rendered['page.html']
+
+    assert 'href="/#archive"' in rendered['post.html']
+    assert 'href="#archive"' not in rendered['post.html']
+
+    assert 'href="/#search"' in rendered['404.html']
+    assert 'href="/#services"' in rendered['404.html']
+    assert 'href="/#insights"' in rendered['404.html']
+    assert 'href="/#contact"' in rendered['404.html']
+    assert 'href="#search"' not in rendered['404.html']
+
+
+def test_checked_in_default_theme_packaging_config_includes_repo_theme_tree() -> None:
+    """Verify build configuration ships the checked-in theme tree to the installed runtime path.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    pyproject_path = Path(__file__).resolve().parents[1] / 'pyproject.toml'
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding='utf-8'))
+
+    wheel_shared_data = pyproject['tool']['hatch']['build']['targets']['wheel']['shared-data']
+    sdist_force_include = pyproject['tool']['hatch']['build']['targets']['sdist']['force-include']
+
+    assert wheel_shared_data['themes'] == 'lib/themes'
+    assert sdist_force_include['../themes'] == 'themes'
+
+
+def test_checked_in_default_theme_shipped_sources_match_runtime_contracts() -> None:
+    """Verify shipped source files encode the audited runtime contracts.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    theme_root = _repo_theme_root() / 'default'
+    page_source = (theme_root / 'templates' / 'page.html').read_text(encoding='utf-8')
+    post_source = (theme_root / 'templates' / 'post.html').read_text(encoding='utf-8')
+    css_source = (theme_root / 'static' / 'css' / 'main.css').read_text(encoding='utf-8')
+    js_source = (theme_root / 'static' / 'js' / 'theme.js').read_text(encoding='utf-8')
+
+    assert 'backend rich-text allowlist validation' in page_source
+    assert 'backend rich-text allowlist validation' in post_source
+    assert 'sanitized via nh3' not in page_source
+    assert 'sanitized via nh3' not in post_source
+    assert '.meta-list' in css_source
+    assert '.post-shell' in css_source
+    assert 'resolveServerMode' in js_source
+    assert 'window.matchMedia' in js_source
 
 
 def test_create_app_attaches_checked_in_default_theme_runtime(

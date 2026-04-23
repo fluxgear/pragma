@@ -1,4 +1,6 @@
 {% extends 'base.html' %}
+{% set home_url = home_url|default('/', true) %}
+{% set search_url = search_url|default(home_url ~ '#search', true) %}
 {% block content %}
 <section class="section not-found-section">
     <div class="shell-container not-found-card">
@@ -6,13 +8,13 @@
         <h1>The page you requested has gone missing.</h1>
         <p>We could not find the destination you asked for, but the default theme still provides a composed recovery path instead of a dead end.</p>
         <div class="button-row">
-            <a class="button button--primary" href="{{ home_url|default('/', true) }}">Return home</a>
-            <a class="button button--secondary" href="{{ search_url|default('#search', true) }}">Search the site</a>
+            <a class="button button--primary" href="{{ home_url }}">Return home</a>
+            <a class="button button--secondary" href="{{ search_url }}">Search the site</a>
         </div>
         <ul class="quick-links">
-            <li><a href="#services">Explore services</a></li>
-            <li><a href="#insights">Read insights</a></li>
-            <li><a href="#contact">Contact the team</a></li>
+            <li><a href="{{ home_url }}#services">Explore services</a></li>
+            <li><a href="{{ home_url }}#insights">Read insights</a></li>
+            <li><a href="{{ home_url }}#contact">Contact the team</a></li>
         </ul>
     </div>
 </section>
