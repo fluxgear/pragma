@@ -70,86 +70,140 @@ def _backfill_search_documents() -> None:
 
     op.execute(
         '''
-        WITH search_source AS (
+        WITH entry_source AS (
             SELECT
                 e.id AS entry_id,
                 e.content_type_id,
                 ct.slug AS content_type_slug,
                 e.slug AS entry_slug,
+                e.payload,
                 COALESCE(e.published_at, e.updated_at) AS published_at,
-                e.updated_at,
-                COALESCE(
-                    MAX(
+                e.updated_at
+            FROM pragma_content_entries AS e
+            JOIN pragma_content_types AS ct ON ct.id = e.content_type_id
+            WHERE e.status = 'published'
+        ),
+        field_values AS (
+            SELECT
+                es.entry_id,
+                f.name AS field_name,
+                f.position,
+                trim(
+                    regexp_replace(
                         CASE
-                            WHEN field_values.field_name = 'title'
-                             AND field_values.field_value <> ''
-                            THEN field_values.field_value
-                        END
-                    ),
-                    MAX(
-                        CASE
-                            WHEN field_values.field_name = 'name'
-                             AND field_values.field_value <> ''
-                            THEN field_values.field_value
-                        END
-                    ),
-                    MIN(field_values.field_value)
-                        FILTER (WHERE field_values.field_value <> ''),
-                    e.slug
-                ) AS title_text,
-                COALESCE(
-                    string_agg(
-                        field_values.field_value,
-                        ' '
-                        ORDER BY field_values.position
-                    ) FILTER (
-                        WHERE field_values.field_value <> ''
-                          AND field_values.field_name NOT IN ('title', 'name')
-                    ),
-                    MIN(field_values.field_value)
-                        FILTER (WHERE field_values.field_value <> ''),
-                    ''
-                ) AS body_text,
+                            WHEN f.field_type = 'rich_text'
+                            THEN regexp_replace(
+                                es.payload ->> f.name,
+                                '<[^>]+>',
+                                ' ',
+                                'g'
+                            )
+                            ELSE es.payload ->> f.name
+                        END,
+                        '[[:space:]]+',
+                        ' ',
+                        'g'
+                    )
+                ) AS field_value
+            FROM entry_source AS es
+            JOIN pragma_content_fields AS f ON f.content_type_id = es.content_type_id
+            WHERE f.field_type IN ('text', 'long_text', 'rich_text')
+              AND jsonb_typeof(es.payload -> f.name) = 'string'
+        ),
+        field_aggregates AS (
+            SELECT
+                es.entry_id,
+                es.content_type_id,
+                es.content_type_slug,
+                es.entry_slug,
+                es.payload,
+                es.published_at,
+                es.updated_at,
                 COALESCE(
                     array_agg(field_values.field_name ORDER BY field_values.position)
                         FILTER (WHERE field_values.field_value <> ''),
                     ARRAY[]::text[]
-                ) AS searchable_field_names
-            FROM pragma_content_entries AS e
-            JOIN pragma_content_types AS ct ON ct.id = e.content_type_id
-            LEFT JOIN LATERAL (
+                ) AS searchable_field_names,
+                array_agg(field_values.field_value ORDER BY field_values.position)
+                    FILTER (WHERE field_values.field_value <> '') AS searchable_values,
+                array_agg(field_values.field_value ORDER BY field_values.position)
+                    FILTER (
+                        WHERE field_values.field_value <> ''
+                          AND field_values.field_name NOT IN ('title', 'name')
+                    ) AS body_values
+            FROM entry_source AS es
+            LEFT JOIN field_values ON field_values.entry_id = es.entry_id
+            GROUP BY
+                es.entry_id,
+                es.content_type_id,
+                es.content_type_slug,
+                es.entry_slug,
+                es.payload,
+                es.published_at,
+                es.updated_at
+        ),
+        search_source AS (
+            SELECT
+                field_aggregates.entry_id,
+                field_aggregates.content_type_id,
+                field_aggregates.content_type_slug,
+                field_aggregates.entry_slug,
+                COALESCE(
+                    NULLIF(preferred.title_text, ''),
+                    NULLIF(preferred.name_text, ''),
+                    left(field_aggregates.searchable_values[1], 160),
+                    field_aggregates.entry_slug
+                ) AS title_text,
+                COALESCE(
+                    NULLIF(array_to_string(field_aggregates.body_values, ' '), ''),
+                    field_aggregates.searchable_values[1],
+                    ''
+                ) AS body_text,
+                field_aggregates.searchable_field_names,
+                field_aggregates.published_at,
+                field_aggregates.updated_at
+            FROM field_aggregates
+            CROSS JOIN LATERAL (
                 SELECT
-                    f.name AS field_name,
-                    f.position,
                     trim(
                         regexp_replace(
                             CASE
-                                WHEN f.field_type = 'rich_text'
+                                WHEN jsonb_typeof(field_aggregates.payload -> 'title') = 'string'
+                                 AND strpos(field_aggregates.payload ->> 'title', '<') > 0
                                 THEN regexp_replace(
-                                    COALESCE(e.payload ->> f.name, ''),
+                                    field_aggregates.payload ->> 'title',
                                     '<[^>]+>',
                                     ' ',
                                     'g'
                                 )
-                                ELSE COALESCE(e.payload ->> f.name, '')
+                                WHEN jsonb_typeof(field_aggregates.payload -> 'title') = 'string'
+                                THEN field_aggregates.payload ->> 'title'
                             END,
                             '[[:space:]]+',
                             ' ',
                             'g'
                         )
-                    ) AS field_value
-                FROM pragma_content_fields AS f
-                WHERE f.content_type_id = e.content_type_id
-                  AND f.field_type IN ('text', 'long_text', 'rich_text')
-            ) AS field_values ON TRUE
-            WHERE e.status = 'published'
-            GROUP BY
-                e.id,
-                e.content_type_id,
-                ct.slug,
-                e.slug,
-                e.published_at,
-                e.updated_at
+                    ) AS title_text,
+                    trim(
+                        regexp_replace(
+                            CASE
+                                WHEN jsonb_typeof(field_aggregates.payload -> 'name') = 'string'
+                                 AND strpos(field_aggregates.payload ->> 'name', '<') > 0
+                                THEN regexp_replace(
+                                    field_aggregates.payload ->> 'name',
+                                    '<[^>]+>',
+                                    ' ',
+                                    'g'
+                                )
+                                WHEN jsonb_typeof(field_aggregates.payload -> 'name') = 'string'
+                                THEN field_aggregates.payload ->> 'name'
+                            END,
+                            '[[:space:]]+',
+                            ' ',
+                            'g'
+                        )
+                    ) AS name_text
+            ) AS preferred
         )
         INSERT INTO pragma_search_documents (
             entry_id,

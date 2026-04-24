@@ -13,14 +13,24 @@ Raises:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import psycopg
+import pytest
+from alembic.config import Config
 from fastapi.testclient import TestClient
 
+from alembic import command
 from pragma.app import create_app
-from tests.helpers import build_database_dsn
+from pragma.config import clear_settings_cache
+from pragma.errors import SearchError
+from pragma.search.models import SearchMode, SearchQueryParams
+from pragma.search.service import search_public_entries
+from tests.helpers import BACKEND_ROOT, build_database_dsn
 
 
 def _bootstrap_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> None:
@@ -250,6 +260,25 @@ def _search_client(
         yield client
 
 
+def _run_migrations_to(revision: str) -> None:
+    '''Apply Alembic migrations to a specific revision for migration tests.
+
+    Args:
+        revision: Alembic revision target.
+
+    Returns:
+        None.
+
+    Raises:
+        CommandError: If Alembic cannot apply the migration chain.
+    '''
+
+    clear_settings_cache()
+    config = Config(str(BACKEND_ROOT / 'alembic.ini'))
+    config.set_main_option('script_location', str(BACKEND_ROOT / 'alembic'))
+    command.upgrade(config, revision)
+
+
 def test_search_migration_creates_schema(migrated_database: dict[str, str]) -> None:
     '''Verify the M8 migration creates the search schema and indexes.
 
@@ -294,6 +323,119 @@ def test_search_migration_creates_schema(migrated_database: dict[str, str]) -> N
     assert row[3] == 'ix_pragma_search_documents_search_tsv'
     assert row[4] == 'ix_pragma_search_documents_search_text_trgm'
     assert row[5] is True
+
+
+def test_search_migration_backfill_matches_runtime_field_order(
+    runtime_database: dict[str, str]
+) -> None:
+    '''Verify M8 upgrade backfill matches runtime field-order semantics.
+
+    Args:
+        runtime_database: Environment values for an unmigrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    '''
+
+    _run_migrations_to('20260421_0003')
+    database_dsn = build_database_dsn(
+        runtime_database, runtime_database['PRAGMA_DATABASE_NAME']
+    )
+    content_type_id = uuid4()
+    first_entry_id = uuid4()
+    preferred_entry_id = uuid4()
+    timestamp = datetime.now(UTC)
+    long_first_value = 'Z' * 180
+
+    with psycopg.connect(database_dsn) as connection, connection.transaction():
+        connection.execute(
+            '''
+            INSERT INTO pragma_content_types (
+                id, name, slug, description, created_at, updated_at
+            )
+            VALUES (%s, 'Search Backfill', 'search-backfill', NULL, %s, %s)
+            ''',
+            (content_type_id, timestamp, timestamp),
+        )
+        for position, name in enumerate(('summary', 'body', 'title', 'name')):
+            connection.execute(
+                '''
+                INSERT INTO pragma_content_fields (
+                    id, content_type_id, name, label, field_type, is_required,
+                    position, config, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, 'text', false, %s, '{}'::jsonb, %s, %s)
+                ''',
+                (
+                    uuid4(),
+                    content_type_id,
+                    name,
+                    name.title(),
+                    position,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        connection.execute(
+            '''
+            INSERT INTO pragma_content_entries (
+                id, content_type_id, slug, status, payload, published_at,
+                created_at, updated_at
+            )
+            VALUES (%s, %s, 'first-field', 'published', %s::jsonb, %s, %s, %s)
+            ''',
+            (
+                first_entry_id,
+                content_type_id,
+                json.dumps({'summary': long_first_value, 'body': 'Alpha Later'}),
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            '''
+            INSERT INTO pragma_content_entries (
+                id, content_type_id, slug, status, payload, published_at,
+                created_at, updated_at
+            )
+            VALUES (%s, %s, 'preferred-fields', 'published', %s::jsonb, %s, %s, %s)
+            ''',
+            (
+                preferred_entry_id,
+                content_type_id,
+                json.dumps({'title': 'Zulu Title', 'name': 'Alpha Name'}),
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+
+    _run_migrations_to('head')
+
+    with psycopg.connect(database_dsn) as connection:
+        rows = connection.execute(
+            '''
+            SELECT entry_id, title_text, body_text, searchable_field_names
+            FROM pragma_search_documents
+            WHERE entry_id IN (%s, %s)
+            ORDER BY entry_slug
+            ''',
+            (first_entry_id, preferred_entry_id),
+        ).fetchall()
+
+    documents = {str(row[0]): row for row in rows}
+    first_document = documents[str(first_entry_id)]
+    preferred_document = documents[str(preferred_entry_id)]
+    assert first_document[1] == long_first_value[:160]
+    assert first_document[2] == f'{long_first_value} Alpha Later'
+    assert first_document[3] == ['summary', 'body']
+    assert preferred_document[1] == 'Zulu Title'
+    assert preferred_document[2] == 'Zulu Title'
+    assert preferred_document[3] == ['title', 'name']
 
 
 def test_search_returns_only_published_entries(
@@ -499,6 +641,64 @@ def test_search_vector_mode_works_when_available(
     assert payload['mode_applied'] == 'vector'
     assert payload['applied_strategies'] == ['vector']
     assert [item['id'] for item in payload['items']] == [alpha['id'], beta['id']]
+
+
+def test_search_vector_mode_ignores_mismatched_embedding_dimensions(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    '''Verify vector mode skips stored embeddings with incompatible dimensions.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    '''
+
+    with _search_client(
+        apply_runtime_env, migrated_database, search_enable_semantic=True
+    ) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        content_type = _create_content_type(client, headers)
+        compatible = _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Vector Compatible',
+            body='<p>Compatible vector body</p>',
+        )
+        mismatched = _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Vector Mismatched',
+            body='<p>Mismatched vector body</p>',
+        )
+        _seed_search_embedding(migrated_database, compatible['id'], [1.0, 0.0, 0.0])
+        _seed_search_embedding(migrated_database, mismatched['id'], [1.0, 0.0])
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={
+                'query': 'vector',
+                'mode': 'vector',
+                'query_embedding': [1.0, 0.0, 0.0],
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['mode_applied'] == 'vector'
+    assert payload['applied_strategies'] == ['vector']
+    assert payload['total'] == 1
+    assert [item['id'] for item in payload['items']] == [compatible['id']]
 
 
 def test_search_hybrid_mode_merges_available_strategies(
@@ -864,3 +1064,109 @@ def test_search_openapi_documents_structured_error_responses(
     assert set(error_schema['properties']) == {'detail', 'code'}
     assert '422' in search_responses
     assert '503' in search_responses
+
+
+def test_search_service_rejects_blank_queries() -> None:
+    '''Verify service-level blank-query protection returns a search-domain error.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    '''
+
+    params = SearchQueryParams.model_construct(
+        query='   ',
+        limit=20,
+        offset=0,
+        content_type_slug=None,
+        mode=SearchMode.AUTO,
+        query_embedding=None,
+    )
+
+    with pytest.raises(SearchError) as exc_info:
+        search_public_entries(None, None, params)
+
+    assert exc_info.value.code == 'SEARCH_QUERY_INVALID'
+    assert exc_info.value.detail == 'Search query must not be blank'
+
+
+def test_search_route_returns_validation_error_for_invalid_params(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+) -> None:
+    '''Verify invalid public-search parameters return structured validation errors.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    '''
+
+    with _search_client(apply_runtime_env, migrated_database) as client:
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'valid', 'limit': 0},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': 'Request validation failed',
+        'code': 'VALIDATION_ERROR',
+    }
+
+
+def test_search_route_returns_structured_error_for_query_failures(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    '''Verify backend search failures return the documented structured 503 error.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    '''
+
+    with _search_client(apply_runtime_env, migrated_database) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        content_type = _create_content_type(client, headers)
+        _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Failure Branch',
+            body='<p>Failure branch body</p>',
+        )
+        database_dsn = build_database_dsn(
+            migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
+        )
+        with psycopg.connect(database_dsn) as connection, connection.transaction():
+            connection.execute('DROP TABLE pragma_search_documents')
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'failure branch'},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        'detail': 'Unable to execute search query',
+        'code': 'SEARCH_QUERY_FAILED',
+    }

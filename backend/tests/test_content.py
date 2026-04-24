@@ -157,6 +157,46 @@ def _overwrite_entry_payload(
         )
 
 
+def _drop_search_documents_table(migrated_database: dict[str, str]) -> None:
+    """Remove the derived search-document table from an isolated test database.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot drop the table.
+    """
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn) as connection, connection.transaction():
+        connection.execute("DROP TABLE pragma_search_documents")
+
+
+def _clear_entry_published_at(migrated_database: dict[str, str], entry_id: str) -> None:
+    """Clear a published entry's timestamp to force search-document build failure.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        entry_id: Stored content-entry identifier.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot update the stored entry.
+    """
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn) as connection, connection.transaction():
+        connection.execute(
+            "UPDATE pragma_content_entries SET published_at = NULL WHERE id = %s",
+            (entry_id,),
+        )
+
+
 def test_migrations_create_content_schema(migrated_database: dict[str, str]) -> None:
     """Verify the Alembic chain creates the expected M2 tables and indexes.
 
@@ -427,6 +467,7 @@ def test_entry_crud_flow_and_publish_state(
         f"/api/v1/content/entries/{entry['id']}",
         headers=headers,
     )
+
     assert get_response.status_code == 200
     assert get_response.json()['content_type_slug'] == 'blog-posts'
 
@@ -471,6 +512,99 @@ def test_entry_crud_flow_and_publish_state(
     final_list_response = client.get('/api/v1/content/entries', headers=headers)
     assert final_list_response.status_code == 200
     assert final_list_response.json()['total'] == 0
+
+
+def test_entry_create_survives_search_storage_failure(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify derived-search storage failures do not block entry creation.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    _drop_search_documents_table(migrated_database)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'published',
+            'payload': {
+                'title': 'Search Failure Entry',
+                'body': '<p>Search table is unavailable.</p>',
+                'views': 1,
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()['slug'] == 'search-failure-entry'
+    list_response = client.get('/api/v1/content/entries', headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()['total'] == 1
+
+
+def test_content_type_update_suppresses_search_domain_errors(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify content updates do not leak SEARCH errors from indexing hooks.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'published',
+            'payload': {
+                'title': 'Broken Search Timestamp',
+                'body': '<p>Search rebuild will see an invalid published row.</p>',
+                'views': 1,
+            },
+        },
+    )
+    assert create_response.status_code == 201
+    _clear_entry_published_at(migrated_database, create_response.json()['id'])
+
+    payload = _content_type_payload()
+    payload['description'] = 'Updated despite search indexing failure'
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json()['description'] == 'Updated despite search indexing failure'
 
 
 def test_entry_validation_rejects_invalid_payload(

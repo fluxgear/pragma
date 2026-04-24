@@ -330,16 +330,18 @@ def search_documents(
             """
             vector_ranked AS (
                 SELECT
-                    entry_id,
+                    d.entry_id,
                     ROW_NUMBER() OVER (
                         ORDER BY
-                            embedding <=> %s::vector ASC,
-                            published_at DESC,
-                            entry_id DESC
+                            d.embedding <=> q.query_embedding ASC,
+                            d.published_at DESC,
+                            d.entry_id DESC
                     ) AS rank_position
-                FROM pragma_search_documents
-                WHERE embedding IS NOT NULL
-                  AND (%s::text IS NULL OR content_type_slug = %s::text)
+                FROM pragma_search_documents AS d
+                CROSS JOIN (SELECT %s::vector AS query_embedding) AS q
+                WHERE d.embedding IS NOT NULL
+                  AND vector_dims(d.embedding) = vector_dims(q.query_embedding)
+                  AND (%s::text IS NULL OR d.content_type_slug = %s::text)
             )
             """
         )

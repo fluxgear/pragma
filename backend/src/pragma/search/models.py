@@ -24,8 +24,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 type SearchStrategy = Literal['keyword', 'fuzzy', 'vector']
 
-type SearchStrategy = Literal['keyword', 'fuzzy', 'vector']
-
 
 class SearchMode(StrEnum):
     """Supported search execution modes.

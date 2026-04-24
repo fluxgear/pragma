@@ -14,9 +14,10 @@ Raises:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from html.parser import HTMLParser
 from http import HTTPStatus
@@ -49,7 +50,7 @@ from pragma.content.models import (
     TextFieldDefinition,
     parse_field_definition,
 )
-from pragma.errors import ContentError, StorageError
+from pragma.errors import ContentError, SearchError, StorageError
 from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.content import (
     count_content_types,
@@ -906,6 +907,48 @@ def _build_content_type_response(
     )
 
 
+def _run_search_indexing_hook(
+    connection: Any,
+    *,
+    operation: str,
+    context: Mapping[str, object],
+    hook: Callable[[], None],
+) -> None:
+    """Run a derived search-indexing hook without blocking content CRUD.
+
+    Args:
+        connection: Open PostgreSQL connection with an active content transaction.
+        operation: Stable operation name for diagnostic logs.
+        context: Identifiers useful for diagnosing indexing failures.
+        hook: Search synchronization callable to execute in a savepoint.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    try:
+        with connection.transaction():
+            hook()
+    except SearchError as exc:
+        logging.getLogger(__name__).warning(
+            "Content search-indexing hook failed",
+            extra={
+                "operation": operation,
+                "search_code": exc.code,
+                **context,
+            },
+        )
+    except PsycopgError:
+        logging.getLogger(__name__).warning(
+            "Content search-indexing storage hook failed",
+            extra={"operation": operation, **context},
+            exc_info=True,
+        )
+
+
 def create_content_type_record(
     storage: DatabasePool,
     payload: ContentTypeCreateRequest,
@@ -1158,10 +1201,15 @@ def update_content_type_record(
                 timestamp,
             )
             field_rows = get_field_definitions(connection, content_type_id)
-            rebuild_search_documents_for_content_type(
+            _run_search_indexing_hook(
                 connection,
-                content_type_id=content_type_id,
-                field_rows=field_rows,
+                operation="content_type_rebuild",
+                context={"content_type_id": str(content_type_id)},
+                hook=lambda: rebuild_search_documents_for_content_type(
+                    connection,
+                    content_type_id=content_type_id,
+                    field_rows=field_rows,
+                ),
             )
     except ContentError:
         raise
@@ -1282,11 +1330,19 @@ def create_entry_record(
                 user_id=user_id,
                 created_at=timestamp,
             )
-            sync_search_document(
+            _run_search_indexing_hook(
                 connection,
-                entry_row=entry_row,
-                content_type_slug=cast(str, content_type_row["slug"]),
-                field_definitions=field_definitions,
+                operation="entry_create_sync",
+                context={
+                    "entry_id": str(entry_row["id"]),
+                    "content_type_id": str(payload.content_type_id),
+                },
+                hook=lambda: sync_search_document(
+                    connection,
+                    entry_row=entry_row,
+                    content_type_slug=cast(str, content_type_row["slug"]),
+                    field_definitions=field_definitions,
+                ),
             )
     except ContentError:
         raise
@@ -1482,11 +1538,19 @@ def update_entry_record(
                 user_id=user_id,
                 updated_at=timestamp,
             )
-            sync_search_document(
+            _run_search_indexing_hook(
                 connection,
-                entry_row=entry_row,
-                content_type_slug=cast(str, existing_entry["content_type_slug"]),
-                field_definitions=field_definitions,
+                operation="entry_update_sync",
+                context={
+                    "entry_id": str(entry_id),
+                    "content_type_id": str(existing_entry["content_type_id"]),
+                },
+                hook=lambda: sync_search_document(
+                    connection,
+                    entry_row=entry_row,
+                    content_type_slug=cast(str, existing_entry["content_type_slug"]),
+                    field_definitions=field_definitions,
+                ),
             )
     except ContentError:
         raise
@@ -1533,7 +1597,15 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
                     code="CONTENT_ENTRY_NOT_FOUND",
                     status_code=HTTPStatus.NOT_FOUND,
                 )
-            delete_search_document(connection, entry_id)
+            _run_search_indexing_hook(
+                connection,
+                operation="entry_delete_sync",
+                context={
+                    "entry_id": str(entry_id),
+                    "content_type_id": str(existing_entry["content_type_id"]),
+                },
+                hook=lambda: delete_search_document(connection, entry_id),
+            )
             delete_entry(connection, entry_id)
     except ContentError:
         raise

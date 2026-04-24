@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.1 — 2026-04-24
+
+### Fixed
+- Aligned the M8 search migration backfill with runtime search-document derivation for ordered title/body fields and searchable field names
+- Isolated derived search indexing and rebuild failures from primary content CRUD writes while preserving structured search error handling at search boundaries
+- Hardened vector search against mixed-dimension embeddings, removed duplicate search strategy aliasing, and added focused search/content regression coverage
+
 ## v0.8.0 — 2026-04-23
 
 ### Added
