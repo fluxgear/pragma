@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pragma-backend"
-version = "0.7.1"
+version = "0.8.0"
 description = "Pragma backend for the PostgreSQL-native CMS"
 readme = "README.md"
 requires-python = ">=3.12"

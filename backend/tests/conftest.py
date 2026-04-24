@@ -48,12 +48,18 @@ def _apply_runtime_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str]) 
     clear_settings_cache()
 
 
-def _create_database(values: dict[str, str], database_name: str) -> None:
+def _create_database(
+    values: dict[str, str],
+    database_name: str,
+    *,
+    extensions: tuple[str, ...] = ('pg_trgm', 'vector'),
+) -> None:
     """Create an isolated PostgreSQL database for a test scope.
 
     Args:
         values: Environment values containing database connectivity settings.
         database_name: Database name to create.
+        extensions: PostgreSQL extensions to install after database creation.
 
     Returns:
         None.
@@ -62,16 +68,24 @@ def _create_database(values: dict[str, str], database_name: str) -> None:
         psycopg.Error: If PostgreSQL cannot create the database or provision required extensions.
     """
 
-    admin_dsn = build_database_dsn(values, values["PRAGMA_DATABASE_ADMIN_DATABASE"])
+    admin_dsn = build_database_dsn(values, values['PRAGMA_DATABASE_ADMIN_DATABASE'])
     with psycopg.connect(admin_dsn, autocommit=True) as connection:
         connection.execute(
-            sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name))
+            sql.SQL('CREATE DATABASE {}').format(sql.Identifier(database_name))
         )
 
+    requested_extensions = set(extensions)
     database_dsn = build_database_dsn(values, database_name)
     with psycopg.connect(database_dsn, autocommit=True) as connection:
-        connection.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-        connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        if 'pg_trgm' in requested_extensions:
+            connection.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
+        else:
+            connection.execute('DROP EXTENSION IF EXISTS pg_trgm CASCADE')
+
+        if 'vector' in requested_extensions:
+            connection.execute('CREATE EXTENSION IF NOT EXISTS vector')
+        else:
+            connection.execute('DROP EXTENSION IF EXISTS vector CASCADE')
 
 
 def _drop_database(values: dict[str, str], database_name: str) -> None:
@@ -161,6 +175,31 @@ def apply_runtime_env(
     return _apply
 
 
+def _build_isolated_runtime_env(
+    example_env_values: dict[str, str], worker_id: str
+) -> tuple[str, dict[str, str]]:
+    """Build environment values for an isolated test database.
+
+    Args:
+        example_env_values: Parsed environment example values.
+        worker_id: Pytest-xdist worker identifier.
+
+    Returns:
+        tuple[str, dict[str, str]]: Database name and runtime environment values.
+
+    Raises:
+        None.
+    """
+
+    database_name = f'pragma_test_{worker_id}_{uuid4().hex[:8]}'
+    env_values = build_runtime_env(example_env_values, database_name)
+    env_values.update({
+        key: os.environ.get(key, value)
+        for key, value in env_values.items()
+    })
+    return database_name, env_values
+
+
 @pytest.fixture()
 def runtime_database(
     monkeypatch: pytest.MonkeyPatch,
@@ -181,12 +220,9 @@ def runtime_database(
         psycopg.Error: If PostgreSQL database creation or cleanup fails.
     """
 
-    database_name = f"pragma_test_{worker_id}_{uuid4().hex[:8]}"
-    env_values = build_runtime_env(example_env_values, database_name)
-    env_values.update({
-        key: os.environ.get(key, value)
-        for key, value in env_values.items()
-    })
+    database_name, env_values = _build_isolated_runtime_env(
+        example_env_values, worker_id
+    )
 
     _create_database(env_values, database_name)
     _apply_runtime_env(monkeypatch, env_values)
@@ -195,6 +231,169 @@ def runtime_database(
     finally:
         clear_settings_cache()
         _drop_database(env_values, database_name)
+
+
+@pytest.fixture()
+def runtime_database_without_pg_trgm(
+    monkeypatch: pytest.MonkeyPatch,
+    example_env_values: dict[str, str],
+    worker_id: str,
+) -> Iterator[dict[str, str]]:
+    """Create and configure an isolated database without ``pg_trgm``.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+        example_env_values: Parsed environment example values.
+        worker_id: Pytest-xdist worker identifier.
+
+    Returns:
+        Iterator[dict[str, str]]: Environment values bound to the isolated database.
+
+    Raises:
+        psycopg.Error: If PostgreSQL database creation or cleanup fails.
+    """
+
+    database_name, env_values = _build_isolated_runtime_env(
+        example_env_values, worker_id
+    )
+
+    _create_database(env_values, database_name, extensions=('vector',))
+    _apply_runtime_env(monkeypatch, env_values)
+    try:
+        yield env_values
+    finally:
+        clear_settings_cache()
+        _drop_database(env_values, database_name)
+
+
+@pytest.fixture()
+def runtime_database_without_pgvector(
+    monkeypatch: pytest.MonkeyPatch,
+    example_env_values: dict[str, str],
+    worker_id: str,
+) -> Iterator[dict[str, str]]:
+    """Create and configure an isolated database without ``pgvector``.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+        example_env_values: Parsed environment example values.
+        worker_id: Pytest-xdist worker identifier.
+
+    Returns:
+        Iterator[dict[str, str]]: Environment values bound to the isolated database.
+
+    Raises:
+        psycopg.Error: If PostgreSQL database creation or cleanup fails.
+    """
+
+    database_name, env_values = _build_isolated_runtime_env(
+        example_env_values, worker_id
+    )
+
+    _create_database(env_values, database_name, extensions=('pg_trgm',))
+    _apply_runtime_env(monkeypatch, env_values)
+    try:
+        yield env_values
+    finally:
+        clear_settings_cache()
+        _drop_database(env_values, database_name)
+
+
+@pytest.fixture()
+def runtime_database_without_search_extensions(
+    monkeypatch: pytest.MonkeyPatch,
+    example_env_values: dict[str, str],
+    worker_id: str,
+) -> Iterator[dict[str, str]]:
+    """Create and configure an isolated database without search extensions.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+        example_env_values: Parsed environment example values.
+        worker_id: Pytest-xdist worker identifier.
+
+    Returns:
+        Iterator[dict[str, str]]: Environment values bound to the isolated database.
+
+    Raises:
+        psycopg.Error: If PostgreSQL database creation or cleanup fails.
+    """
+
+    database_name, env_values = _build_isolated_runtime_env(
+        example_env_values, worker_id
+    )
+
+    _create_database(env_values, database_name, extensions=())
+    _apply_runtime_env(monkeypatch, env_values)
+    try:
+        yield env_values
+    finally:
+        clear_settings_cache()
+        _drop_database(env_values, database_name)
+
+
+@pytest.fixture()
+def migrated_database_without_pg_trgm(
+    runtime_database_without_pg_trgm: dict[str, str],
+) -> dict[str, str]:
+    """Apply Alembic migrations to a test database without ``pg_trgm``.
+
+    Args:
+        runtime_database_without_pg_trgm: Runtime environment values for the isolated test database.
+
+    Returns:
+        dict[str, str]: Environment values for the migrated test database.
+
+    Raises:
+        CommandError: If Alembic cannot apply the migration chain.
+    """
+
+    _run_migrations()
+    return runtime_database_without_pg_trgm
+
+
+@pytest.fixture()
+def migrated_database_without_pgvector(
+    runtime_database_without_pgvector: dict[str, str],
+) -> dict[str, str]:
+    """Apply Alembic migrations to a test database without ``pgvector``.
+
+    Args:
+        runtime_database_without_pgvector: Runtime environment values for the
+            isolated test database.
+            isolated test database.
+
+    Returns:
+        dict[str, str]: Environment values for the migrated test database.
+
+    Raises:
+        CommandError: If Alembic cannot apply the migration chain.
+    """
+
+    _run_migrations()
+    return runtime_database_without_pgvector
+
+
+@pytest.fixture()
+def migrated_database_without_search_extensions(
+    runtime_database_without_search_extensions: dict[str, str],
+) -> dict[str, str]:
+    """Apply Alembic migrations to a database without search extensions.
+
+        runtime_database_without_search_extensions: Runtime environment values
+            for the isolated test database.
+        runtime_database_without_search_extensions: Runtime environment values
+            for the isolated test database.
+
+    Returns:
+        dict[str, str]: Environment values for the migrated test database.
+
+    Raises:
+        CommandError: If Alembic cannot apply the migration chain.
+    """
+
+    _run_migrations()
+    return runtime_database_without_search_extensions
 
 
 @pytest.fixture()

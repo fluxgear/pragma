@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     theme_active_id: str = Field(default='default', min_length=1)
     theme_default_id: str = Field(default='default', min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
+    search_enable_semantic: bool = False
 
     @staticmethod
     def _normalize_theme_identifier(value: str) -> str:

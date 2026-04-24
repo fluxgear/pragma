@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.8.0 — 2026-04-23
+
+### Added
+- Added the M8 PostgreSQL-native search foundation with a public `/api/v1/search/entries` endpoint covering keyword, fuzzy, vector, and hybrid search modes with stable paginated result contracts
+- Added a derived `pragma_search_documents` search index table, extension-aware `pg_trgm`/`pgvector` support, hybrid reciprocal-rank fusion, and transactional search-document sync/rebuild hooks on content writes
+- Added focused backend search coverage for migration contracts, ranking modes, degraded extension behavior, OpenAPI error metadata, and content/search synchronization
+
 ## v0.7.1 — 2026-04-23
 
 ### Fixed

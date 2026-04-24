@@ -1082,6 +1082,8 @@ def update_content_type_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.search.service import rebuild_search_documents_for_content_type
+
     timestamp = utc_now()
     user_id = _require_user_id(current_user)
     field_definitions = list(payload.field_definitions)
@@ -1156,6 +1158,11 @@ def update_content_type_record(
                 timestamp,
             )
             field_rows = get_field_definitions(connection, content_type_id)
+            rebuild_search_documents_for_content_type(
+                connection,
+                content_type_id=content_type_id,
+                field_rows=field_rows,
+            )
     except ContentError:
         raise
     except IntegrityError as exc:
@@ -1235,6 +1242,8 @@ def create_entry_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.search.service import sync_search_document
+
     timestamp = utc_now()
     user_id = _require_user_id(current_user)
 
@@ -1272,6 +1281,12 @@ def create_entry_record(
                 published_at=published_at,
                 user_id=user_id,
                 created_at=timestamp,
+            )
+            sync_search_document(
+                connection,
+                entry_row=entry_row,
+                content_type_slug=cast(str, content_type_row["slug"]),
+                field_definitions=field_definitions,
             )
     except ContentError:
         raise
@@ -1411,6 +1426,8 @@ def update_entry_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.search.service import sync_search_document
+
     timestamp = utc_now()
     user_id = _require_user_id(current_user)
 
@@ -1465,6 +1482,12 @@ def update_entry_record(
                 user_id=user_id,
                 updated_at=timestamp,
             )
+            sync_search_document(
+                connection,
+                entry_row=entry_row,
+                content_type_slug=cast(str, existing_entry["content_type_slug"]),
+                field_definitions=field_definitions,
+            )
     except ContentError:
         raise
     except IntegrityError as exc:
@@ -1499,6 +1522,8 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.search.service import delete_search_document
+
     try:
         with storage.connection() as connection, connection.transaction():
             existing_entry = get_entry_by_id(connection, entry_id)
@@ -1508,6 +1533,7 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
                     code="CONTENT_ENTRY_NOT_FOUND",
                     status_code=HTTPStatus.NOT_FOUND,
                 )
+            delete_search_document(connection, entry_id)
             delete_entry(connection, entry_id)
     except ContentError:
         raise
