@@ -94,3 +94,27 @@ def get_current_user(
     if user is None or not bool(user["is_active"]):
         raise AuthError(detail="Authenticated user is invalid", code="AUTH_USER_INVALID")
     return user
+
+
+def get_current_superuser(
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Require superuser privileges for protected administrative routes.
+
+    Args:
+        current_user: Authenticated user context.
+
+    Returns:
+        dict[str, Any]: Authenticated superuser context.
+
+    Raises:
+        AuthError: If the authenticated user lacks superuser privileges.
+    """
+
+    if not bool(current_user.get('is_superuser')):
+        raise AuthError(
+            detail='Superuser privileges are required',
+            code='AUTH_SUPERUSER_REQUIRED',
+            status_code=403,
+        )
+    return current_user

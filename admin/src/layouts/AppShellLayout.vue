@@ -46,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import Button from 'primevue/button'
 import Panel from 'primevue/panel'
@@ -60,12 +61,23 @@ const { user } = storeToRefs(authStore)
 const route = useRoute()
 const router = useRouter()
 
-const navigationItems = [
+const navigationItems = computed(() => [
   { label: 'Dashboard', icon: 'pi pi-home', routeName: 'dashboard', disabled: false },
   { label: 'Content', icon: 'pi pi-file-edit', routeName: 'content', disabled: false },
   { label: 'Media', icon: 'pi pi-images', routeName: 'media', disabled: false },
-  { label: 'Themes (M6)', icon: 'pi pi-palette', routeName: 'dashboard', disabled: true },
-]
+  {
+    label: 'AI settings',
+    icon: 'pi pi-sparkles',
+    routeName: 'ai-settings',
+    disabled: user.value?.is_superuser !== true,
+  },
+  {
+    label: 'Themes (M6)',
+    icon: 'pi pi-palette',
+    routeName: 'dashboard',
+    disabled: true,
+  },
+])
 
 function navigate(routeName: string): void {
   if (route.name !== routeName) {

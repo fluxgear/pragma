@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.0 — 2026-04-26
+
+### Added
+- Added optional AI/provider integration under `backend/src/pragma/ai/` with persisted singleton provider settings, authenticated admin/API setup surfaces, provider connectivity testing, and explicit search-embedding rebuild flows
+- Added query-time semantic embedding generation for `/api/v1/search/entries` when semantic search is enabled and provider, pgvector, and embedding-column prerequisites are available
+- Added an admin AI settings workspace under `/app/ai` with PrimeVue configuration, provider testing, rebuild controls, route/nav integration, and focused frontend coverage
+
+### Fixed
+- Preserved core CMS isolation by keeping external provider calls out of content CRUD/search-document sync hooks, clearing stale stored embeddings on AI settings changes, and falling back cleanly to keyword/fuzzy search when AI configuration or provider requests fail
+- Hardened provider failure handling so low-level request timeouts are translated into structured search-domain errors instead of surfacing as unexpected exceptions
+
 ## v0.8.1 — 2026-04-24
 
 ### Fixed

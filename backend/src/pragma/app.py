@@ -104,6 +104,7 @@ def create_app() -> FastAPI:
         ValidationError: If required configuration is missing or invalid.
     """
 
+    from pragma.ai.router import router as ai_router
     from pragma.search.router import router as search_router
 
     settings = get_settings()
@@ -121,4 +122,5 @@ def create_app() -> FastAPI:
     app.include_router(content_router, prefix='/api/v1')
     app.include_router(media_router, prefix='/api/v1')
     app.include_router(search_router, prefix='/api/v1')
+    app.include_router(ai_router, prefix='/api/v1')
     return app

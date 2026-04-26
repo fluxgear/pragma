@@ -197,3 +197,49 @@ export interface MediaAssetListResponse {
   limit: number
   offset: number
 }
+
+export type AIProviderKind = 'voyage' | 'openai_compatible'
+
+export interface AIProviderSettingsResponse {
+  enabled: boolean
+  provider: AIProviderKind | null
+  base_url: string | null
+  embedding_model: string | null
+  request_timeout_seconds: number | null
+  api_key_configured: boolean
+  updated_at: string | null
+}
+
+export interface AIProviderSettingsUpdateRequest {
+  enabled: boolean
+  provider: AIProviderKind
+  base_url: string
+  embedding_model: string
+  request_timeout_seconds: number
+  api_key?: string | null
+  retain_existing_api_key?: boolean
+}
+
+export interface AIProviderTestRequest {
+  query_text?: string
+}
+
+export interface AIProviderTestResponse {
+  provider: AIProviderKind
+  embedding_model: string
+  embedding_dimensions: number
+}
+
+export interface AISearchEmbeddingRebuildRequest {
+  batch_size: number
+  max_documents: number
+  content_type_slug?: string | null
+  force: boolean
+}
+
+export interface AISearchEmbeddingRebuildResponse {
+  attempted: number
+  embedded: number
+  failed: number
+  failed_entry_ids: string[]
+}

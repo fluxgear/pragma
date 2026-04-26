@@ -437,14 +437,45 @@ def search_public_entries(
         if params.content_type_slug is not None
         else None
     )
+    query_embedding_values = params.query_embedding
+    vector_mode_requested = params.mode in {
+        SearchMode.AUTO,
+        SearchMode.HYBRID,
+        SearchMode.VECTOR,
+    }
 
     try:
         with storage.connection() as connection:
             capabilities = get_extension_capabilities(connection)
-            vector_ready = (
-                params.query_embedding is not None
+            embedding_column_exists = search_embedding_column_exists(connection)
+
+            if (
+                query_embedding_values is None
+                and settings.search_enable_semantic
                 and capabilities['pgvector']['installed']
-                and search_embedding_column_exists(connection)
+                and embedding_column_exists
+                and vector_mode_requested
+            ):
+                from pragma.ai.service import generate_query_embedding_for_search
+                from pragma.errors import ConfigError
+
+                try:
+                    query_embedding_values = generate_query_embedding_for_search(
+                        connection,
+                        query=query,
+                    )
+                except (ConfigError, SearchError) as exc:
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        'Semantic query embedding generation failed',
+                        extra={'search_code': exc.code},
+                    )
+
+            vector_ready = (
+                query_embedding_values is not None
+                and capabilities['pgvector']['installed']
+                and embedding_column_exists
             )
             strategies, mode_applied = _resolve_active_strategies(
                 params=params,
@@ -461,8 +492,8 @@ def search_public_entries(
                 content_type_slug=normalized_content_type_slug,
                 strategies=strategies,
                 query_embedding=(
-                    _vector_literal(params.query_embedding)
-                    if 'vector' in strategies and params.query_embedding is not None
+                    _vector_literal(query_embedding_values)
+                    if 'vector' in strategies and query_embedding_values is not None
                     else None
                 ),
             )

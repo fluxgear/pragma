@@ -24,6 +24,106 @@ _DEFAULT_TRIGRAM_THRESHOLD = 0.2
 _RRF_K = 60
 
 
+def update_search_document_embedding(
+    connection: Connection,
+    *,
+    entry_id: UUID,
+    embedding_literal: str,
+    embedding_provider: str,
+    embedding_model: str,
+    embedded_at: datetime,
+) -> None:
+    """Persist embedding values and metadata for one search document.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        entry_id: Search-document entry identifier.
+        embedding_literal: pgvector literal to persist.
+        embedding_provider: Provider key used to generate the embedding.
+        embedding_model: Provider model used to generate the embedding.
+        embedded_at: Timestamp associated with embedding generation.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    connection.execute(
+        """
+        UPDATE pragma_search_documents
+        SET
+            embedding = %s::vector,
+            embedding_provider = %s,
+            embedding_model = %s,
+            embedding_updated_at = %s
+        WHERE entry_id = %s
+        """,
+        (embedding_literal, embedding_provider, embedding_model, embedded_at, entry_id),
+    )
+
+
+def list_search_documents_for_embedding_rebuild(
+    connection: Connection,
+    *,
+    provider: str,
+    embedding_model: str,
+    content_type_slug: str | None,
+    limit: int,
+    offset: int = 0,
+    stale_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Return search documents eligible for embedding generation.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        provider: Provider key expected in embedding metadata.
+        embedding_model: Model key expected in embedding metadata.
+        content_type_slug: Optional content-type slug filter.
+        limit: Maximum number of rows to return.
+        offset: Number of rows to skip before returning rows.
+        stale_only: Whether to restrict rows to stale or missing embeddings.
+
+    Returns:
+        list[dict[str, Any]]: Search-document rows eligible for embedding generation.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    sql = """
+        SELECT
+            entry_id,
+            title_text,
+            body_text,
+            updated_at
+        FROM pragma_search_documents
+        WHERE (%s::text IS NULL OR content_type_slug = %s::text)
+    """
+    params: list[Any] = [content_type_slug, content_type_slug]
+
+    if stale_only:
+        sql += """
+            AND (
+                embedding IS NULL
+                OR embedding_updated_at IS NULL
+                OR embedding_updated_at < updated_at
+                OR embedding_provider IS DISTINCT FROM %s
+                OR embedding_model IS DISTINCT FROM %s
+            )
+        """
+        params.extend([provider, embedding_model])
+
+    sql += """
+        ORDER BY updated_at DESC, entry_id DESC
+        LIMIT %s
+        OFFSET %s
+    """
+    params.extend([limit, offset])
+    return connection.execute(sql, tuple(params)).fetchall()
+
+
 def search_embedding_column_exists(connection: Connection) -> bool:
     """Return whether the search table exposes an embedding column.
 
@@ -80,7 +180,7 @@ def upsert_search_document(
         searchable_field_names: Searchable field names included in the document.
         published_at: Entry publish timestamp.
         updated_at: Entry update timestamp.
-        clear_embedding: Whether the optional embedding column should be nulled.
+        clear_embedding: Whether embedding fields should be cleared.
 
     Returns:
         None.
@@ -89,7 +189,16 @@ def upsert_search_document(
         psycopg.Error: If PostgreSQL query execution fails.
     """
 
-    update_embedding_sql = ",\n            embedding = NULL" if clear_embedding else ""
+    update_embedding_sql = (
+        (
+            ",\n            embedding = NULL"
+            ",\n            embedding_provider = NULL"
+            ",\n            embedding_model = NULL"
+            ",\n            embedding_updated_at = NULL"
+        )
+        if clear_embedding
+        else ""
+    )
     connection.execute(
         f"""
         INSERT INTO pragma_search_documents (
