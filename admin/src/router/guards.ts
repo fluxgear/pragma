@@ -4,6 +4,7 @@ declare module 'vue-router' {
   interface RouteMeta {
     guestOnly?: boolean
     requiresAuth?: boolean
+    requiresSuperuser?: boolean
     title?: string
   }
 }
@@ -17,6 +18,7 @@ export interface GuardRoute {
 export interface GuardState {
   isInstalled: boolean
   isAuthenticated: boolean
+  isSuperuser: boolean
 }
 
 export interface NavigationInstallStore {
@@ -27,6 +29,7 @@ export interface NavigationInstallStore {
 export interface NavigationAuthStore {
   initialized: boolean
   isAuthenticated: boolean
+  user: { is_superuser: boolean } | null
   errorMessage: string | null
   startupError: string | null
   ensureInitialized(shouldRestore: boolean): Promise<void>
@@ -67,6 +70,10 @@ export function evaluateNavigation(
     return { name: 'dashboard' }
   }
 
+  if (route.meta.requiresSuperuser && !state.isSuperuser) {
+    return { name: 'dashboard' }
+  }
+
   return true
 }
 
@@ -89,5 +96,6 @@ export async function resolveNavigation(
   return evaluateNavigation(route, {
     isInstalled: installStore.isInstalled,
     isAuthenticated: authStore.isAuthenticated,
+    isSuperuser: authStore.user?.is_superuser === true,
   })
 }

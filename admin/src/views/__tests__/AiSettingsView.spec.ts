@@ -49,6 +49,16 @@ const settingsPayload = {
   updated_at: '2026-04-26T12:00:00Z',
 }
 
+const disabledSettingsPayload = {
+  enabled: false,
+  provider: null,
+  base_url: null,
+  embedding_model: null,
+  request_timeout_seconds: null,
+  api_key_configured: false,
+  updated_at: null,
+}
+
 async function mountView(isSuperuser = true) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -121,6 +131,38 @@ describe('AiSettingsView', () => {
     expect(wrapper.text()).toContain('AI settings saved successfully.')
   })
 
+  it('allows disabled settings to save without provider metadata', async () => {
+    aiApiMocks.getAiSettings.mockResolvedValue(disabledSettingsPayload)
+    aiApiMocks.updateAiSettings.mockResolvedValue(disabledSettingsPayload)
+
+    const { wrapper } = await mountView()
+
+    await wrapper.get('#ai-save-btn').trigger('click')
+    await flushPromises()
+
+    expect(aiApiMocks.updateAiSettings).toHaveBeenCalledWith({
+      enabled: false,
+      provider: null,
+      base_url: null,
+      embedding_model: null,
+      request_timeout_seconds: 15,
+      api_key: null,
+      retain_existing_api_key: false,
+    })
+  })
+
+  it('keeps save disabled after a settings load failure', async () => {
+    aiApiMocks.getAiSettings.mockRejectedValue(new Error('Unable to load AI settings'))
+
+    const { wrapper } = await mountView()
+
+    expect(wrapper.text()).toContain('Unable to load AI settings')
+    expect(wrapper.get('#ai-save-btn').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('#ai-save-btn').trigger('click')
+    expect(aiApiMocks.updateAiSettings).not.toHaveBeenCalled()
+  })
+
   it('tests provider connectivity and shows test result feedback', async () => {
     const { wrapper } = await mountView()
 
@@ -145,9 +187,10 @@ describe('AiSettingsView', () => {
     expect(wrapper.text()).toContain('Rebuild complete: 20/20 embedded, 0 failed')
   })
 
-  it('does not expose save/test/rebuild actions to non-superusers', async () => {
+  it('does not load or expose save/test/rebuild actions to non-superusers', async () => {
     const { wrapper } = await mountView(false)
 
+    expect(aiApiMocks.getAiSettings).not.toHaveBeenCalled()
     expect(wrapper.get('#ai-save-btn').attributes('disabled')).toBeDefined()
     expect(wrapper.get('#ai-test-btn').attributes('disabled')).toBeDefined()
     expect(wrapper.get('#ai-rebuild-btn').attributes('disabled')).toBeDefined()

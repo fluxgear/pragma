@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.1 — 2026-04-26
+
+### Fixed
+- Restricted AI settings reads and `/app/ai` routing to superusers so provider configuration metadata is no longer exposed to ordinary authenticated users
+- Allowed disabled AI settings to clear optional provider metadata cleanly while preserving strict completeness requirements when AI is enabled
+- Validated provider base URLs before persistence/use and translated malformed provider URL failures into structured semantic-search fallback behavior instead of surfacing unexpected exceptions
+- Blocked AI settings saves after load failures and added focused backend/frontend regression coverage for the M9 audit fixes
+
 ## v0.9.0 — 2026-04-26
 
 ### Added

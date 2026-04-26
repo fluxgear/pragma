@@ -92,7 +92,7 @@
               id="ai-save-btn"
               label="Save settings"
               icon="pi pi-save"
-              :disabled="isActionLocked || settingsLoading"
+              :disabled="isActionLocked || settingsLoading || settings === null"
               :loading="saving"
               @click="saveSettings"
             />
@@ -269,11 +269,15 @@ async function saveSettings(): Promise<void> {
       throw new Error('An API key is required when AI is enabled.')
     }
 
+    const normalizedBaseUrl = form.base_url.trim()
+    const normalizedEmbeddingModel = form.embedding_model.trim()
+
     const payload: AIProviderSettingsUpdateRequest = {
       enabled: form.enabled,
-      provider: form.provider,
-      base_url: form.base_url.trim(),
-      embedding_model: form.embedding_model.trim(),
+      provider:
+        form.enabled || normalizedBaseUrl || normalizedEmbeddingModel ? form.provider : null,
+      base_url: normalizedBaseUrl || null,
+      embedding_model: normalizedEmbeddingModel || null,
       request_timeout_seconds: normalizeTimeout(),
       retain_existing_api_key: form.retain_existing_api_key,
     }
@@ -337,6 +341,10 @@ async function runRebuild(): Promise<void> {
 }
 
 onMounted(async () => {
+  if (!isSuperuser.value) {
+    return
+  }
+
   await loadSettings()
 })
 </script>

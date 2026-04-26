@@ -212,9 +212,9 @@ export interface AIProviderSettingsResponse {
 
 export interface AIProviderSettingsUpdateRequest {
   enabled: boolean
-  provider: AIProviderKind
-  base_url: string
-  embedding_model: string
+  provider: AIProviderKind | null
+  base_url: string | null
+  embedding_model: string | null
   request_timeout_seconds: number
   api_key?: string | null
   retain_existing_api_key?: boolean

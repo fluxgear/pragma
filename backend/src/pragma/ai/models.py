@@ -111,9 +111,9 @@ class AIProviderSettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
 
     enabled: bool = False
-    provider: AIProvider = AIProvider.VOYAGE
-    base_url: str = Field(min_length=1, max_length=500)
-    embedding_model: str = Field(min_length=1, max_length=200)
+    provider: AIProvider | None = None
+    base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    embedding_model: str | None = Field(default=None, min_length=1, max_length=200)
     request_timeout_seconds: int = Field(default=15, ge=1, le=120)
     api_key: str | None = Field(default=None, min_length=1, max_length=500)
     retain_existing_api_key: bool = False

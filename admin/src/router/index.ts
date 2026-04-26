@@ -74,7 +74,7 @@ export const router = createRouter({
           path: 'ai',
           name: 'ai-settings',
           component: AiSettingsView,
-          meta: { requiresAuth: true, title: 'AI settings' },
+          meta: { requiresAuth: true, requiresSuperuser: true, title: 'AI settings' },
         },
         {
           path: ':pathMatch(.*)*',

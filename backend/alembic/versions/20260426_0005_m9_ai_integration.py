@@ -48,10 +48,10 @@ def upgrade() -> None:
             server_default=sa.text('1'),
         ),
         sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column('provider', sa.String(length=32), nullable=False),
-        sa.Column('base_url', sa.String(length=500), nullable=False),
+        sa.Column('provider', sa.String(length=32), nullable=True),
+        sa.Column('base_url', sa.String(length=500), nullable=True),
         sa.Column('api_key', sa.String(length=500), nullable=True),
-        sa.Column('embedding_model', sa.String(length=200), nullable=False),
+        sa.Column('embedding_model', sa.String(length=200), nullable=True),
         sa.Column(
             'request_timeout_seconds',
             sa.Integer(),

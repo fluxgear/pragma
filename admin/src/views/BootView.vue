@@ -63,6 +63,7 @@ async function retryBootstrap(): Promise<void> {
       {
         isInstalled: installStore.isInstalled,
         isAuthenticated: authStore.isAuthenticated,
+        isSuperuser: authStore.user?.is_superuser === true,
       },
     )
 

@@ -447,6 +447,48 @@ def test_ai_superuser_routes_require_superuser(
     }
 
 
+def test_ai_settings_read_requires_superuser(
+    client: TestClient,
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify AI settings reads enforce superuser authorization.
+
+    Args:
+        client: FastAPI test client.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    database_dsn = build_database_dsn(
+        migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
+    )
+    with psycopg.connect(database_dsn) as connection, connection.transaction():
+        connection.execute(
+            """
+            UPDATE pragma_users
+            SET is_superuser = FALSE
+            WHERE email = %s
+            """,
+            (bootstrap_payload['email'],),
+        )
+
+    response = client.get('/api/v1/ai/settings', headers=headers)
+
+    assert response.status_code == 403
+    assert response.json() == {
+        'detail': 'Superuser privileges are required',
+        'code': 'AUTH_SUPERUSER_REQUIRED',
+    }
+
+
 def test_ai_settings_round_trip_masks_api_key(
     client: TestClient,
     bootstrap_payload: dict[str, str],
@@ -475,6 +517,50 @@ def test_ai_settings_round_trip_masks_api_key(
     assert response.json()['provider'] == 'voyage'
     assert response.json()['api_key_configured'] is True
     assert 'api_key' not in response.json()
+
+
+def test_disabled_ai_settings_can_clear_optional_provider_fields(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify disabled AI settings can persist without provider metadata.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+
+    response = client.put(
+        '/api/v1/ai/settings',
+        headers=headers,
+        json={
+            'enabled': False,
+            'provider': None,
+            'base_url': None,
+            'embedding_model': None,
+            'request_timeout_seconds': 15,
+            'retain_existing_api_key': False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'enabled': False,
+        'provider': None,
+        'base_url': None,
+        'embedding_model': None,
+        'request_timeout_seconds': 15,
+        'api_key_configured': False,
+        'updated_at': response.json()['updated_at'],
+    }
 
 
 def test_ai_settings_test_uses_mocked_provider(
@@ -643,6 +729,61 @@ def test_search_falls_back_to_keyword_when_auto_embedding_fails(
         response = client.get(
             '/api/v1/search/entries',
             params={'query': 'fallback search result', 'mode': 'vector'},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['mode_applied'] == 'keyword'
+    assert payload['applied_strategies'] == ['keyword']
+    assert payload['items'][0]['id'] == entry['id']
+
+
+def test_search_falls_back_to_keyword_when_stored_provider_url_is_invalid(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify malformed stored provider URLs never break public search fallback.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    with _ai_client(apply_runtime_env, migrated_database, search_enable_semantic=True) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        _update_ai_settings(client, headers)
+        content_type = _create_content_type(client, headers)
+        entry = _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Stored Invalid URL Fallback',
+            body='<p>Keyword fallback should survive malformed provider URLs</p>',
+        )
+
+        database_dsn = build_database_dsn(
+            migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
+        )
+        with psycopg.connect(database_dsn) as connection, connection.transaction():
+            connection.execute(
+                """
+                UPDATE pragma_ai_provider_settings
+                SET base_url = 'not-a-url'
+                WHERE id = 1
+                """
+            )
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'stored invalid url fallback', 'mode': 'vector'},
         )
 
     assert response.status_code == 200

@@ -148,22 +148,28 @@ def request_embedding(
 
     payload = _embedding_payload(config, text, input_type=input_type)
     body = json.dumps(payload).encode('utf-8')
-    http_request = request.Request(
-        _embedding_url(config.base_url),
-        data=body,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {config.api_key}',
-        },
-        method='POST',
-    )
 
     try:
+        http_request = request.Request(
+            _embedding_url(config.base_url),
+            data=body,
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {config.api_key}',
+            },
+            method='POST',
+        )
         with request.urlopen(
             http_request,
             timeout=config.request_timeout_seconds,
         ) as response:
             response_body = response.read()
+    except ValueError as exc:
+        raise SearchError(
+            detail='Embedding provider URL is invalid',
+            code='SEARCH_EMBEDDING_PROVIDER_INVALID',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
     except error.HTTPError as exc:
         raise SearchError(
             detail='Embedding provider rejected the request',

@@ -4,8 +4,8 @@ import { evaluateNavigation, resolveNavigation } from '@/router/guards'
 
 function makeRoute(
   name: string,
-  meta: { guestOnly?: boolean; requiresAuth?: boolean } = {},
-  fullPath = `/${name}` ,
+  meta: { guestOnly?: boolean; requiresAuth?: boolean; requiresSuperuser?: boolean } = {},
+  fullPath = `/${name}`,
 ) {
   return {
     name,
@@ -20,6 +20,7 @@ describe('evaluateNavigation', () => {
       evaluateNavigation(makeRoute('dashboard', { requiresAuth: true }, '/app'), {
         isInstalled: false,
         isAuthenticated: false,
+        isSuperuser: false,
       }),
     ).toEqual({ name: 'setup' })
   })
@@ -29,6 +30,7 @@ describe('evaluateNavigation', () => {
       evaluateNavigation(makeRoute('setup', {}, '/setup'), {
         isInstalled: false,
         isAuthenticated: false,
+        isSuperuser: false,
       }),
     ).toBe(true)
   })
@@ -38,6 +40,7 @@ describe('evaluateNavigation', () => {
       evaluateNavigation(makeRoute('dashboard', { requiresAuth: true }, '/app'), {
         isInstalled: true,
         isAuthenticated: false,
+        isSuperuser: false,
       }),
     ).toEqual({
       name: 'login',
@@ -50,6 +53,7 @@ describe('evaluateNavigation', () => {
       evaluateNavigation(makeRoute('login', { guestOnly: true }, '/login'), {
         isInstalled: true,
         isAuthenticated: true,
+        isSuperuser: false,
       }),
     ).toEqual({ name: 'dashboard' })
   })
@@ -59,6 +63,7 @@ describe('evaluateNavigation', () => {
       evaluateNavigation(makeRoute('home', {}, '/'), {
         isInstalled: true,
         isAuthenticated: false,
+        isSuperuser: false,
       }),
     ).toEqual({ name: 'login' })
 
@@ -66,7 +71,21 @@ describe('evaluateNavigation', () => {
       evaluateNavigation(makeRoute('home', {}, '/'), {
         isInstalled: true,
         isAuthenticated: true,
+        isSuperuser: true,
       }),
+    ).toEqual({ name: 'dashboard' })
+  })
+
+  it('routes non-superusers away from superuser-only routes', () => {
+    expect(
+      evaluateNavigation(
+        makeRoute('ai-settings', { requiresAuth: true, requiresSuperuser: true }, '/app/ai'),
+        {
+          isInstalled: true,
+          isAuthenticated: true,
+          isSuperuser: false,
+        },
+      ),
     ).toEqual({ name: 'dashboard' })
   })
 })
@@ -80,6 +99,7 @@ describe('resolveNavigation', () => {
     const authStore = {
       initialized: false,
       isAuthenticated: false,
+      user: null,
       errorMessage: null,
       startupError: null,
       ensureInitialized: vi.fn(),
@@ -99,6 +119,7 @@ describe('resolveNavigation', () => {
     const authStore = {
       initialized: false,
       isAuthenticated: false,
+      user: null,
       errorMessage: null as string | null,
       startupError: null as string | null,
       ensureInitialized: vi.fn().mockImplementation(async () => {
@@ -121,6 +142,7 @@ describe('resolveNavigation', () => {
     const authStore = {
       initialized: true,
       isAuthenticated: false,
+      user: null,
       errorMessage: 'Backend unavailable',
       startupError: 'Backend unavailable',
       ensureInitialized: vi.fn(),
@@ -139,6 +161,7 @@ describe('resolveNavigation', () => {
     const authStore = {
       initialized: true,
       isAuthenticated: false,
+      user: null,
       errorMessage: 'Invalid credentials',
       startupError: null,
       ensureInitialized: vi.fn(),
@@ -160,6 +183,7 @@ describe('resolveNavigation', () => {
     const authStore = {
       initialized: false,
       isAuthenticated: false,
+      user: null,
       errorMessage: null,
       startupError: null,
       ensureInitialized: vi.fn(),

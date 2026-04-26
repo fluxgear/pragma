@@ -77,10 +77,11 @@ _SUPERUSER_AI_ERROR_RESPONSES = {
 @router.get(
     '/settings',
     response_model=AIProviderSettingsResponse,
-    responses=_AUTHENTICATED_AI_ERROR_RESPONSES,
+    responses=_SUPERUSER_AI_ERROR_RESPONSES,
 )
 def get_ai_settings(
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[dict[str, object], Depends(get_current_superuser)],
 ) -> AIProviderSettingsResponse:
     """Return the persisted AI-provider settings snapshot.
 
@@ -95,6 +96,7 @@ def get_ai_settings(
         StorageError: If PostgreSQL access fails.
     """
 
+    _ = current_user
     return get_ai_provider_settings_snapshot(storage)
 
 

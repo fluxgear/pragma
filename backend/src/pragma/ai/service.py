@@ -19,6 +19,7 @@ import unicodedata
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
+from urllib.parse import urlparse
 from uuid import UUID
 
 from psycopg import Connection
@@ -100,6 +101,29 @@ def _normalize_content_type_slug(value: str) -> str:
     return slug
 
 
+def _validate_provider_base_url(base_url: str) -> str:
+    """Return a normalized provider base URL with a valid HTTP(S) origin.
+
+    Args:
+        base_url: Raw provider base URL value.
+
+    Returns:
+        str: Normalized provider base URL without a trailing slash.
+
+    Raises:
+        ConfigError: If the URL is missing an HTTP(S) scheme or host.
+    """
+
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        raise ConfigError(
+            detail='AI provider base URL must be a valid http or https URL',
+            code='AI_SETTINGS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    return base_url.rstrip('/')
+
+
 def _provider_config_from_row(
     settings_row: dict[str, object] | None,
     *,
@@ -159,7 +183,7 @@ def _provider_config_from_row(
 
     return EmbeddingProviderConfig(
         provider=provider,
-        base_url=base_url,
+        base_url=_validate_provider_base_url(base_url),
         api_key=api_key,
         embedding_model=embedding_model,
         request_timeout_seconds=timeout_seconds,
@@ -259,6 +283,13 @@ def update_ai_provider_settings_snapshot(
     try:
         with storage.connection() as connection, connection.transaction():
             existing_row = get_ai_provider_settings(connection)
+            provider = payload.provider.value if payload.provider is not None else None
+            base_url = payload.base_url.strip() if payload.base_url is not None else None
+            embedding_model = (
+                payload.embedding_model.strip()
+                if payload.embedding_model is not None
+                else None
+            )
             api_key = payload.api_key.strip() if payload.api_key is not None else None
             if (
                 api_key is None
@@ -267,6 +298,18 @@ def update_ai_provider_settings_snapshot(
                 and existing_row['api_key'] is not None
             ):
                 api_key = str(existing_row['api_key'])
+
+            if base_url is not None:
+                base_url = _validate_provider_base_url(base_url)
+
+            if payload.enabled and (
+                provider is None or base_url is None or embedding_model is None
+            ):
+                raise ConfigError(
+                    detail='Enabled AI provider settings are incomplete',
+                    code='AI_SETTINGS_INVALID',
+                    status_code=HTTPStatus.BAD_REQUEST,
+                )
 
             if payload.enabled and not api_key:
                 raise ConfigError(
@@ -278,10 +321,10 @@ def update_ai_provider_settings_snapshot(
             row = upsert_ai_provider_settings(
                 connection,
                 enabled=payload.enabled,
-                provider=payload.provider.value,
-                base_url=payload.base_url,
+                provider=provider,
+                base_url=base_url,
                 api_key=api_key,
-                embedding_model=payload.embedding_model,
+                embedding_model=embedding_model,
                 request_timeout_seconds=payload.request_timeout_seconds,
                 updated_by_user_id=user_id,
                 updated_at=timestamp,
