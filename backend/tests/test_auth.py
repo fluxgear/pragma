@@ -153,6 +153,44 @@ def test_refresh_success_rotates_session(
     assert "pragma_refresh_token=" in response.headers["set-cookie"]
 
 
+def test_change_password_revokes_existing_refresh_session(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify self-service password change revokes existing refresh sessions.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _bootstrap_admin(client, bootstrap_payload)
+    login_payload = _login_admin(client, bootstrap_payload)
+
+    change_response = client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {login_payload['access_token']}"},
+        json={
+            "current_password": bootstrap_payload["password"],
+            "new_password": "new-bootstrap-password-123",
+        },
+    )
+    assert change_response.status_code == 200
+
+    refresh_response = client.post("/api/v1/auth/refresh")
+    assert refresh_response.status_code == 401
+    assert refresh_response.json() == {
+        "detail": "Refresh token is not active",
+        "code": "TOKEN_REVOKED",
+    }
+
+
 def test_refresh_failure_without_cookie(client: TestClient) -> None:
     """Verify refresh fails with a structured error when the cookie is missing.
 

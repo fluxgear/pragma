@@ -452,6 +452,7 @@ def change_current_user_password(
                 updated_at=timestamp,
             )
             set_user_force_password_change(connection, user_id, False, timestamp)
+            revoke_refresh_sessions_for_user(connection, user_id, timestamp)
             updated_user = get_user_by_id(connection, user_id)
     except PsycopgError as exc:
         raise StorageError(

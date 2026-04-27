@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.11.1 — 2026-04-27
+
+### Fixed
+- Closed the M11 audit bug line by blocking non-publishers from modifying or unpublishing already-published entries, revoking refresh sessions after self-service password changes, and assigning the bootstrap root the persisted `administrator` role with explicit role/permission metadata
+- Added focused M11 migration regression coverage for RBAC schema/seed assertions, legacy superuser-only administrator backfill, and downgrade preservation of pre-M11 user data while removing RBAC tables and columns
+- Removed duplicate admin router title-hook work, cleaned the router EOF formatting regression, and aligned legacy AI/modules permission-denial tests with the new bootstrap administrator-role behavior
+
 ## v0.11.0 — 2026-04-27
 
 ### Added

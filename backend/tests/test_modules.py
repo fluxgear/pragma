@@ -423,6 +423,17 @@ def test_modules_api_requires_superuser(
                 """,
                 (bootstrap_payload['email'],),
             )
+            connection.execute(
+                """
+                DELETE FROM pragma_user_roles
+                WHERE user_id = (
+                    SELECT id
+                    FROM pragma_users
+                    WHERE email = %s
+                )
+                """,
+                (bootstrap_payload['email'],),
+            )
 
         response = client.get('/api/v1/modules', headers=headers)
 

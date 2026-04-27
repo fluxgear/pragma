@@ -1519,6 +1519,12 @@ def update_entry_record(
                     status_code=HTTPStatus.NOT_FOUND,
                 )
 
+            if (
+                existing_entry['status'] == 'published'
+                and payload.status.value != 'published'
+            ):
+                ensure_permission(current_user, PERMISSION_CONTENT_ENTRIES_PUBLISH)
+
             field_definitions = _field_definitions_from_rows(
                 get_field_definitions(connection, existing_entry['content_type_id'])
             )

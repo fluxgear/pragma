@@ -86,6 +86,10 @@ def bootstrap_install(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.auth.permissions import ROLE_ADMINISTRATOR
+    from pragma.storage.queries.roles import replace_user_roles
+    from pragma.storage.queries.users import get_user_by_id
+
     created_at = utc_now()
 
     try:
@@ -120,7 +124,15 @@ def bootstrap_install(
                 force_password_change=False,
                 created_at=created_at,
             )
-            mark_installed(connection, user["id"], created_at)
+            replace_user_roles(
+                connection,
+                user_id=user['id'],
+                role_keys=[ROLE_ADMINISTRATOR],
+                assigned_by_user_id=user['id'],
+                assigned_at=created_at,
+            )
+            mark_installed(connection, user['id'], created_at)
+            stored_user = get_user_by_id(connection, user['id'])
     except IntegrityError as exc:
         raise ConfigError(
             detail="Install bootstrap has already completed",
@@ -133,4 +145,9 @@ def bootstrap_install(
             code="INSTALL_BOOTSTRAP_FAILED",
         ) from exc
 
-    return {"installed": True, "user": user}
+    if stored_user is None:
+        raise StorageError(
+            detail='Unable to reload bootstrap superuser',
+            code='INSTALL_BOOTSTRAP_USER_RELOAD_FAILED',
+        )
+    return {"installed": True, "user": stored_user}

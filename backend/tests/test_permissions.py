@@ -307,6 +307,34 @@ def test_author_role_cannot_publish_entries(
         'code': 'AUTH_PERMISSION_DENIED',
     }
 
+    published_entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=admin_headers,
+        json={
+            'content_type_id': content_type['id'],
+            'slug': None,
+            'status': 'published',
+            'payload': {'title': 'Admin Publish', 'body': '<p>Published</p>'},
+        },
+    )
+    assert published_entry_response.status_code == 201
+    published_entry = published_entry_response.json()
+
+    update_published_response = client.put(
+        f"/api/v1/content/entries/{published_entry['id']}",
+        headers=author_headers,
+        json={
+            'slug': published_entry['slug'],
+            'status': 'draft',
+            'payload': {'title': 'Author Unpublish', 'body': '<p>Updated</p>'},
+        },
+    )
+    assert update_published_response.status_code == 403
+    assert update_published_response.json() == {
+        'detail': 'Permission content.entries.publish is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
+
 
 def test_editor_role_can_publish_entries(
     client: TestClient,

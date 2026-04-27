@@ -131,12 +131,6 @@ router.beforeEach(async (to) => {
     authStore,
   )
 })
-
-router.afterEach((to) => {
-  const title = typeof to.meta.title === 'string' ? `${to.meta.title} · Pragma Admin` : 'Pragma Admin'
-  document.title = title
-})
-
 router.afterEach((to) => {
   const title = typeof to.meta.title === 'string' ? `${to.meta.title} · Pragma Admin` : 'Pragma Admin'
   document.title = title

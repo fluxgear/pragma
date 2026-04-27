@@ -46,7 +46,7 @@ def test_install_status_reports_schema_not_ready_before_migrations(
 
 
 def test_migrations_create_expected_tables(migrated_database: dict[str, str]) -> None:
-    """Verify the Alembic baseline creates the required M1 tables.
+    """Verify the Alembic chain creates the required M11 schema objects.
 
     Args:
         migrated_database: Environment values for the migrated test database.
@@ -66,14 +66,57 @@ def test_migrations_create_expected_tables(migrated_database: dict[str, str]) ->
                 to_regclass('public.pragma_users') AS users_table,
                 to_regclass('public.pragma_install_state') AS install_state_table,
                 to_regclass('public.pragma_refresh_tokens') AS refresh_tokens_table,
-                to_regclass('public.alembic_version') AS alembic_table
+                to_regclass('public.pragma_permissions') AS permissions_table,
+                to_regclass('public.pragma_roles') AS roles_table,
+                to_regclass('public.pragma_role_permissions') AS role_permissions_table,
+                to_regclass('public.pragma_user_roles') AS user_roles_table,
+                to_regclass('public.alembic_version') AS alembic_table,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_users'
+                      AND column_name = 'password_changed_at'
+                ) AS has_password_changed_at,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_users'
+                      AND column_name = 'force_password_change'
+                ) AS has_force_password_change,
+                (SELECT COUNT(*) FROM pragma_permissions) AS permission_count,
+                (SELECT COUNT(*) FROM pragma_roles) AS role_count,
+                (SELECT COUNT(*) FROM pragma_role_permissions) AS role_permission_count,
+                EXISTS (
+                    SELECT 1
+                    FROM pragma_roles
+                    WHERE role_key = 'administrator' AND is_system = TRUE
+                ) AS has_administrator_role,
+                EXISTS (
+                    SELECT 1
+                    FROM pragma_role_permissions
+                    WHERE role_key = 'administrator'
+                      AND permission_key = 'users.manage'
+                ) AS has_administrator_users_manage
             """
         ).fetchone()
 
     assert row["users_table"] == "pragma_users"
     assert row["install_state_table"] == "pragma_install_state"
     assert row["refresh_tokens_table"] == "pragma_refresh_tokens"
+    assert row["permissions_table"] == "pragma_permissions"
+    assert row["roles_table"] == "pragma_roles"
+    assert row["role_permissions_table"] == "pragma_role_permissions"
+    assert row["user_roles_table"] == "pragma_user_roles"
     assert row["alembic_table"] == "alembic_version"
+    assert row["has_password_changed_at"] is True
+    assert row["has_force_password_change"] is True
+    assert row["permission_count"] == 12
+    assert row["role_count"] == 4
+    assert row["role_permission_count"] == 29
+    assert row["has_administrator_role"] is True
+    assert row["has_administrator_users_manage"] is True
 
 
 def test_install_status_reports_clean_system_after_migration(client: TestClient) -> None:
@@ -129,10 +172,28 @@ def test_bootstrap_creates_first_superuser(
     assert payload["installed"] is True
     assert payload["user"]["email"] == bootstrap_payload["email"]
     assert payload["user"]["is_superuser"] is True
+    assert payload["user"]["roles"] == ["administrator"]
+    assert "users.manage" in payload["user"]["permissions"]
+    assert "modules.manage" in payload["user"]["permissions"]
+    assert "content.entries.publish" in payload["user"]["permissions"]
 
     status_response = client.get("/api/v1/install/status")
     assert status_response.status_code == 200
     assert status_response.json()["is_installed"] is True
+
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "identity": bootstrap_payload["email"],
+            "password": bootstrap_payload["password"],
+        },
+    )
+    assert login_response.status_code == 200
+    login_payload = login_response.json()
+    assert login_payload["user"]["roles"] == ["administrator"]
+    assert "users.manage" in login_payload["user"]["permissions"]
+    assert "modules.manage" in login_payload["user"]["permissions"]
+    assert "content.entries.publish" in login_payload["user"]["permissions"]
 
 
 def test_bootstrap_rejects_second_attempt(

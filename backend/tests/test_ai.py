@@ -426,6 +426,17 @@ def test_ai_superuser_routes_require_superuser(
             """,
             (bootstrap_payload['email'],),
         )
+        connection.execute(
+            """
+            DELETE FROM pragma_user_roles
+            WHERE user_id = (
+                SELECT id
+                FROM pragma_users
+                WHERE email = %s
+            )
+            """,
+            (bootstrap_payload['email'],),
+        )
 
     response = client.put(
         '/api/v1/ai/settings',
@@ -476,6 +487,17 @@ def test_ai_settings_read_requires_superuser(
             UPDATE pragma_users
             SET is_superuser = FALSE
             WHERE email = %s
+            """,
+            (bootstrap_payload['email'],),
+        )
+        connection.execute(
+            """
+            DELETE FROM pragma_user_roles
+            WHERE user_id = (
+                SELECT id
+                FROM pragma_users
+                WHERE email = %s
+            )
             """,
             (bootstrap_payload['email'],),
         )
