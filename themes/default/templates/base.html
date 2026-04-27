@@ -1,18 +1,37 @@
 {% set site = site|default({}, true) %}
+{% set seo = seo|default({}, true) %}
 {% set site_name = site.name|default('Pragma', true) %}
 {% set theme_static = theme_static|default('/themes/default/static', true) %}
 {% set theme_mode = theme_mode|default('light', true) %}
-{% set page_title = page_title|default('', true) %}
-{% set page_description = page_description|default('Commercial-grade publishing and presentation for modern teams.', true) %}
+{% set page_title = page_title|default(seo.title|default('', true), true) %}
+{% set page_description = page_description|default(seo.description|default('Commercial-grade publishing and presentation for modern teams.', true), true) %}
 {% set full_title = site_name if not page_title else page_title ~ ' · ' ~ site_name %}
+{% set canonical_url = seo.canonical_url|default('', true) %}
+{% set robots = seo.robots|default('index,follow', true) %}
+{% set og_type = seo.og_type|default('website', true) %}
+{% set og_title = seo.og_title|default(full_title, true) %}
+{% set og_description = seo.og_description|default(page_description, true) %}
+{% set og_url = seo.og_url|default(canonical_url, true) %}
+{% set og_image = seo.og_image|default('', true) %}
 <!doctype html>
 <html lang="{{ site.lang|default('en', true) }}" data-bs-theme="{{ theme_mode }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="{{ page_description }}">
+    <meta name="robots" content="{{ robots }}">
     <meta name="color-scheme" content="light dark">
     <title>{{ full_title }}</title>
+    {% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}">{% endif %}
+    <meta property="og:type" content="{{ og_type }}">
+    <meta property="og:title" content="{{ og_title }}">
+    <meta property="og:description" content="{{ og_description }}">
+    {% if og_url %}<meta property="og:url" content="{{ og_url }}">{% endif %}
+    {% if og_image %}<meta property="og:image" content="{{ og_image }}">{% endif %}
+    <meta name="twitter:card" content="{{ 'summary_large_image' if og_image else 'summary' }}">
+    <meta name="twitter:title" content="{{ og_title }}">
+    <meta name="twitter:description" content="{{ og_description }}">
+    {% if og_image %}<meta name="twitter:image" content="{{ og_image }}">{% endif %}
     <link rel="stylesheet" href="{{ theme_static }}/css/main.css">
 </head>
 <body class="site-shell">

@@ -855,6 +855,9 @@ def test_checked_in_default_theme_templates_render_with_sparse_context(
 
     assert '<title>Pragma</title>' in rendered['page.html']
     assert 'Pragma · Pragma' not in rendered['page.html']
+    assert '<meta name="robots" content="index,follow">' in rendered['page.html']
+    assert '<meta property="og:type" content="website">' in rendered['page.html']
+    assert '<meta name="twitter:card" content="summary">' in rendered['page.html']
     assert 'href="/#services"' in rendered['page.html']
     assert 'href="/#contact"' in rendered['page.html']
     assert 'href="/#search"' in rendered['page.html']

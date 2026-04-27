@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.13.0 — 2026-04-27
+
+### Added
+- Added the M13 public frontend with server-rendered Jinja2 routes for home, pages, posts, archive, search, theme assets, and themed 404 handling
+- Added published-only public view-model assembly, SEO metadata generation, archive/search pagination, and visitor-safe render fallback behavior
+- Added backend integration coverage for public rendering, unpublished-content isolation, archive/search states, theme assets, API 404 preservation, and render-failure fallback
+
 ## v0.12.0 — 2026-04-27
 
 ### Added

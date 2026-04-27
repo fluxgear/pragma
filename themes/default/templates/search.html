@@ -2,6 +2,8 @@
 {% set query = query|default('', true) %}
 {% set results = results|default([], true) %}
 {% set search_enabled = search_enabled|default(false, true) %}
+{% set search_error = search_error|default('', true) %}
+{% set pagination = pagination|default({}, true) %}
 {% block content %}
 <section class="section" id="search">
     <div class="shell-container search-shell">
@@ -15,7 +17,12 @@
             <input class="input" id="site-search" name="q" type="search" value="{{ query }}" placeholder="Search the site">
             <button class="button button--primary" type="submit">Search</button>
         </form>
-        {% if not search_enabled %}
+        {% if search_error %}
+        <div class="empty-panel">
+            <h2>Search is temporarily unavailable.</h2>
+            <p>{{ search_error }}</p>
+        </div>
+        {% elif not search_enabled %}
         <div class="empty-panel">
             <h2>Search is not enabled yet.</h2>
             <p>M8 owns the real search backend. This template is in place and ready for it.</p>
@@ -30,6 +37,11 @@
             </article>
             {% endfor %}
         </div>
+        <nav class="pagination" aria-label="Search pagination">
+            <a class="button button--secondary" href="{{ pagination.prev_url|default('#', true) }}">Previous</a>
+            <span>Page {{ pagination.page|default(1, true) }}</span>
+            <a class="button button--secondary" href="{{ pagination.next_url|default('#', true) }}">Next</a>
+        </nav>
         {% elif query %}
         <div class="empty-panel">
             <h2>No results matched “{{ query }}”.</h2>

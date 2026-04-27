@@ -1,0 +1,798 @@
+# Copyright (c) 2026 Marc Mironescu / FluxGear. MIT License.
+"""Service helpers for Pragma public frontend rendering.
+
+Args:
+    None.
+
+Returns:
+    None.
+
+Raises:
+    None.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import re
+from dataclasses import asdict
+from datetime import datetime
+from html import escape, unescape
+from typing import Any
+from urllib.parse import urlencode
+
+from fastapi.responses import HTMLResponse
+
+from pragma.config import Settings
+from pragma.content.models import ContentStatus
+from pragma.errors import ThemeError
+from pragma.public.models import (
+    PublicEntryView,
+    PublicPagination,
+    PublicSeoContext,
+    PublicSiteContext,
+)
+from pragma.storage.pool import DatabasePool
+from pragma.storage.queries.content import (
+    count_entries,
+    get_content_type_by_slug,
+    get_entry_by_slug,
+    list_entries,
+)
+from pragma.themes import ThemeRuntime
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_SITE_NAME = 'Pragma'
+_DEFAULT_SITE_DESCRIPTION = 'Commercial-grade publishing and presentation for modern teams.'
+_DEFAULT_AUTHOR = 'Editorial Team'
+_DEFAULT_CATEGORY = 'Content'
+_WORDS_PER_MINUTE = 200
+_WHITESPACE_PATTERN = re.compile(r'\s+')
+_HTML_TAG_PATTERN = re.compile(r'<[^>]+>')
+
+
+def _collapse_whitespace(value: str) -> str:
+    """Collapse internal whitespace and trim the result.
+
+    Args:
+        value: Raw text value.
+
+    Returns:
+        str: Normalized text.
+
+    Raises:
+        None.
+    """
+
+    return _WHITESPACE_PATTERN.sub(' ', value).strip()
+
+
+def _slug_to_title(slug: str) -> str:
+    """Convert a slug-style value into display text.
+
+    Args:
+        slug: Slug-like source text.
+
+    Returns:
+        str: Title-cased display text.
+
+    Raises:
+        None.
+    """
+
+    normalized = _collapse_whitespace(slug.replace('-', ' ').replace('_', ' '))
+    return normalized.title() if normalized else 'Untitled'
+
+
+def _extract_text(payload: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    """Return the first non-empty string value from payload keys.
+
+    Args:
+        payload: Entry payload dictionary.
+        keys: Candidate field names in preference order.
+
+    Returns:
+        str | None: Normalized text when found.
+
+    Raises:
+        None.
+    """
+
+    for key in keys:
+        value = payload.get(key)
+        if not isinstance(value, str):
+            continue
+        normalized = _collapse_whitespace(value)
+        if normalized:
+            return normalized
+    return None
+
+
+def _extract_body_html(payload: dict[str, Any]) -> str:
+    """Resolve rich body HTML while avoiding unsafe raw text rendering.
+
+    Args:
+        payload: Entry payload dictionary.
+
+    Returns:
+        str: HTML-safe body string.
+
+    Raises:
+        None.
+    """
+
+    body_html = _extract_text(payload, ('body_html',))
+    if body_html is not None:
+        return body_html
+
+    fallback = _extract_text(payload, ('body', 'content'))
+    if fallback is None:
+        return ''
+    return escape(fallback).replace('\n', '<br>\n')
+
+
+def _strip_html(value: str) -> str:
+    """Strip markup tags from an HTML-like fragment.
+
+    Args:
+        value: HTML source text.
+
+    Returns:
+        str: Plain text representation.
+
+    Raises:
+        None.
+    """
+
+    stripped = _HTML_TAG_PATTERN.sub(' ', value)
+    return _collapse_whitespace(unescape(stripped))
+
+
+def _build_body_summary(body_html: str, title: str) -> str:
+    """Build a fallback summary from body text.
+
+    Args:
+        body_html: Body HTML fragment.
+        title: Entry title fallback.
+
+    Returns:
+        str: Summary text.
+
+    Raises:
+        None.
+    """
+
+    source = _strip_html(body_html) if body_html else title
+    if len(source) <= 180:
+        return source
+    return f"{source[:179].rstrip()}…"
+
+
+def _format_published_at(value: Any) -> str:
+    """Format publish timestamps for template display.
+
+    Args:
+        value: Raw publish timestamp value.
+
+    Returns:
+        str: Display timestamp text.
+
+    Raises:
+        None.
+    """
+
+    if isinstance(value, datetime):
+        return value.strftime('%b %d, %Y')
+    if isinstance(value, str):
+        return _collapse_whitespace(value)
+    return ''
+
+
+def _estimate_reading_time(body_html: str, summary: str, title: str) -> str:
+    """Estimate reading-time label from entry text.
+
+    Args:
+        body_html: Entry body HTML fragment.
+        summary: Entry summary text.
+        title: Entry title text.
+
+    Returns:
+        str: Reading-time label.
+
+    Raises:
+        None.
+    """
+
+    source_text = _strip_html(body_html) if body_html else _collapse_whitespace(summary or title)
+    word_count = len(source_text.split())
+    minutes = max(1, math.ceil(word_count / _WORDS_PER_MINUTE))
+    return f'{minutes} min read'
+
+
+def normalize_pagination(page: int, per_page: int) -> tuple[int, int]:
+    """Normalize pagination inputs to supported bounds.
+
+    Args:
+        page: Requested one-based page number.
+        per_page: Requested page size.
+
+    Returns:
+        tuple[int, int]: Normalized page and page size.
+
+    Raises:
+        None.
+    """
+
+    normalized_page = page if page >= 1 else 1
+    normalized_per_page = max(1, min(per_page, 100))
+    return normalized_page, normalized_per_page
+
+
+def _build_query_url(path: str, query_params: dict[str, str]) -> str:
+    """Build a URL with encoded query parameters.
+
+    Args:
+        path: URL path.
+        query_params: Query string key/value pairs.
+
+    Returns:
+        str: URL with encoded query string.
+
+    Raises:
+        None.
+    """
+
+    if not query_params:
+        return path
+    return f'{path}?{urlencode(query_params)}'
+
+
+def build_page_url(slug: str) -> str:
+    """Return public URL for a page entry.
+
+    Args:
+        slug: Entry slug.
+
+    Returns:
+        str: Public page URL.
+
+    Raises:
+        None.
+    """
+
+    return f'/pages/{slug}'
+
+
+def build_post_url(slug: str) -> str:
+    """Return public URL for a post entry.
+
+    Args:
+        slug: Entry slug.
+
+    Returns:
+        str: Public post URL.
+
+    Raises:
+        None.
+    """
+
+    return f'/posts/{slug}'
+
+
+def build_archive_url(
+    *,
+    page: int | None = None,
+    per_page: int | None = None,
+    content_type: str | None = None,
+) -> str:
+    """Return archive URL with optional pagination and filters.
+
+    Args:
+        page: Optional page number.
+        per_page: Optional page size.
+        content_type: Optional content-type filter slug.
+
+    Returns:
+        str: Archive URL.
+
+    Raises:
+        None.
+    """
+
+    query_params: dict[str, str] = {}
+    if page is not None:
+        query_params['page'] = str(page)
+    if per_page is not None:
+        query_params['per_page'] = str(per_page)
+    if content_type:
+        query_params['content_type'] = content_type
+    return _build_query_url('/archive', query_params)
+
+
+def build_search_url(
+    *,
+    query: str | None = None,
+    page: int | None = None,
+    per_page: int | None = None,
+) -> str:
+    """Return search URL with optional query and pagination values.
+
+    Args:
+        query: Optional search text.
+        page: Optional page number.
+        per_page: Optional page size.
+
+    Returns:
+        str: Search URL.
+
+    Raises:
+        None.
+    """
+
+    query_params: dict[str, str] = {}
+    if query:
+        query_params['q'] = query
+    if page is not None:
+        query_params['page'] = str(page)
+    if per_page is not None:
+        query_params['per_page'] = str(per_page)
+    return _build_query_url('/search', query_params)
+
+
+def build_theme_static_url(asset_path: str) -> str:
+    """Return route URL for theme static assets.
+
+    Args:
+        asset_path: Relative asset path under static root.
+
+    Returns:
+        str: Public asset URL.
+
+    Raises:
+        None.
+    """
+
+    normalized = asset_path.lstrip('/')
+    return f'/theme/static/{normalized}'
+
+
+def build_entry_url(content_type_slug: str, slug: str) -> str:
+    """Return public URL for an entry slug and content type.
+
+    Args:
+        content_type_slug: Owning content-type slug.
+        slug: Entry slug.
+
+    Returns:
+        str: Public entry URL.
+
+    Raises:
+        None.
+    """
+
+    if content_type_slug == 'page':
+        return build_page_url(slug)
+    if content_type_slug == 'post':
+        return build_post_url(slug)
+    return build_archive_url(content_type=content_type_slug)
+
+
+def _absolute_url(settings: Settings, route_path: str) -> str:
+    """Return canonical absolute URL for a route path.
+
+    Args:
+        settings: Application settings.
+        route_path: Relative route path with optional query.
+
+    Returns:
+        str: Absolute canonical URL.
+
+    Raises:
+        None.
+    """
+
+    base = settings.base_url.rstrip('/')
+    path = route_path if route_path.startswith('/') else f'/{route_path}'
+    return f'{base}{path}'
+
+
+def build_site_context(settings: Settings, theme_runtime: ThemeRuntime) -> PublicSiteContext:
+    """Build site-level context for public templates.
+
+    Args:
+        settings: Application settings.
+        theme_runtime: Active theme runtime instance.
+
+    Returns:
+        PublicSiteContext: Public site context payload.
+
+    Raises:
+        None.
+    """
+
+    try:
+        active_theme = theme_runtime.resolve_active_theme()
+        name = active_theme.manifest.name
+        description = active_theme.manifest.description or _DEFAULT_SITE_DESCRIPTION
+    except ThemeError:
+        name = _DEFAULT_SITE_NAME
+        description = _DEFAULT_SITE_DESCRIPTION
+
+    navigation = [
+        {'label': 'Home', 'href': '/'},
+        {'label': 'Archive', 'href': '/archive'},
+        {'label': 'Search', 'href': '/search'},
+    ]
+    footer_links = [
+        {'label': 'Home', 'href': '/'},
+        {'label': 'Archive', 'href': '/archive'},
+        {'label': 'Search', 'href': '/search'},
+    ]
+    return PublicSiteContext(
+        name=name,
+        description=description,
+        base_url=settings.base_url.rstrip('/'),
+        navigation=navigation,
+        footer_links=footer_links,
+    )
+
+
+def build_seo_context(
+    *,
+    settings: Settings,
+    site: PublicSiteContext,
+    page_title: str,
+    page_description: str,
+    route_path: str,
+    robots: str,
+    og_type: str = 'website',
+    og_image: str | None = None,
+) -> PublicSeoContext:
+    """Build SEO context for public template rendering.
+
+    Args:
+        settings: Application settings.
+        site: Site-level public context.
+        page_title: Route-specific title text.
+        page_description: Route-specific description text.
+        route_path: Route path for canonical URL generation.
+        robots: Robots directive text.
+        og_type: OpenGraph content type.
+        og_image: Optional OpenGraph image URL.
+
+    Returns:
+        PublicSeoContext: SEO metadata context.
+
+    Raises:
+        None.
+    """
+
+    normalized_title = _collapse_whitespace(page_title)
+    normalized_description = _collapse_whitespace(page_description or site.description)
+    full_title = site.name if not normalized_title else f'{normalized_title} · {site.name}'
+    canonical_url = _absolute_url(settings, route_path)
+    return PublicSeoContext(
+        title=normalized_title,
+        description=normalized_description,
+        canonical_url=canonical_url,
+        robots=robots,
+        og_type=og_type,
+        og_title=full_title,
+        og_description=normalized_description,
+        og_url=canonical_url,
+        og_image=og_image,
+    )
+
+
+def build_common_context(site: PublicSiteContext, seo: PublicSeoContext) -> dict[str, Any]:
+    """Build common template context shared by all public routes.
+
+    Args:
+        site: Site-level public context.
+        seo: Route-level SEO metadata context.
+
+    Returns:
+        dict[str, Any]: Shared template context dictionary.
+
+    Raises:
+        None.
+    """
+
+    site_data = asdict(site)
+    return {
+        'site': site_data,
+        'navigation': site_data['navigation'],
+        'footer_links': site_data['footer_links'],
+        'theme_static': '/theme/static',
+        'home_url': '/',
+        'archive_url': '/archive',
+        'search_url': '/search',
+        'seo': asdict(seo),
+        'page_title': seo.title,
+        'page_description': seo.description,
+    }
+
+
+def get_published_entry(
+    storage: DatabasePool,
+    content_type_slug: str,
+    slug: str,
+) -> dict[str, Any] | None:
+    """Return one published content entry by content type and slug.
+
+    Args:
+        storage: Initialized database pool manager.
+        content_type_slug: Content-type slug filter.
+        slug: Entry slug filter.
+
+    Returns:
+        dict[str, Any] | None: Published entry row with content type slug, or None.
+
+    Raises:
+        StorageError: If PostgreSQL access fails.
+    """
+
+    normalized_type = _collapse_whitespace(content_type_slug).lower()
+    normalized_slug = _collapse_whitespace(slug).lower()
+
+    with storage.connection() as connection:
+        content_type_row = get_content_type_by_slug(connection, normalized_type)
+        if content_type_row is None:
+            return None
+        entry_row = get_entry_by_slug(connection, content_type_row['id'], normalized_slug)
+
+    if entry_row is None:
+        return None
+    if str(entry_row['status']) != ContentStatus.PUBLISHED.value:
+        return None
+
+    merged = dict(entry_row)
+    merged['content_type_slug'] = str(content_type_row['slug'])
+    return merged
+
+
+def list_published_entries(
+    storage: DatabasePool,
+    content_type_slug: str,
+    page: int,
+    per_page: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """List published entries for one content type with pagination.
+
+    Args:
+        storage: Initialized database pool manager.
+        content_type_slug: Content-type slug filter.
+        page: Requested one-based page number.
+        per_page: Requested page size.
+
+    Returns:
+        tuple[list[dict[str, Any]], int]: Rows for the current page and total count.
+
+    Raises:
+        StorageError: If PostgreSQL access fails.
+    """
+
+    normalized_page, normalized_per_page = normalize_pagination(page, per_page)
+    normalized_type = _collapse_whitespace(content_type_slug).lower()
+    offset = (normalized_page - 1) * normalized_per_page
+
+    with storage.connection() as connection:
+        total = count_entries(
+            connection=connection,
+            content_type_id=None,
+            content_type_slug=normalized_type,
+            status=ContentStatus.PUBLISHED.value,
+        )
+        rows = list_entries(
+            connection=connection,
+            limit=normalized_per_page,
+            offset=offset,
+            order_by='published_at',
+            content_type_id=None,
+            content_type_slug=normalized_type,
+            status=ContentStatus.PUBLISHED.value,
+        )
+
+    return [dict(row) for row in rows], total
+
+
+def build_public_entry_view(entry_row: dict[str, Any]) -> PublicEntryView:
+    """Map a storage-layer entry row into a public template projection.
+
+    Args:
+        entry_row: Storage-layer entry row.
+
+    Returns:
+        PublicEntryView: Public-facing entry projection.
+
+    Raises:
+        None.
+    """
+
+    payload = dict(entry_row.get('payload') or {})
+    slug = str(entry_row['slug'])
+    content_type_slug = str(entry_row.get('content_type_slug') or '')
+
+    title = _extract_text(payload, ('title', 'name')) or _slug_to_title(slug)
+    subtitle = _extract_text(payload, ('subtitle',)) or ''
+    body_html = _extract_body_html(payload)
+    summary = _extract_text(payload, ('summary', 'excerpt')) or _build_body_summary(
+        body_html, title
+    )
+    author = _extract_text(payload, ('author',)) or _DEFAULT_AUTHOR
+    category = _extract_text(payload, ('category',)) or _slug_to_title(
+        content_type_slug or _DEFAULT_CATEGORY
+    )
+
+    return PublicEntryView(
+        content_type_slug=content_type_slug,
+        slug=slug,
+        url=build_entry_url(content_type_slug, slug),
+        title=title,
+        subtitle=subtitle,
+        summary=summary,
+        body_html=body_html,
+        author=author,
+        category=category,
+        published_at=_format_published_at(entry_row.get('published_at')),
+        reading_time=_estimate_reading_time(body_html, summary, title),
+        featured_image_url=_extract_text(payload, ('featured_image_url',)),
+        featured_image_alt=_extract_text(payload, ('featured_image_alt',)),
+    )
+
+
+def to_post_card(entry: PublicEntryView) -> dict[str, str | None]:
+    """Convert a public entry view into the default blog-card contract.
+
+    Args:
+        entry: Public entry projection.
+
+    Returns:
+        dict[str, str | None]: Card payload consumed by the default theme.
+
+    Raises:
+        None.
+    """
+
+    return {
+        'url': entry.url,
+        'title': entry.title,
+        'excerpt': entry.summary,
+        'category': entry.category,
+        'author': entry.author,
+        'published_at': entry.published_at,
+        'reading_time': entry.reading_time,
+        'image_url': entry.featured_image_url,
+        'image_alt': entry.featured_image_alt,
+    }
+
+
+def build_pagination(
+    *,
+    page: int,
+    per_page: int,
+    total: int,
+    path: str,
+    query_params: dict[str, str] | None = None,
+) -> PublicPagination:
+    """Build pagination metadata with previous/next links.
+
+    Args:
+        page: Requested one-based page number.
+        per_page: Requested page size.
+        total: Total matching records.
+        path: Base route path for generated links.
+        query_params: Optional stable query parameters for generated links.
+
+    Returns:
+        PublicPagination: Pagination metadata for templates.
+
+    Raises:
+        None.
+    """
+
+    normalized_page, normalized_per_page = normalize_pagination(page, per_page)
+    total_pages = max(1, math.ceil(total / normalized_per_page) if total else 1)
+    params = dict(query_params or {})
+
+    def _page_url(page_number: int) -> str:
+        values = dict(params)
+        values['page'] = str(page_number)
+        values['per_page'] = str(normalized_per_page)
+        return _build_query_url(path, values)
+
+    has_previous = normalized_page > 1
+    has_next = normalized_page < total_pages
+    return PublicPagination(
+        page=normalized_page,
+        per_page=normalized_per_page,
+        total=total,
+        total_pages=total_pages,
+        has_previous=has_previous,
+        has_next=has_next,
+        prev_url=_page_url(normalized_page - 1) if has_previous else None,
+        next_url=_page_url(normalized_page + 1) if has_next else None,
+    )
+
+
+def _build_fallback_html(status_code: int) -> str:
+    """Build a visitor-safe HTML fallback for theme render failures.
+
+    Args:
+        status_code: HTTP status code to represent.
+
+    Returns:
+        str: Safe fallback HTML.
+
+    Raises:
+        None.
+    """
+
+    if status_code == 404:
+        title = 'Not Found'
+        heading = 'The requested page could not be found.'
+        detail = 'Please return to the homepage or try another link.'
+    else:
+        title = 'Temporarily unavailable'
+        heading = 'This page is temporarily unavailable.'
+        detail = 'Please try again in a moment.'
+
+    return (
+        '<!doctype html>'
+        '<html lang="en">'
+        '<head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="robots" content="noindex,follow">'
+        f'<title>{escape(title)}</title>'
+        '</head>'
+        '<body>'
+        f'<h1>{escape(heading)}</h1>'
+        f'<p>{escape(detail)}</p>'
+        '<p><a href="/">Return home</a></p>'
+        '</body>'
+        '</html>'
+    )
+
+
+def render_public_template(
+    theme_runtime: ThemeRuntime,
+    template_name: str,
+    context: dict[str, Any],
+    *,
+    status_code: int,
+    error_status_code: int,
+) -> HTMLResponse:
+    """Render a theme template with visitor-safe fallback behavior.
+
+    Args:
+        theme_runtime: Active theme runtime instance.
+        template_name: Template name to render.
+        context: Template context payload.
+        status_code: HTTP status code for successful render.
+        error_status_code: HTTP status code for fallback render failures.
+
+    Returns:
+        HTMLResponse: Rendered template response or safe fallback response.
+
+    Raises:
+        None.
+    """
+
+    try:
+        rendered = theme_runtime.render_template(template_name, context)
+        return HTMLResponse(content=rendered, status_code=status_code)
+    except ThemeError:
+        logger.exception('Public template render failed', extra={'template': template_name})
+    except Exception:
+        logger.exception(
+            'Unexpected public template render failure',
+            extra={'template': template_name},
+        )
+
+    return HTMLResponse(
+        content=_build_fallback_html(error_status_code),
+        status_code=error_status_code,
+    )
