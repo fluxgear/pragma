@@ -4,7 +4,13 @@ import { evaluateNavigation, resolveNavigation } from '@/router/guards'
 
 function makeRoute(
   name: string,
-  meta: { guestOnly?: boolean; requiresAuth?: boolean; requiresSuperuser?: boolean } = {},
+  meta: {
+    guestOnly?: boolean
+    requiresAuth?: boolean
+    requiresSuperuser?: boolean
+    requiresPermission?: string
+    allowForcedPasswordChange?: boolean
+  } = {},
   fullPath = `/${name}`,
 ) {
   return {
@@ -21,6 +27,8 @@ describe('evaluateNavigation', () => {
         isInstalled: false,
         isAuthenticated: false,
         isSuperuser: false,
+        permissions: [],
+        forcePasswordChange: false,
       }),
     ).toEqual({ name: 'setup' })
   })
@@ -31,6 +39,8 @@ describe('evaluateNavigation', () => {
         isInstalled: false,
         isAuthenticated: false,
         isSuperuser: false,
+        permissions: [],
+        forcePasswordChange: false,
       }),
     ).toBe(true)
   })
@@ -41,6 +51,8 @@ describe('evaluateNavigation', () => {
         isInstalled: true,
         isAuthenticated: false,
         isSuperuser: false,
+        permissions: [],
+        forcePasswordChange: false,
       }),
     ).toEqual({
       name: 'login',
@@ -54,6 +66,8 @@ describe('evaluateNavigation', () => {
         isInstalled: true,
         isAuthenticated: true,
         isSuperuser: false,
+        permissions: [],
+        forcePasswordChange: false,
       }),
     ).toEqual({ name: 'dashboard' })
   })
@@ -64,6 +78,8 @@ describe('evaluateNavigation', () => {
         isInstalled: true,
         isAuthenticated: false,
         isSuperuser: false,
+        permissions: [],
+        forcePasswordChange: false,
       }),
     ).toEqual({ name: 'login' })
 
@@ -72,21 +88,49 @@ describe('evaluateNavigation', () => {
         isInstalled: true,
         isAuthenticated: true,
         isSuperuser: true,
+        permissions: [],
+        forcePasswordChange: false,
       }),
     ).toEqual({ name: 'dashboard' })
   })
 
-  it('routes non-superusers away from superuser-only routes', () => {
+  it('routes users away from routes requiring missing permissions', () => {
     expect(
       evaluateNavigation(
-        makeRoute('ai-settings', { requiresAuth: true, requiresSuperuser: true }, '/app/ai'),
+        makeRoute('ai-settings', { requiresAuth: true, requiresPermission: 'ai.settings.manage' }, '/app/ai'),
         {
           isInstalled: true,
           isAuthenticated: true,
           isSuperuser: false,
+          permissions: ['content.entries.read'],
+          forcePasswordChange: false,
         },
       ),
     ).toEqual({ name: 'dashboard' })
+  })
+
+  it('routes forced-password-change users to the account route', () => {
+    expect(
+      evaluateNavigation(makeRoute('content', { requiresAuth: true, requiresPermission: 'content.entries.read' }, '/app/content'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: ['content.entries.read'],
+        forcePasswordChange: true,
+      }),
+    ).toEqual({ name: 'account' })
+  })
+
+  it('allows the account route during forced password rotation', () => {
+    expect(
+      evaluateNavigation(makeRoute('account', { requiresAuth: true, allowForcedPasswordChange: true }, '/app/account'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: [],
+        forcePasswordChange: true,
+      }),
+    ).toBe(true)
   })
 })
 
@@ -102,6 +146,7 @@ describe('resolveNavigation', () => {
       user: null,
       errorMessage: null,
       startupError: null,
+      hasPermission: vi.fn().mockReturnValue(false),
       ensureInitialized: vi.fn(),
     }
 
@@ -122,6 +167,7 @@ describe('resolveNavigation', () => {
       user: null,
       errorMessage: null as string | null,
       startupError: null as string | null,
+      hasPermission: vi.fn().mockReturnValue(false),
       ensureInitialized: vi.fn().mockImplementation(async () => {
         authStore.errorMessage = 'Backend unavailable'
         authStore.startupError = 'Backend unavailable'
@@ -145,6 +191,7 @@ describe('resolveNavigation', () => {
       user: null,
       errorMessage: 'Backend unavailable',
       startupError: 'Backend unavailable',
+      hasPermission: vi.fn().mockReturnValue(false),
       ensureInitialized: vi.fn(),
     }
 
@@ -164,6 +211,7 @@ describe('resolveNavigation', () => {
       user: null,
       errorMessage: 'Invalid credentials',
       startupError: null,
+      hasPermission: vi.fn().mockReturnValue(false),
       ensureInitialized: vi.fn(),
     }
 
@@ -186,6 +234,7 @@ describe('resolveNavigation', () => {
       user: null,
       errorMessage: null,
       startupError: null,
+      hasPermission: vi.fn().mockReturnValue(false),
       ensureInitialized: vi.fn(),
     }
 

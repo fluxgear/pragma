@@ -20,6 +20,7 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from psycopg import Error as PsycopgError
 
+from pragma.auth.permissions import ensure_permission
 from pragma.auth.security import ACCESS_TOKEN_TYPE, decode_token
 from pragma.config import Settings, get_settings
 from pragma.errors import AuthError, StorageError
@@ -118,3 +119,50 @@ def get_current_superuser(
             status_code=403,
         )
     return current_user
+
+
+def require_password_change_cleared(
+    current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Require the authenticated user to complete any forced password change.
+
+    Args:
+        current_user: Authenticated user context.
+
+    Returns:
+        dict[str, Any]: Authenticated user context when normal access is allowed.
+
+    Raises:
+        AuthError: If the user must change their password before continuing.
+    """
+
+    if bool(current_user.get('force_password_change')):
+        raise AuthError(
+            detail='Password change is required before accessing this resource',
+            code='AUTH_PASSWORD_CHANGE_REQUIRED',
+            status_code=403,
+        )
+    return current_user
+
+
+def require_permission(permission: str):
+    """Build a dependency that enforces a stable permission key.
+
+    Args:
+        permission: Stable permission identifier.
+
+    Returns:
+        Callable: Dependency that returns the authenticated user when permitted.
+
+    Raises:
+        None.
+    """
+
+    def dependency(
+        current_user: Annotated[dict[str, Any], Depends(get_current_user)],
+    ) -> dict[str, Any]:
+        require_password_change_cleared(current_user)
+        ensure_permission(current_user, permission)
+        return current_user
+
+    return dependency

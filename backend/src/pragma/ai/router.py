@@ -31,7 +31,8 @@ from pragma.ai.service import (
     test_ai_provider_connection,
     update_ai_provider_settings_snapshot,
 )
-from pragma.auth.dependencies import get_current_superuser, get_current_user
+from pragma.auth.dependencies import get_current_user, require_permission
+from pragma.auth.permissions import PERMISSION_AI_SETTINGS_MANAGE
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 
@@ -51,6 +52,10 @@ _AUTHENTICATED_AI_ERROR_RESPONSES = {
         'description': 'Authentication required',
         'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
     },
+    status.HTTP_403_FORBIDDEN: {
+        'description': 'Permission required',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
         'description': 'Request validation failed',
         'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
@@ -67,10 +72,6 @@ _SUPERUSER_AI_ERROR_RESPONSES = {
         'description': 'AI provider settings are invalid',
         'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
     },
-    status.HTTP_403_FORBIDDEN: {
-        'description': 'Superuser privileges required',
-        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
-    },
 }
 
 
@@ -81,12 +82,15 @@ _SUPERUSER_AI_ERROR_RESPONSES = {
 )
 def get_ai_settings(
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_superuser)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_AI_SETTINGS_MANAGE))
+    ],
 ) -> AIProviderSettingsResponse:
     """Return the persisted AI-provider settings snapshot.
 
     Args:
         storage: Initialized database pool manager.
+        current_user: Authenticated user context with AI-settings permission.
 
     Returns:
         AIProviderSettingsResponse: Current AI-provider settings snapshot.
@@ -108,20 +112,21 @@ def get_ai_settings(
 def update_ai_settings(
     payload: AIProviderSettingsUpdateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_superuser)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_AI_SETTINGS_MANAGE))
+    ],
 ) -> AIProviderSettingsResponse:
     """Update AI-provider settings for semantic search integrations.
 
     Args:
         payload: Provider settings update payload.
         storage: Initialized database pool manager.
-        current_user: Authenticated superuser context.
+        current_user: Authenticated user context with AI-settings permission.
 
     Returns:
         AIProviderSettingsResponse: Updated AI-provider settings snapshot.
 
     Raises:
-        AuthError: If superuser privileges are missing.
         ConfigError: If payload settings are invalid.
         StorageError: If PostgreSQL access fails.
     """
@@ -137,20 +142,21 @@ def update_ai_settings(
 def test_ai_settings(
     payload: AIProviderTestRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_superuser)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_AI_SETTINGS_MANAGE))
+    ],
 ) -> AIProviderTestResponse:
     """Test provider connectivity using the persisted AI settings.
 
     Args:
         payload: Provider connectivity test payload.
         storage: Initialized database pool manager.
-        current_user: Authenticated superuser context.
+        current_user: Authenticated user context with AI-settings permission.
 
     Returns:
         AIProviderTestResponse: Provider test result payload.
 
     Raises:
-        AuthError: If superuser privileges are missing.
         ConfigError: If provider settings are invalid.
         SearchError: If provider request fails.
         StorageError: If PostgreSQL access fails.
@@ -168,20 +174,21 @@ def test_ai_settings(
 def rebuild_ai_embeddings(
     payload: AISearchEmbeddingRebuildRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_superuser)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_AI_SETTINGS_MANAGE))
+    ],
 ) -> AISearchEmbeddingRebuildResponse:
     """Rebuild search embeddings without touching content CRUD hooks.
 
     Args:
         payload: Search-embedding rebuild payload.
         storage: Initialized database pool manager.
-        current_user: Authenticated superuser context.
+        current_user: Authenticated user context with AI-settings permission.
 
     Returns:
         AISearchEmbeddingRebuildResponse: Rebuild result payload.
 
     Raises:
-        AuthError: If superuser privileges are missing.
         ConfigError: If provider settings are invalid.
         SearchError: If semantic embeddings are unavailable.
         StorageError: If PostgreSQL access fails.

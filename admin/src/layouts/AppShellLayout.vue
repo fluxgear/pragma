@@ -13,7 +13,8 @@
       <template #end>
         <div class="shell__toolbar-end">
           <span class="muted">{{ user?.email }}</span>
-          <Tag :severity="user?.is_superuser ? 'info' : 'secondary'" :value="user?.is_superuser ? 'Super-admin' : 'User'" />
+          <Tag :severity="user?.is_superuser ? 'info' : 'secondary'" :value="roleBadge" />
+          <Tag v-if="requiresPasswordChange" severity="warn" value="Password change required" />
           <Button icon="pi pi-sign-out" label="Logout" severity="secondary" @click="handleLogout" />
         </div>
       </template>
@@ -57,25 +58,51 @@ import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
-const { user } = storeToRefs(authStore)
+const { user, requiresPasswordChange } = storeToRefs(authStore)
 const route = useRoute()
 const router = useRouter()
 
+const roleBadge = computed(() => {
+  if (user.value?.is_superuser) {
+    return 'Super-admin'
+  }
+  if (user.value?.roles.length) {
+    return user.value.roles.join(', ')
+  }
+  return 'User'
+})
+
 const navigationItems = computed(() => [
   { label: 'Dashboard', icon: 'pi pi-home', routeName: 'dashboard', disabled: false },
-  { label: 'Content', icon: 'pi pi-file-edit', routeName: 'content', disabled: false },
-  { label: 'Media', icon: 'pi pi-images', routeName: 'media', disabled: false },
+  {
+    label: 'Content',
+    icon: 'pi pi-file-edit',
+    routeName: 'content',
+    disabled: !authStore.hasPermission('content.entries.read'),
+  },
+  {
+    label: 'Media',
+    icon: 'pi pi-images',
+    routeName: 'media',
+    disabled: !authStore.hasPermission('media.assets.read'),
+  },
   {
     label: 'AI settings',
     icon: 'pi pi-sparkles',
     routeName: 'ai-settings',
-    disabled: user.value?.is_superuser !== true,
+    disabled: !authStore.hasPermission('ai.settings.manage'),
   },
   {
-    label: 'Themes (M6)',
-    icon: 'pi pi-palette',
-    routeName: 'dashboard',
-    disabled: true,
+    label: 'Users',
+    icon: 'pi pi-users',
+    routeName: 'users',
+    disabled: !authStore.hasPermission('users.manage'),
+  },
+  {
+    label: 'Account',
+    icon: 'pi pi-user',
+    routeName: 'account',
+    disabled: false,
   },
 ])
 

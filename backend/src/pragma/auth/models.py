@@ -39,6 +39,9 @@ class UserResponse(BaseModel):
     full_name: str | None
     is_active: bool
     is_superuser: bool
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    force_password_change: bool = False
 
     @classmethod
     def from_record(cls, record: Mapping[str, Any]) -> UserResponse:
@@ -61,6 +64,9 @@ class UserResponse(BaseModel):
             full_name=record["full_name"],
             is_active=bool(record["is_active"]),
             is_superuser=bool(record["is_superuser"]),
+            roles=[str(value) for value in record.get('roles', [])],
+            permissions=[str(value) for value in record.get('permissions', [])],
+            force_password_change=bool(record.get('force_password_change', False)),
         )
 
 
@@ -79,6 +85,23 @@ class LoginRequest(BaseModel):
 
     identity: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=512)
+
+
+class ChangePasswordRequest(BaseModel):
+    """Authenticated password-change request payload.
+
+    Args:
+        BaseModel: Pydantic model base class.
+
+    Returns:
+        None.
+
+    Raises:
+        ValidationError: If payload fields are invalid.
+    """
+
+    current_password: str = Field(min_length=8, max_length=512)
+    new_password: str = Field(min_length=8, max_length=512)
 
 
 class TokenResponse(BaseModel):

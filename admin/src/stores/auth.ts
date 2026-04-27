@@ -1,9 +1,14 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import { getCurrentUser, loginUser, logoutUser, refreshSession } from '@/api/auth'
+import { changePassword, getCurrentUser, loginUser, logoutUser, refreshSession } from '@/api/auth'
 import { ApiClientError, asUserMessage } from '@/api/errors'
-import type { LoginRequest, TokenResponse, UserResponse } from '@/api/types'
+import type {
+  ChangePasswordRequest,
+  LoginRequest,
+  TokenResponse,
+  UserResponse,
+} from '@/api/types'
 
 export const useAuthStore = defineStore('auth', () => {
   const accessToken = ref<string | null>(null)
@@ -15,6 +20,7 @@ export const useAuthStore = defineStore('auth', () => {
   const startupError = ref<string | null>(null)
 
   const isAuthenticated = computed(() => accessToken.value !== null && user.value !== null)
+  const requiresPasswordChange = computed(() => user.value?.force_password_change === true)
 
   function setSession(payload: TokenResponse): void {
     accessToken.value = payload.access_token
@@ -31,6 +37,16 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     initialized.value = markInitialized
     startupError.value = null
+  }
+
+  function hasPermission(permission: string): boolean {
+    if (user.value === null) {
+      return false
+    }
+    if (user.value.is_superuser) {
+      return true
+    }
+    return user.value.permissions.includes(permission)
   }
 
   async function login(payload: LoginRequest): Promise<TokenResponse> {
@@ -104,6 +120,16 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function rotateOwnPassword(payload: ChangePasswordRequest): Promise<UserResponse> {
+    if (accessToken.value === null) {
+      throw new Error('Authentication required')
+    }
+
+    const updatedUser = await changePassword(accessToken.value, payload)
+    user.value = updatedUser
+    return updatedUser
+  }
+
   async function logout(): Promise<void> {
     loading.value = true
 
@@ -127,10 +153,13 @@ export const useAuthStore = defineStore('auth', () => {
     errorMessage,
     startupError,
     isAuthenticated,
+    requiresPasswordChange,
+    hasPermission,
     login,
     restoreSession,
     ensureInitialized,
     syncCurrentUser,
+    rotateOwnPassword,
     logout,
     clearSession,
   }

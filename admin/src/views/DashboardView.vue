@@ -2,8 +2,12 @@
   <div class="page">
     <div class="page__header">
       <h1>Dashboard</h1>
-      <p class="muted">Authenticated workbench shell for future admin milestones.</p>
+      <p class="muted">Authenticated workbench for roles, permissions, and operational status.</p>
     </div>
+
+    <Message v-if="requiresPasswordChange" severity="warn" :closable="false">
+      Your account must change its password before normal administrative work continues.
+    </Message>
 
     <div class="page__grid">
       <Card>
@@ -15,8 +19,12 @@
               <span>{{ user?.email }}</span>
             </div>
             <div class="status-row">
-              <span>Role</span>
-              <Tag :severity="user?.is_superuser ? 'info' : 'secondary'" :value="user?.is_superuser ? 'Super-admin' : 'User'" />
+              <span>Roles</span>
+              <span>{{ user?.roles.join(', ') || (user?.is_superuser ? 'super-admin' : 'none') }}</span>
+            </div>
+            <div class="status-row">
+              <span>Permissions</span>
+              <span>{{ user?.permissions.length ?? 0 }}</span>
             </div>
             <div class="status-row">
               <span>Access token loaded</span>
@@ -56,21 +64,24 @@
       </Card>
 
       <Card>
-        <template #title>Admin workbench</template>
+        <template #title>M11 security posture</template>
         <template #content>
-          <div class="form-stack">
-            <p class="muted">
-              M5 brings the media library online. Content authoring and media management are now available from the authenticated workbench.
-            </p>
-            <div class="status-list">
-              <div class="status-row">
-                <span>Configured API base</span>
-                <Tag severity="contrast" :value="apiBase" />
-              </div>
-              <div class="status-row">
-                <span>Next milestone target</span>
-                <Tag severity="info" value="M6 theme engine" />
-              </div>
+          <div class="status-list">
+            <div class="status-row">
+              <span>User administration</span>
+              <Tag :severity="authStore.hasPermission('users.manage') ? 'success' : 'secondary'" :value="authStore.hasPermission('users.manage') ? 'Available' : 'Not assigned'" />
+            </div>
+            <div class="status-row">
+              <span>AI administration</span>
+              <Tag :severity="authStore.hasPermission('ai.settings.manage') ? 'success' : 'secondary'" :value="authStore.hasPermission('ai.settings.manage') ? 'Available' : 'Not assigned'" />
+            </div>
+            <div class="status-row">
+              <span>Module administration</span>
+              <Tag :severity="authStore.hasPermission('modules.manage') ? 'success' : 'secondary'" :value="authStore.hasPermission('modules.manage') ? 'Available' : 'Not assigned'" />
+            </div>
+            <div class="status-row">
+              <span>Next milestone target</span>
+              <Tag severity="info" value="M12 realtime" />
             </div>
           </div>
         </template>
@@ -84,10 +95,10 @@ import { computed, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
+import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import { useRoute, useRouter } from 'vue-router'
 
-import { getApiBase } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useInstallStore } from '@/stores/install'
 
@@ -96,10 +107,9 @@ const installStore = useInstallStore()
 const route = useRoute()
 const router = useRouter()
 
-const { accessToken, user } = storeToRefs(authStore)
+const { accessToken, user, requiresPasswordChange } = storeToRefs(authStore)
 const { readiness, readinessOk, schemaReady } = storeToRefs(installStore)
 
-const apiBase = getApiBase()
 const capabilityEntries = computed(() => Object.entries(readiness.value?.capabilities ?? {}))
 
 async function redirectToLogin(): Promise<void> {

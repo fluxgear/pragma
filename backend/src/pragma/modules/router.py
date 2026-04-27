@@ -17,7 +17,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, status
 
-from pragma.auth.dependencies import get_current_superuser, get_current_user
+from pragma.auth.dependencies import get_current_user, require_permission
+from pragma.auth.permissions import PERMISSION_MODULES_MANAGE
 from pragma.modules.dependencies import get_module_runtime
 from pragma.modules.models import ModuleListResponse, ModuleStateResponse, ModuleStateUpdateRequest
 from pragma.modules.runtime import ModuleRuntime
@@ -50,7 +51,7 @@ _MODULE_ERROR_RESPONSES = {
         'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
     },
     status.HTTP_403_FORBIDDEN: {
-        'description': 'Superuser privileges required',
+        'description': 'Permission required',
         'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
     },
     status.HTTP_404_NOT_FOUND: {
@@ -72,14 +73,16 @@ _MODULE_ERROR_RESPONSES = {
 def list_modules(
     storage: Annotated[DatabasePool, Depends(get_storage)],
     runtime: Annotated[ModuleRuntime, Depends(get_module_runtime)],
-    current_user: Annotated[dict[str, object], Depends(get_current_superuser)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MODULES_MANAGE))
+    ],
 ) -> ModuleListResponse:
     """Return discovered modules and their persisted lifecycle state.
 
     Args:
         storage: Initialized database pool manager.
         runtime: Initialized module runtime instance.
-        current_user: Authenticated superuser context.
+        current_user: Authenticated user context with module-management permission.
 
     Returns:
         ModuleListResponse: Ordered discovered-module state payload.
@@ -102,7 +105,9 @@ def update_module(
     payload: ModuleStateUpdateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
     runtime: Annotated[ModuleRuntime, Depends(get_module_runtime)],
-    current_user: Annotated[dict[str, object], Depends(get_current_superuser)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MODULES_MANAGE))
+    ],
 ) -> ModuleStateResponse:
     """Enable or disable a discovered module in persisted module state.
 
@@ -111,13 +116,12 @@ def update_module(
         payload: Module-state update payload.
         storage: Initialized database pool manager.
         runtime: Initialized module runtime instance.
-        current_user: Authenticated superuser context.
+        current_user: Authenticated user context with module-management permission.
 
     Returns:
         ModuleStateResponse: Updated module state payload.
 
     Raises:
-        AuthError: If superuser privileges are missing.
         ModuleError: If the module state update fails.
     """
 

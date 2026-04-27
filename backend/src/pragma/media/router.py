@@ -19,7 +19,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import FileResponse
 
-from pragma.auth.dependencies import get_current_user
+from pragma.auth.dependencies import get_current_user, require_permission
+from pragma.auth.permissions import (
+    PERMISSION_MEDIA_ASSETS_DELETE,
+    PERMISSION_MEDIA_ASSETS_READ,
+    PERMISSION_MEDIA_ASSETS_UPLOAD,
+)
 from pragma.config import Settings, get_settings
 from pragma.media.models import MediaAssetListParams, MediaAssetListResponse, MediaAssetResponse
 from pragma.media.service import (
@@ -49,6 +54,10 @@ _ERROR_RESPONSE_SCHEMA = {
 _COMMON_MEDIA_ERROR_RESPONSES = {
     status.HTTP_401_UNAUTHORIZED: {
         'description': 'Authentication required',
+        'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
+    },
+    status.HTTP_403_FORBIDDEN: {
+        'description': 'Permission required',
         'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
     },
     status.HTTP_422_UNPROCESSABLE_CONTENT: {
@@ -99,7 +108,9 @@ async def upload_media_asset(
     filename: Annotated[str, Query(min_length=1, max_length=255)],
     storage: Annotated[DatabasePool, Depends(get_storage)],
     settings: Annotated[Settings, Depends(get_settings)],
-    current_user: Annotated[dict[str, object], Depends(get_current_user)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MEDIA_ASSETS_UPLOAD))
+    ],
     alt_text: Annotated[str | None, Query(max_length=255)] = None,
     caption: Annotated[str | None, Query(max_length=1000)] = None,
     description: Annotated[str | None, Query(max_length=4000)] = None,
@@ -147,12 +158,16 @@ async def upload_media_asset(
 def list_media_library_assets(
     params: Annotated[MediaAssetListParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MEDIA_ASSETS_READ))
+    ],
 ) -> MediaAssetListResponse:
     """List stored media assets.
 
     Args:
         params: Media-list query parameters.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         MediaAssetListResponse: Paginated media response.
@@ -161,6 +176,7 @@ def list_media_library_assets(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     return list_media_assets(storage, params)
 
 
@@ -172,12 +188,16 @@ def list_media_library_assets(
 def get_media_library_asset(
     media_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MEDIA_ASSETS_READ))
+    ],
 ) -> MediaAssetResponse:
     """Return a single media asset by identifier.
 
     Args:
         media_id: Media asset identifier.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         MediaAssetResponse: Serialized media response.
@@ -187,6 +207,7 @@ def get_media_library_asset(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     return get_media_asset(storage, media_id)
 
 
@@ -198,6 +219,9 @@ def get_media_library_content(
     media_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
     settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MEDIA_ASSETS_READ))
+    ],
 ) -> FileResponse:
     """Return stored media bytes for authenticated preview or download.
 
@@ -205,6 +229,7 @@ def get_media_library_content(
         media_id: Media asset identifier.
         storage: Initialized database pool manager.
         settings: Application settings.
+        current_user: Authenticated user context.
 
     Returns:
         FileResponse: Authenticated file response.
@@ -214,6 +239,7 @@ def get_media_library_content(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     path, mime_type, filename = resolve_media_content(storage, settings, media_id)
     return FileResponse(path=path, media_type=mime_type, filename=filename)
 
@@ -227,6 +253,9 @@ def delete_media_library_asset(
     media_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
     settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MEDIA_ASSETS_DELETE))
+    ],
 ) -> Response:
     """Delete a stored media asset.
 
@@ -234,6 +263,7 @@ def delete_media_library_asset(
         media_id: Media asset identifier.
         storage: Initialized database pool manager.
         settings: Application settings.
+        current_user: Authenticated user context.
 
     Returns:
         Response: Empty HTTP 204 response.
@@ -243,5 +273,6 @@ def delete_media_library_asset(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     delete_media_asset(storage, settings, media_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

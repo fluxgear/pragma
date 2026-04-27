@@ -72,6 +72,9 @@ async function mountView(isSuperuser = true) {
     full_name: 'Admin User',
     is_active: true,
     is_superuser: isSuperuser,
+    roles: isSuperuser ? ['administrator'] : ['viewer'],
+    permissions: isSuperuser ? ['ai.settings.manage'] : [],
+    force_password_change: false,
   }
 
   const wrapper = mount(AiSettingsView, {
@@ -175,6 +178,7 @@ describe('AiSettingsView', () => {
 
   it('runs embedding rebuild and shows rebuild feedback', async () => {
     const { wrapper } = await mountView()
+
 
     await wrapper.get('#ai-rebuild-btn').trigger('click')
     await flushPromises()

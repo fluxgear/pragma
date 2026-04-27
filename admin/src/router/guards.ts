@@ -5,6 +5,8 @@ declare module 'vue-router' {
     guestOnly?: boolean
     requiresAuth?: boolean
     requiresSuperuser?: boolean
+    requiresPermission?: string
+    allowForcedPasswordChange?: boolean
     title?: string
   }
 }
@@ -19,6 +21,8 @@ export interface GuardState {
   isInstalled: boolean
   isAuthenticated: boolean
   isSuperuser: boolean
+  permissions: string[]
+  forcePasswordChange: boolean
 }
 
 export interface NavigationInstallStore {
@@ -29,9 +33,10 @@ export interface NavigationInstallStore {
 export interface NavigationAuthStore {
   initialized: boolean
   isAuthenticated: boolean
-  user: { is_superuser: boolean } | null
+  user: { is_superuser: boolean; permissions: string[]; force_password_change: boolean } | null
   errorMessage: string | null
   startupError: string | null
+  hasPermission(permission: string): boolean
   ensureInitialized(shouldRestore: boolean): Promise<void>
 }
 
@@ -70,6 +75,14 @@ export function evaluateNavigation(
     return { name: 'dashboard' }
   }
 
+  if (state.forcePasswordChange && !route.meta.allowForcedPasswordChange) {
+    return { name: 'account' }
+  }
+
+  if (route.meta.requiresPermission && !state.permissions.includes(route.meta.requiresPermission) && !state.isSuperuser) {
+    return { name: 'dashboard' }
+  }
+
   if (route.meta.requiresSuperuser && !state.isSuperuser) {
     return { name: 'dashboard' }
   }
@@ -97,5 +110,7 @@ export async function resolveNavigation(
     isInstalled: installStore.isInstalled,
     isAuthenticated: authStore.isAuthenticated,
     isSuperuser: authStore.user?.is_superuser === true,
+    permissions: authStore.user?.permissions ?? [],
+    forcePasswordChange: authStore.user?.force_password_change === true,
   })
 }

@@ -116,6 +116,8 @@ def bootstrap_install(
                 password_hash=hash_password(payload.password),
                 full_name=payload.full_name.strip() if payload.full_name else None,
                 is_superuser=True,
+                is_active=True,
+                force_password_change=False,
                 created_at=created_at,
             )
             mark_installed(connection, user["id"], created_at)

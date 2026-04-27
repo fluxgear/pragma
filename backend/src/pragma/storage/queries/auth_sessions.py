@@ -134,3 +134,30 @@ def revoke_refresh_session(connection: Connection, session_id: UUID, revoked_at:
         """,
         (revoked_at, revoked_at, session_id),
     )
+
+
+def revoke_refresh_sessions_for_user(
+    connection: Connection, user_id: UUID, revoked_at: datetime
+) -> None:
+    """Revoke all active refresh-token sessions for a user account.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        user_id: Authenticated user identifier.
+        revoked_at: Revocation timestamp.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    connection.execute(
+        """
+        UPDATE pragma_refresh_tokens
+        SET revoked_at = %s, last_used_at = COALESCE(last_used_at, %s)
+        WHERE user_id = %s AND revoked_at IS NULL
+        """,
+        (revoked_at, revoked_at, user_id),
+    )

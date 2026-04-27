@@ -18,7 +18,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from pragma.auth.dependencies import get_current_user
+from pragma.auth.dependencies import get_current_user, require_permission
+from pragma.auth.permissions import (
+    PERMISSION_CONTENT_ENTRIES_DELETE,
+    PERMISSION_CONTENT_ENTRIES_READ,
+    PERMISSION_CONTENT_ENTRIES_WRITE,
+    PERMISSION_CONTENT_TYPES_MANAGE,
+    PERMISSION_CONTENT_TYPES_READ,
+)
 from pragma.content.models import (
     ContentEntryCreateRequest,
     ContentEntryListParams,
@@ -57,7 +64,9 @@ router = APIRouter(
 def create_content_type(
     payload: ContentTypeCreateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_user)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_TYPES_MANAGE))
+    ],
 ) -> ContentTypeResponse:
     """Create a content type with its field definitions.
 
@@ -81,12 +90,16 @@ def create_content_type(
 def list_content_types(
     params: Annotated[ContentTypeListParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_TYPES_READ))
+    ],
 ) -> ContentTypeListResponse:
     """List content types.
 
     Args:
         params: Content-type list query parameters.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         ContentTypeListResponse: Paginated content-type response.
@@ -95,6 +108,7 @@ def list_content_types(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     return list_content_type_records(storage, params)
 
 
@@ -102,12 +116,16 @@ def list_content_types(
 def get_content_type(
     content_type_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_TYPES_READ))
+    ],
 ) -> ContentTypeResponse:
     """Return a single content type by identifier.
 
     Args:
         content_type_id: Content-type identifier.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         ContentTypeResponse: Serialized content-type response.
@@ -117,6 +135,7 @@ def get_content_type(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     return get_content_type_record(storage, content_type_id)
 
 
@@ -125,7 +144,9 @@ def update_content_type(
     content_type_id: UUID,
     payload: ContentTypeUpdateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_user)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_TYPES_MANAGE))
+    ],
 ) -> ContentTypeResponse:
     """Update a content type and its field definitions.
 
@@ -150,12 +171,16 @@ def update_content_type(
 def delete_content_type(
     content_type_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_TYPES_MANAGE))
+    ],
 ) -> Response:
     """Delete a content type when it has no entries.
 
     Args:
         content_type_id: Content-type identifier.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         Response: Empty HTTP 204 response.
@@ -165,6 +190,7 @@ def delete_content_type(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     delete_content_type_record(storage, content_type_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -173,7 +199,9 @@ def delete_content_type(
 def create_entry(
     payload: ContentEntryCreateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_user)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
 ) -> ContentEntryResponse:
     """Create a content entry.
 
@@ -197,12 +225,16 @@ def create_entry(
 def list_entries_for_content(
     params: Annotated[ContentEntryListParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_READ))
+    ],
 ) -> ContentEntryListResponse:
     """List content entries.
 
     Args:
         params: Content-entry list query parameters.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         ContentEntryListResponse: Paginated content-entry response.
@@ -212,6 +244,7 @@ def list_entries_for_content(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     return list_entry_records(storage, params)
 
 
@@ -219,12 +252,16 @@ def list_entries_for_content(
 def get_entry(
     entry_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_READ))
+    ],
 ) -> ContentEntryResponse:
     """Return a single content entry by identifier.
 
     Args:
         entry_id: Content-entry identifier.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         ContentEntryResponse: Serialized content-entry response.
@@ -234,6 +271,7 @@ def get_entry(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     return get_entry_record(storage, entry_id)
 
 
@@ -242,7 +280,9 @@ def update_entry(
     entry_id: UUID,
     payload: ContentEntryUpdateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
-    current_user: Annotated[dict[str, object], Depends(get_current_user)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
 ) -> ContentEntryResponse:
     """Update a content entry.
 
@@ -267,12 +307,16 @@ def update_entry(
 def delete_entry_for_content(
     entry_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_DELETE))
+    ],
 ) -> Response:
     """Delete a content entry.
 
     Args:
         entry_id: Content-entry identifier.
         storage: Initialized database pool manager.
+        current_user: Authenticated user context.
 
     Returns:
         Response: Empty HTTP 204 response.
@@ -282,5 +326,6 @@ def delete_entry_for_content(
         StorageError: If the storage layer fails.
     """
 
+    _ = current_user
     delete_entry_record(storage, entry_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -428,8 +428,8 @@ def test_modules_api_requires_superuser(
 
     assert response.status_code == 403
     assert response.json() == {
-        'detail': 'Superuser privileges are required',
-        'code': 'AUTH_SUPERUSER_REQUIRED',
+        'detail': 'Permission modules.manage is required',
+        'code': 'AUTH_PERMISSION_DENIED',
     }
 
 

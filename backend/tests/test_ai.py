@@ -442,8 +442,8 @@ def test_ai_superuser_routes_require_superuser(
 
     assert response.status_code == 403
     assert response.json() == {
-        'detail': 'Superuser privileges are required',
-        'code': 'AUTH_SUPERUSER_REQUIRED',
+        'detail': 'Permission ai.settings.manage is required',
+        'code': 'AUTH_PERMISSION_DENIED',
     }
 
 
@@ -484,8 +484,8 @@ def test_ai_settings_read_requires_superuser(
 
     assert response.status_code == 403
     assert response.json() == {
-        'detail': 'Superuser privileges are required',
-        'code': 'AUTH_SUPERUSER_REQUIRED',
+        'detail': 'Permission ai.settings.manage is required',
+        'code': 'AUTH_PERMISSION_DENIED',
     }
 
 

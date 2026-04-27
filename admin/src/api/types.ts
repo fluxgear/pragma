@@ -26,11 +26,19 @@ export interface UserResponse {
   full_name: string | null
   is_active: boolean
   is_superuser: boolean
+  roles: string[]
+  permissions: string[]
+  force_password_change: boolean
 }
 
 export interface LoginRequest {
   identity: string
   password: string
+}
+
+export interface ChangePasswordRequest {
+  current_password: string
+  new_password: string
 }
 
 export interface TokenResponse {
@@ -55,6 +63,56 @@ export interface BootstrapResponse {
 export interface ErrorResponse {
   detail: string
   code?: string
+}
+
+export interface RoleResponse {
+  role_key: string
+  name: string
+  description: string | null
+  is_system: boolean
+  permission_keys: string[]
+}
+
+export interface RoleListResponse {
+  items: RoleResponse[]
+  total: number
+}
+
+export interface AdminUserResponse extends UserResponse {
+  last_login_at: string | null
+  password_changed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AdminUserListResponse {
+  items: AdminUserResponse[]
+  total: number
+}
+
+export interface AdminUserCreateRequest {
+  email: string
+  username: string
+  full_name?: string | null
+  password: string
+  is_active: boolean
+  role_keys: string[]
+  force_password_change: boolean
+}
+
+export interface AdminUserUpdateRequest {
+  email?: string | null
+  username?: string | null
+  full_name?: string | null
+  is_active?: boolean | null
+}
+
+export interface UserRoleAssignmentRequest {
+  role_keys: string[]
+}
+
+export interface PasswordResetResponse {
+  temporary_password: string
 }
 
 interface ContentFieldDefinitionBase {

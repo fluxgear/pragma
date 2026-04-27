@@ -17,8 +17,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
+from pragma.auth.admin_service import change_current_user_password
 from pragma.auth.dependencies import get_current_user
-from pragma.auth.models import LoginRequest, TokenResponse, UserResponse
+from pragma.auth.models import (
+    ChangePasswordRequest,
+    LoginRequest,
+    TokenResponse,
+    UserResponse,
+)
 from pragma.auth.service import authenticate_user, logout_user, refresh_user_session
 from pragma.config import Settings, get_settings
 from pragma.storage import get_storage
@@ -201,3 +207,33 @@ def me(current_user: Annotated[dict[str, object], Depends(get_current_user)]) ->
     """
 
     return UserResponse.from_record(current_user)
+
+
+@router.post("/change-password", response_model=UserResponse)
+def change_password(
+    payload: ChangePasswordRequest,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[dict[str, object], Depends(get_current_user)],
+) -> UserResponse:
+    """Change the current authenticated user's password.
+
+    Args:
+        payload: Authenticated password-change payload.
+        storage: Initialized database pool manager.
+        current_user: Authenticated user context.
+
+    Returns:
+        UserResponse: Updated authenticated user payload.
+
+    Raises:
+        AuthError: If authentication or the current password is invalid.
+        StorageError: If the storage layer fails during password rotation.
+    """
+
+    updated_user = change_current_user_password(
+        storage,
+        dict(current_user),
+        payload.current_password,
+        payload.new_password,
+    )
+    return UserResponse.from_record(updated_user)

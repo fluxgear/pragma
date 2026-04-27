@@ -1,5 +1,10 @@
 import { apiRequest } from '@/api/client'
-import type { LoginRequest, TokenResponse, UserResponse } from '@/api/types'
+import type {
+  ChangePasswordRequest,
+  LoginRequest,
+  TokenResponse,
+  UserResponse,
+} from '@/api/types'
 
 export function loginUser(payload: LoginRequest): Promise<TokenResponse> {
   return apiRequest<TokenResponse>('/auth/login', {
@@ -24,5 +29,16 @@ export function getCurrentUser(accessToken: string): Promise<UserResponse> {
   return apiRequest<UserResponse>('/auth/me', {
     method: 'GET',
     accessToken,
+  })
+}
+
+export function changePassword(
+  accessToken: string,
+  payload: ChangePasswordRequest,
+): Promise<UserResponse> {
+  return apiRequest<UserResponse>('/auth/change-password', {
+    method: 'POST',
+    accessToken,
+    body: payload,
   })
 }

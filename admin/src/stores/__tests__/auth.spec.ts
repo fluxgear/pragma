@@ -5,6 +5,7 @@ import { ApiClientError } from '@/api/errors'
 import { useAuthStore } from '@/stores/auth'
 
 const authApiMocks = vi.hoisted(() => ({
+  changePassword: vi.fn(),
   getCurrentUser: vi.fn(),
   loginUser: vi.fn(),
   logoutUser: vi.fn(),
@@ -24,6 +25,9 @@ const authPayload = {
     full_name: 'Admin User',
     is_active: true,
     is_superuser: true,
+    roles: ['administrator'],
+    permissions: ['users.manage', 'ai.settings.manage'],
+    force_password_change: false,
   },
 }
 
@@ -83,6 +87,7 @@ describe('useAuthStore', () => {
 
     expect(store.isAuthenticated).toBe(true)
     expect(store.user?.full_name).toBe('Admin User')
+    expect(store.hasPermission('users.manage')).toBe(true)
 
     await store.syncCurrentUser()
     expect(store.user?.full_name).toBe('Updated Admin')
@@ -90,5 +95,30 @@ describe('useAuthStore', () => {
     await store.logout()
     expect(store.isAuthenticated).toBe(false)
     expect(store.accessToken).toBeNull()
+  })
+
+  it('rotates the current user password and clears forced-change state', async () => {
+    authApiMocks.changePassword.mockResolvedValue({
+      ...authPayload.user,
+      force_password_change: false,
+    })
+
+    const store = useAuthStore()
+    store.accessToken = 'token-123'
+    store.user = {
+      ...authPayload.user,
+      force_password_change: true,
+    }
+
+    await store.rotateOwnPassword({
+      current_password: 'old-password',
+      new_password: 'new-password',
+    })
+
+    expect(authApiMocks.changePassword).toHaveBeenCalledWith('token-123', {
+      current_password: 'old-password',
+      new_password: 'new-password',
+    })
+    expect(store.requiresPasswordChange).toBe(false)
   })
 })

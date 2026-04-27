@@ -19,8 +19,8 @@
           AI is optional. Leave it disabled if you want core content workflows to run without vector-provider dependencies.
         </Message>
 
-        <Message v-if="!isSuperuser" severity="warn" :closable="false">
-          Only super-admin users can update provider settings or run rebuild actions.
+        <Message v-if="!canManageAiSettings" severity="warn" :closable="false">
+          Only users with the AI settings permission can update provider settings or run rebuild actions.
         </Message>
 
         <div v-if="settingsLoading" class="muted">Loading AI settings…</div>
@@ -183,8 +183,8 @@ const rebuilding = ref(false)
 const globalError = ref<string | null>(null)
 const actionFeedback = ref<string | null>(null)
 
-const isSuperuser = computed(() => user.value?.is_superuser === true)
-const isActionLocked = computed(() => settingsLoading.value || !isSuperuser.value)
+const canManageAiSettings = computed(() => authStore.hasPermission('ai.settings.manage'))
+const isActionLocked = computed(() => settingsLoading.value || !canManageAiSettings.value)
 
 const enabledOptions = [
   { label: 'Enabled', value: true },
@@ -250,7 +250,7 @@ async function loadSettings(): Promise<void> {
 
 async function saveSettings(): Promise<void> {
   clearActionFeedback()
-  if (!isSuperuser.value) {
+  if (!canManageAiSettings.value) {
     return
   }
 
@@ -300,7 +300,7 @@ async function saveSettings(): Promise<void> {
 
 async function runProviderTest(): Promise<void> {
   clearActionFeedback()
-  if (!isSuperuser.value) {
+  if (!canManageAiSettings.value) {
     return
   }
 
@@ -319,7 +319,7 @@ async function runProviderTest(): Promise<void> {
 
 async function runRebuild(): Promise<void> {
   clearActionFeedback()
-  if (!isSuperuser.value) {
+  if (!canManageAiSettings.value) {
     return
   }
 
@@ -341,7 +341,7 @@ async function runRebuild(): Promise<void> {
 }
 
 onMounted(async () => {
-  if (!isSuperuser.value) {
+  if (!canManageAiSettings.value) {
     return
   }
 

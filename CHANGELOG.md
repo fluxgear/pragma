@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.11.0 — 2026-04-27
+
+### Added
+- Added the M11 roles-and-permissions foundation with seeded built-in roles, persisted role/permission assignments, forced-password-change state, and a new administrative user-management API under `/api/v1/users`
+- Added authenticated account password-change flow, administrative password reset with session revocation, role-assignment management, and focused backend/frontend regression coverage for M11 authorization and user lifecycle behavior
+- Added admin user-management and account views under `/app/users` and `/app/account`, permission-aware navigation gating, and typed admin API clients for user, role, and account-management flows
+
+### Fixed
+- Replaced binary login-only or superuser-only authorization checks with explicit permission enforcement across content, media, AI settings, and module management routes, including structured `AUTH_PERMISSION_DENIED` failures and publish-specific content enforcement
+- Preserved M11 verification reliability by fixing role-assignment persistence against psycopg connection capabilities, aligning legacy auth/module/AI tests with the new permission-denial contract, and restoring clean frontend spec parsing plus password-reset UI feedback behavior
+
 ## v0.10.0 — 2026-04-26
 
 ### Added

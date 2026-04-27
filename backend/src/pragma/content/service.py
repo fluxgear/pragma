@@ -1290,11 +1290,17 @@ def create_entry_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.auth.permissions import (
+        PERMISSION_CONTENT_ENTRIES_PUBLISH,
+        ensure_permission,
+    )
     from pragma.modules.service import dispatch_content_entry_event
     from pragma.search.service import sync_search_document
 
     timestamp = utc_now()
     user_id = _require_user_id(current_user)
+    if payload.status.value == 'published':
+        ensure_permission(current_user, PERMISSION_CONTENT_ENTRIES_PUBLISH)
 
     try:
         with storage.connection() as connection, connection.transaction():
@@ -1491,11 +1497,17 @@ def update_entry_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.auth.permissions import (
+        PERMISSION_CONTENT_ENTRIES_PUBLISH,
+        ensure_permission,
+    )
     from pragma.modules.service import dispatch_content_entry_event
     from pragma.search.service import sync_search_document
 
     timestamp = utc_now()
     user_id = _require_user_id(current_user)
+    if payload.status.value == 'published':
+        ensure_permission(current_user, PERMISSION_CONTENT_ENTRIES_PUBLISH)
 
     try:
         with storage.connection() as connection, connection.transaction():

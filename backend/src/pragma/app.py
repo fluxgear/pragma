@@ -111,6 +111,7 @@ def create_app() -> FastAPI:
     """
 
     from pragma.ai.router import router as ai_router
+    from pragma.auth.admin_router import router as users_router
     from pragma.modules.router import router as modules_router
     from pragma.search.router import router as search_router
 
@@ -131,4 +132,5 @@ def create_app() -> FastAPI:
     app.include_router(search_router, prefix='/api/v1')
     app.include_router(ai_router, prefix='/api/v1')
     app.include_router(modules_router, prefix='/api/v1')
+    app.include_router(users_router, prefix='/api/v1')
     return app

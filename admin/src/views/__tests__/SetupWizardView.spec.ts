@@ -20,6 +20,7 @@ const systemApiMocks = vi.hoisted(() => ({
 }))
 
 const authApiMocks = vi.hoisted(() => ({
+  changePassword: vi.fn(),
   getCurrentUser: vi.fn(),
   loginUser: vi.fn(),
   logoutUser: vi.fn(),
@@ -65,6 +66,9 @@ const authPayload = {
     full_name: 'Admin User',
     is_active: true,
     is_superuser: true,
+    roles: ['administrator'],
+    permissions: ['users.manage', 'ai.settings.manage'],
+    force_password_change: false,
   },
 }
 
