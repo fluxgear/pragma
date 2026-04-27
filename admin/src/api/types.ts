@@ -301,3 +301,27 @@ export interface AISearchEmbeddingRebuildResponse {
   failed: number
   failed_entry_ids: string[]
 }
+
+
+export interface RealtimeTicketResponse {
+  ticket: string
+  expires_at: string
+}
+
+export type RealtimeEventType =
+  | 'content.entry.created'
+  | 'content.entry.updated'
+  | 'content.entry.deleted'
+  | 'realtime.resync_required'
+
+export interface RealtimeEventEnvelope {
+  version: 1
+  id: string
+  type: RealtimeEventType
+  resource: string
+  action: string
+  resource_id?: string
+  occurred_at: string
+  actor_id?: string
+  data: Record<string, unknown>
+}

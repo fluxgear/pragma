@@ -61,11 +61,20 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
     """
 
     from pragma.modules import build_module_runtime, set_active_module_runtime
+    from pragma.realtime import (
+        build_realtime_hub,
+        build_realtime_listener,
+        build_realtime_publisher,
+        set_active_realtime_publisher,
+    )
     from pragma.themes import build_theme_runtime
 
     storage = DatabasePool(settings)
     theme_runtime = build_theme_runtime(settings)
     module_runtime = build_module_runtime(settings)
+    realtime_publisher = build_realtime_publisher(settings)
+    realtime_hub = build_realtime_hub(settings)
+    realtime_listener = build_realtime_listener(settings, realtime_hub)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -84,14 +93,23 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
         app.state.settings = settings
         app.state.theme_runtime = theme_runtime
         app.state.module_runtime = module_runtime
+        app.state.realtime_publisher = realtime_publisher
+        app.state.realtime_hub = realtime_hub
+        app.state.realtime_listener = realtime_listener
         storage.open()
         app.state.storage = storage
         set_active_module_runtime(module_runtime)
+        set_active_realtime_publisher(realtime_publisher)
+
         try:
             module_runtime.refresh(storage)
+            await realtime_listener.start()
             yield
         finally:
+            set_active_realtime_publisher(None)
             set_active_module_runtime(None)
+            await realtime_listener.stop()
+            await realtime_hub.shutdown()
             storage.close()
 
     return lifespan
@@ -113,6 +131,7 @@ def create_app() -> FastAPI:
     from pragma.ai.router import router as ai_router
     from pragma.auth.admin_router import router as users_router
     from pragma.modules.router import router as modules_router
+    from pragma.realtime.router import router as realtime_router
     from pragma.search.router import router as search_router
 
     settings = get_settings()
@@ -133,4 +152,5 @@ def create_app() -> FastAPI:
     app.include_router(ai_router, prefix='/api/v1')
     app.include_router(modules_router, prefix='/api/v1')
     app.include_router(users_router, prefix='/api/v1')
+    app.include_router(realtime_router, prefix='/api/v1')
     return app

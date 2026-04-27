@@ -1295,6 +1295,7 @@ def create_entry_record(
         ensure_permission,
     )
     from pragma.modules.service import dispatch_content_entry_event
+    from pragma.realtime.service import publish_content_entry_event
     from pragma.search.service import sync_search_document
 
     timestamp = utc_now()
@@ -1367,6 +1368,11 @@ def create_entry_record(
 
     entry_response = ContentEntryResponse.from_record(
         {**entry_row, 'content_type_slug': content_type_row['slug']}
+    )
+    publish_content_entry_event(
+        event_type='content.entry.created',
+        entry=entry_response,
+        actor_id=user_id,
     )
     dispatch_content_entry_event(
         'content.entry.created',
@@ -1502,6 +1508,7 @@ def update_entry_record(
         ensure_permission,
     )
     from pragma.modules.service import dispatch_content_entry_event
+    from pragma.realtime.service import publish_content_entry_event
     from pragma.search.service import sync_search_document
 
     timestamp = utc_now()
@@ -1597,6 +1604,11 @@ def update_entry_record(
     entry_response = ContentEntryResponse.from_record(
         {**entry_row, 'content_type_slug': existing_entry['content_type_slug']}
     )
+    publish_content_entry_event(
+        event_type='content.entry.updated',
+        entry=entry_response,
+        actor_id=user_id,
+    )
     dispatch_content_entry_event(
         'content.entry.updated',
         {
@@ -1623,6 +1635,7 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
     """
 
     from pragma.modules.service import dispatch_content_entry_event
+    from pragma.realtime.service import publish_content_entry_event
     from pragma.search.service import delete_search_document
 
     deleted_entry_response: ContentEntryResponse | None = None
@@ -1655,6 +1668,11 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
         ) from exc
 
     if deleted_entry_response is not None:
+        publish_content_entry_event(
+            event_type='content.entry.deleted',
+            entry=deleted_entry_response,
+            actor_id=None,
+        )
         dispatch_content_entry_event(
             'content.entry.deleted',
             {

@@ -141,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Column from 'primevue/column'
@@ -158,9 +158,17 @@ import {
   updateContentEntry,
 } from '@/api/content'
 import { asUserMessage } from '@/api/errors'
-import type { ContentEntryResponse, ContentEntryStatus, ContentTypeResponse } from '@/api/types'
+import type {
+  ContentEntryResponse,
+  ContentEntryStatus,
+  ContentTypeResponse,
+  RealtimeEventEnvelope,
+} from '@/api/types'
 import ContentEntryForm from '@/components/content/ContentEntryForm.vue'
 import { getContentEntryDisplayTitle } from '@/features/content/form'
+import { useRealtimeStore } from '@/stores/realtime'
+
+const realtimeStore = useRealtimeStore()
 
 const contentTypes = ref<ContentTypeResponse[]>([])
 const entries = ref<ContentEntryResponse[]>([])
@@ -172,6 +180,9 @@ const editingEntry = ref<ContentEntryResponse | null>(null)
 const pageErrorMessage = ref<string | null>(null)
 const dialogErrorMessage = ref<string | null>(null)
 const submitting = ref(false)
+
+let unsubscribeRealtime: (() => void) | null = null
+let unsubscribeResync: (() => void) | null = null
 
 const contentTypeOptions = computed(() =>
   contentTypes.value.map((contentType) => ({
@@ -311,11 +322,50 @@ function formatTimestamp(value: string): string {
   }).format(date)
 }
 
+function eventMatchesSelectedContentType(event: RealtimeEventEnvelope): boolean {
+  if (selectedContentTypeId.value === null) {
+    return false
+  }
+
+  const contentTypeId = event.data.content_type_id
+  if (typeof contentTypeId === 'string' && contentTypeId === selectedContentTypeId.value) {
+    return true
+  }
+
+  const selectedSlug = selectedContentType.value?.slug
+  const contentTypeSlug = event.data.content_type_slug
+  return typeof selectedSlug === 'string' && typeof contentTypeSlug === 'string' && selectedSlug === contentTypeSlug
+}
+
+function handleRealtimeEvent(event: RealtimeEventEnvelope): void {
+  if (
+    (event.type === 'content.entry.created'
+      || event.type === 'content.entry.updated'
+      || event.type === 'content.entry.deleted')
+    && eventMatchesSelectedContentType(event)
+  ) {
+    void loadEntries()
+  }
+}
+
+function handleRealtimeResync(): void {
+  void refreshWorkspace()
+}
+
 watch(selectedContentTypeId, async () => {
   await loadEntries()
 })
 
 onMounted(async () => {
   await loadContentTypes()
+  unsubscribeRealtime = realtimeStore.subscribe(handleRealtimeEvent)
+  unsubscribeResync = realtimeStore.subscribeResync(handleRealtimeResync)
+})
+
+onUnmounted(() => {
+  unsubscribeRealtime?.()
+  unsubscribeResync?.()
+  unsubscribeRealtime = null
+  unsubscribeResync = null
 })
 </script>

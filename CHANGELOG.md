@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.12.0 — 2026-04-27
+
+### Added
+- Added the M12 PostgreSQL-native realtime pipeline with explicit event envelopes, `LISTEN/NOTIFY` publication and listener bridging, bounded WebSocket fanout, and authenticated short-lived subscription tickets
+- Added admin realtime client/store behavior with reconnect, disconnect, auth-close handling, live status display, and content-entry invalidation refreshes in the admin workspace
+- Added focused backend and frontend coverage for notification delivery, subscription authorization, reconnect/disconnect handling, realtime failure isolation from content CRUD, and admin refresh behavior
+
 ## v0.11.1 — 2026-04-27
 
 ### Fixed

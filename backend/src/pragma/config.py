@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     theme_default_id: str = Field(default='default', min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
     search_enable_semantic: bool = False
+    realtime_enabled: bool = True
+    realtime_channel: str = Field(default='pragma_realtime', min_length=1, max_length=63)
+    realtime_queue_size: int = Field(default=256, ge=1, le=2048)
+    realtime_reconnect_min_seconds: float = Field(default=0.5, gt=0)
+    realtime_reconnect_max_seconds: float = Field(default=30.0, gt=0)
+    realtime_ticket_ttl_seconds: int = Field(default=60, ge=5, le=600)
 
     @staticmethod
     def _normalize_theme_identifier(value: str) -> str:
@@ -120,6 +126,30 @@ class Settings(BaseSettings):
         self.theme_default_id = self._normalize_theme_identifier(self.theme_default_id)
         return self
 
+    @staticmethod
+    def _normalize_realtime_channel(value: str) -> str:
+        """Normalize and validate a configured realtime channel identifier.
+
+        Args:
+            value: Realtime channel identifier from configuration.
+
+        Returns:
+            str: Normalized realtime channel identifier.
+
+        Raises:
+            ValueError: If the identifier format is invalid.
+        """
+
+        normalized = value.strip().lower()
+        is_valid = (
+            1 <= len(normalized) <= 63
+            and normalized[0].isalnum()
+            and all(character.isalnum() or character == '_' for character in normalized)
+        )
+        if not is_valid:
+            raise ValueError('Realtime channel must use lowercase letters, numbers, or underscores')
+        return normalized
+
     @model_validator(mode='after')
     def validate_refresh_cookie_policy(self) -> Settings:
         """Validate refresh-cookie security policy compatibility.
@@ -137,6 +167,28 @@ class Settings(BaseSettings):
         if self.refresh_cookie_samesite == 'none' and not self.refresh_cookie_secure:
             raise ValueError(
                 'refresh_cookie_secure must be true when refresh_cookie_samesite is "none"'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def validate_realtime_settings(self) -> Settings:
+        """Validate realtime channel naming and reconnect policy settings.
+
+        Args:
+            None.
+
+        Returns:
+            Settings: Validated settings object.
+
+        Raises:
+            ValueError: If realtime configuration values are inconsistent.
+        """
+
+        self.realtime_channel = self._normalize_realtime_channel(self.realtime_channel)
+        if self.realtime_reconnect_min_seconds > self.realtime_reconnect_max_seconds:
+            raise ValueError(
+                'realtime_reconnect_min_seconds must be less than or equal to '
+                'realtime_reconnect_max_seconds'
             )
         return self
 

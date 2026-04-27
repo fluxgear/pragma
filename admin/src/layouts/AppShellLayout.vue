@@ -14,6 +14,7 @@
         <div class="shell__toolbar-end">
           <span class="muted">{{ user?.email }}</span>
           <Tag :severity="user?.is_superuser ? 'info' : 'secondary'" :value="roleBadge" />
+          <Tag :severity="realtimeTagSeverity" :value="realtimeTagLabel" />
           <Tag v-if="requiresPasswordChange" severity="warn" value="Password change required" />
           <Button icon="pi pi-sign-out" label="Logout" severity="secondary" @click="handleLogout" />
         </div>
@@ -47,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import Button from 'primevue/button'
 import Panel from 'primevue/panel'
@@ -56,9 +57,12 @@ import Toolbar from 'primevue/toolbar'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
+import { useRealtimeStore } from '@/stores/realtime'
 
 const authStore = useAuthStore()
-const { user, requiresPasswordChange } = storeToRefs(authStore)
+const realtimeStore = useRealtimeStore()
+const { user, requiresPasswordChange, isAuthenticated } = storeToRefs(authStore)
+const { connectionState } = storeToRefs(realtimeStore)
 const route = useRoute()
 const router = useRouter()
 
@@ -70,6 +74,32 @@ const roleBadge = computed(() => {
     return user.value.roles.join(', ')
   }
   return 'User'
+})
+
+const realtimeTagLabel = computed(() => {
+  switch (connectionState.value) {
+    case 'live':
+      return 'Live'
+    case 'connecting':
+      return 'Connecting'
+    case 'reconnecting':
+      return 'Reconnecting'
+    default:
+      return 'Offline'
+  }
+})
+
+const realtimeTagSeverity = computed(() => {
+  switch (connectionState.value) {
+    case 'live':
+      return 'success'
+    case 'connecting':
+      return 'info'
+    case 'reconnecting':
+      return 'warn'
+    default:
+      return 'secondary'
+  }
 })
 
 const navigationItems = computed(() => [
@@ -106,6 +136,28 @@ const navigationItems = computed(() => [
   },
 ])
 
+watch(
+  [isAuthenticated, requiresPasswordChange],
+  ([authenticated, passwordChangeRequired]) => {
+    if (authenticated && !passwordChangeRequired) {
+      realtimeStore.start()
+      return
+    }
+    realtimeStore.stop()
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  if (isAuthenticated.value && !requiresPasswordChange.value) {
+    realtimeStore.start()
+  }
+})
+
+onUnmounted(() => {
+  realtimeStore.stop()
+})
+
 function navigate(routeName: string): void {
   if (route.name !== routeName) {
     void router.push({ name: routeName })
@@ -113,6 +165,7 @@ function navigate(routeName: string): void {
 }
 
 async function handleLogout(): Promise<void> {
+  realtimeStore.stop()
   await authStore.logout()
   await router.push({ name: 'login' })
 }

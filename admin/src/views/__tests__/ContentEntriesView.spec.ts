@@ -5,7 +5,11 @@ import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
-import type { ContentEntryResponse, ContentTypeResponse } from '@/api/types'
+import type {
+  ContentEntryResponse,
+  ContentTypeResponse,
+  RealtimeEventEnvelope,
+} from '@/api/types'
 import ContentEntryForm from '@/components/content/ContentEntryForm.vue'
 import ContentEntriesView from '@/views/ContentEntriesView.vue'
 
@@ -16,8 +20,46 @@ const contentApiMocks = vi.hoisted(() => ({
   updateContentEntry: vi.fn(),
 }))
 
-vi.mock('@/api/content', () => contentApiMocks)
+const realtimeStoreMocks = vi.hoisted(() => {
+  let eventHandler: ((event: RealtimeEventEnvelope) => void) | null = null
+  let resyncHandler: (() => void) | null = null
 
+  return {
+    subscribe: vi.fn((handler: (event: RealtimeEventEnvelope) => void) => {
+      eventHandler = handler
+      return () => {
+        if (eventHandler === handler) {
+          eventHandler = null
+        }
+      }
+    }),
+    subscribeResync: vi.fn((handler: () => void) => {
+      resyncHandler = handler
+      return () => {
+        if (resyncHandler === handler) {
+          resyncHandler = null
+        }
+      }
+    }),
+    emitEvent(event: RealtimeEventEnvelope) {
+      eventHandler?.(event)
+    },
+    emitResync() {
+      resyncHandler?.()
+    },
+    reset() {
+      eventHandler = null
+      resyncHandler = null
+      this.subscribe.mockClear()
+      this.subscribeResync.mockClear()
+    },
+  }
+})
+
+vi.mock('@/api/content', () => contentApiMocks)
+vi.mock('@/stores/realtime', () => ({
+  useRealtimeStore: () => realtimeStoreMocks,
+}))
 
 if (typeof window !== 'undefined' && !window.matchMedia) {
   window.matchMedia = ((query: string) => ({
@@ -109,6 +151,7 @@ async function mountView() {
 describe('ContentEntriesView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    realtimeStoreMocks.reset()
     contentApiMocks.listContentTypes.mockResolvedValue({
       items: [contentType],
       total: 1,
@@ -201,5 +244,57 @@ describe('ContentEntriesView', () => {
         body: '<blockquote><p>Archived</p></blockquote>',
       },
     })
+  })
+
+  it('reloads entries when realtime event matches selected content type', async () => {
+    await mountView()
+
+    realtimeStoreMocks.emitEvent({
+      version: 1,
+      id: 'evt-1',
+      type: 'content.entry.updated',
+      resource: 'content.entry',
+      action: 'updated',
+      resource_id: 'entry-1',
+      occurred_at: '2026-04-21T00:00:00Z',
+      actor_id: 'user-1',
+      data: {
+        content_type_id: 'type-1',
+      },
+    })
+    await flushPromises()
+
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores realtime entry events for other content types', async () => {
+    await mountView()
+
+    realtimeStoreMocks.emitEvent({
+      version: 1,
+      id: 'evt-2',
+      type: 'content.entry.updated',
+      resource: 'content.entry',
+      action: 'updated',
+      resource_id: 'entry-1',
+      occurred_at: '2026-04-21T00:00:00Z',
+      actor_id: 'user-1',
+      data: {
+        content_type_id: 'type-999',
+      },
+    })
+    await flushPromises()
+
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes content types and entries when realtime resync is requested', async () => {
+    await mountView()
+
+    realtimeStoreMocks.emitResync()
+    await flushPromises()
+
+    expect(contentApiMocks.listContentTypes).toHaveBeenCalledTimes(2)
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(2)
   })
 })
