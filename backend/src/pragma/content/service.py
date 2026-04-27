@@ -1290,6 +1290,7 @@ def create_entry_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.modules.service import dispatch_content_entry_event
     from pragma.search.service import sync_search_document
 
     timestamp = utc_now()
@@ -1300,8 +1301,8 @@ def create_entry_record(
             content_type_row = get_content_type_by_id(connection, payload.content_type_id)
             if content_type_row is None:
                 raise ContentError(
-                    detail="Content type not found",
-                    code="CONTENT_TYPE_NOT_FOUND",
+                    detail='Content type not found',
+                    code='CONTENT_TYPE_NOT_FOUND',
                     status_code=HTTPStatus.NOT_FOUND,
                 )
 
@@ -1311,7 +1312,7 @@ def create_entry_record(
             validated_payload = _validate_entry_payload(payload.payload, field_definitions)
             slug = _resolve_entry_slug(
                 content_type_id=payload.content_type_id,
-                content_type_slug=cast(str, content_type_row["slug"]),
+                content_type_slug=cast(str, content_type_row['slug']),
                 requested_slug=payload.slug,
                 existing_slug=None,
                 payload=validated_payload,
@@ -1332,15 +1333,15 @@ def create_entry_record(
             )
             _run_search_indexing_hook(
                 connection,
-                operation="entry_create_sync",
+                operation='entry_create_sync',
                 context={
-                    "entry_id": str(entry_row["id"]),
-                    "content_type_id": str(payload.content_type_id),
+                    'entry_id': str(entry_row['id']),
+                    'content_type_id': str(payload.content_type_id),
                 },
                 hook=lambda: sync_search_document(
                     connection,
                     entry_row=entry_row,
-                    content_type_slug=cast(str, content_type_row["slug"]),
+                    content_type_slug=cast(str, content_type_row['slug']),
                     field_definitions=field_definitions,
                 ),
             )
@@ -1348,19 +1349,27 @@ def create_entry_record(
         raise
     except IntegrityError as exc:
         raise ContentError(
-            detail="An entry with this slug already exists for the content type",
-            code="ENTRY_SLUG_CONFLICT",
+            detail='An entry with this slug already exists for the content type',
+            code='ENTRY_SLUG_CONFLICT',
             status_code=HTTPStatus.CONFLICT,
         ) from exc
     except PsycopgError as exc:
         raise StorageError(
-            detail="Unable to create content entry",
-            code="CONTENT_ENTRY_CREATE_FAILED",
+            detail='Unable to create content entry',
+            code='CONTENT_ENTRY_CREATE_FAILED',
         ) from exc
 
-    return ContentEntryResponse.from_record(
-        {**entry_row, "content_type_slug": content_type_row["slug"]}
+    entry_response = ContentEntryResponse.from_record(
+        {**entry_row, 'content_type_slug': content_type_row['slug']}
     )
+    dispatch_content_entry_event(
+        'content.entry.created',
+        {
+            'event': 'content.entry.created',
+            'entry': entry_response.model_dump(mode='json'),
+        },
+    )
+    return entry_response
 
 
 def list_entry_records(
@@ -1482,6 +1491,7 @@ def update_entry_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.modules.service import dispatch_content_entry_event
     from pragma.search.service import sync_search_document
 
     timestamp = utc_now()
@@ -1492,20 +1502,20 @@ def update_entry_record(
             existing_entry = get_entry_by_id(connection, entry_id)
             if existing_entry is None:
                 raise ContentError(
-                    detail="Content entry not found",
-                    code="CONTENT_ENTRY_NOT_FOUND",
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
                     status_code=HTTPStatus.NOT_FOUND,
                 )
 
             field_definitions = _field_definitions_from_rows(
-                get_field_definitions(connection, existing_entry["content_type_id"])
+                get_field_definitions(connection, existing_entry['content_type_id'])
             )
-            existing_payload = cast(dict[str, Any], existing_entry["payload"])
+            existing_payload = cast(dict[str, Any], existing_entry['payload'])
             legacy_rich_text_fields = {
                 field_definition.name
                 for field_definition in field_definitions
                 if isinstance(field_definition, TextFieldDefinition)
-                and field_definition.kind == "rich_text"
+                and field_definition.kind == 'rich_text'
             }
             validated_payload = _validate_entry_payload(
                 payload.payload,
@@ -1514,10 +1524,10 @@ def update_entry_record(
                 legacy_rich_text_fields=legacy_rich_text_fields,
             )
             slug = _resolve_entry_slug(
-                content_type_id=existing_entry["content_type_id"],
-                content_type_slug=cast(str, existing_entry["content_type_slug"]),
+                content_type_id=existing_entry['content_type_id'],
+                content_type_slug=cast(str, existing_entry['content_type_slug']),
                 requested_slug=payload.slug,
-                existing_slug=existing_entry["slug"] if payload.slug is None else None,
+                existing_slug=existing_entry['slug'] if payload.slug is None else None,
                 payload=validated_payload,
                 field_definitions=field_definitions,
                 storage_connection=connection,
@@ -1525,7 +1535,7 @@ def update_entry_record(
             )
             published_at = _resolve_published_at(
                 payload.status,
-                existing_entry["published_at"],
+                existing_entry['published_at'],
                 timestamp,
             )
             entry_row = update_entry(
@@ -1540,15 +1550,15 @@ def update_entry_record(
             )
             _run_search_indexing_hook(
                 connection,
-                operation="entry_update_sync",
+                operation='entry_update_sync',
                 context={
-                    "entry_id": str(entry_id),
-                    "content_type_id": str(existing_entry["content_type_id"]),
+                    'entry_id': str(entry_id),
+                    'content_type_id': str(existing_entry['content_type_id']),
                 },
                 hook=lambda: sync_search_document(
                     connection,
                     entry_row=entry_row,
-                    content_type_slug=cast(str, existing_entry["content_type_slug"]),
+                    content_type_slug=cast(str, existing_entry['content_type_slug']),
                     field_definitions=field_definitions,
                 ),
             )
@@ -1556,19 +1566,27 @@ def update_entry_record(
         raise
     except IntegrityError as exc:
         raise ContentError(
-            detail="An entry with this slug already exists for the content type",
-            code="ENTRY_SLUG_CONFLICT",
+            detail='An entry with this slug already exists for the content type',
+            code='ENTRY_SLUG_CONFLICT',
             status_code=HTTPStatus.CONFLICT,
         ) from exc
     except PsycopgError as exc:
         raise StorageError(
-            detail="Unable to update content entry",
-            code="CONTENT_ENTRY_UPDATE_FAILED",
+            detail='Unable to update content entry',
+            code='CONTENT_ENTRY_UPDATE_FAILED',
         ) from exc
 
-    return ContentEntryResponse.from_record(
-        {**entry_row, "content_type_slug": existing_entry["content_type_slug"]}
+    entry_response = ContentEntryResponse.from_record(
+        {**entry_row, 'content_type_slug': existing_entry['content_type_slug']}
     )
+    dispatch_content_entry_event(
+        'content.entry.updated',
+        {
+            'event': 'content.entry.updated',
+            'entry': entry_response.model_dump(mode='json'),
+        },
+    )
+    return entry_response
 
 
 def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
@@ -1586,23 +1604,26 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.modules.service import dispatch_content_entry_event
     from pragma.search.service import delete_search_document
 
+    deleted_entry_response: ContentEntryResponse | None = None
     try:
         with storage.connection() as connection, connection.transaction():
             existing_entry = get_entry_by_id(connection, entry_id)
             if existing_entry is None:
                 raise ContentError(
-                    detail="Content entry not found",
-                    code="CONTENT_ENTRY_NOT_FOUND",
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
                     status_code=HTTPStatus.NOT_FOUND,
                 )
+            deleted_entry_response = ContentEntryResponse.from_record(existing_entry)
             _run_search_indexing_hook(
                 connection,
-                operation="entry_delete_sync",
+                operation='entry_delete_sync',
                 context={
-                    "entry_id": str(entry_id),
-                    "content_type_id": str(existing_entry["content_type_id"]),
+                    'entry_id': str(entry_id),
+                    'content_type_id': str(existing_entry['content_type_id']),
                 },
                 hook=lambda: delete_search_document(connection, entry_id),
             )
@@ -1611,6 +1632,15 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
         raise
     except PsycopgError as exc:
         raise StorageError(
-            detail="Unable to delete content entry",
-            code="CONTENT_ENTRY_DELETE_FAILED",
+            detail='Unable to delete content entry',
+            code='CONTENT_ENTRY_DELETE_FAILED',
         ) from exc
+
+    if deleted_entry_response is not None:
+        dispatch_content_entry_event(
+            'content.entry.deleted',
+            {
+                'event': 'content.entry.deleted',
+                'entry': deleted_entry_response.model_dump(mode='json'),
+            },
+        )

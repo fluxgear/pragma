@@ -60,10 +60,12 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
         None.
     """
 
+    from pragma.modules import build_module_runtime, set_active_module_runtime
     from pragma.themes import build_theme_runtime
 
     storage = DatabasePool(settings)
     theme_runtime = build_theme_runtime(settings)
+    module_runtime = build_module_runtime(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -81,11 +83,15 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
 
         app.state.settings = settings
         app.state.theme_runtime = theme_runtime
+        app.state.module_runtime = module_runtime
         storage.open()
         app.state.storage = storage
+        set_active_module_runtime(module_runtime)
         try:
+            module_runtime.refresh(storage)
             yield
         finally:
+            set_active_module_runtime(None)
             storage.close()
 
     return lifespan
@@ -105,6 +111,7 @@ def create_app() -> FastAPI:
     """
 
     from pragma.ai.router import router as ai_router
+    from pragma.modules.router import router as modules_router
     from pragma.search.router import router as search_router
 
     settings = get_settings()
@@ -123,4 +130,5 @@ def create_app() -> FastAPI:
     app.include_router(media_router, prefix='/api/v1')
     app.include_router(search_router, prefix='/api/v1')
     app.include_router(ai_router, prefix='/api/v1')
+    app.include_router(modules_router, prefix='/api/v1')
     return app

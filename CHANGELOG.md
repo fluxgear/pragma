@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.10.0 — 2026-04-26
+
+### Added
+- Added the constrained M10 backend modules subsystem under `backend/src/pragma/modules/` with strict manifest validation, filesystem discovery, persisted enable/disable lifecycle state, deterministic hook loading, and explicit superuser-only management APIs
+- Added focused backend module coverage for migration contracts, module-state API behavior, event dispatch ordering, malformed module identifiers, and post-commit content hook execution
+
+### Fixed
+- Preserved core CMS resilience by dispatching module hooks only after successful content-entry transactions commit, isolating module load/hook failures from CRUD responses, and documenting the configurable `PRAGMA_MODULE_ROOT` discovery surface
+
 ## v0.9.1 — 2026-04-26
 
 ### Fixed

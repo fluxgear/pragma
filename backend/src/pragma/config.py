@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     )
     base_url: str = Field(min_length=1)
     theme_root: str = Field(default='../themes', min_length=1)
+    module_root: str = Field(default='../modules', min_length=1)
     theme_active_id: str = Field(default='default', min_length=1)
     theme_default_id: str = Field(default='default', min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
@@ -252,6 +253,25 @@ class Settings(BaseSettings):
         """
 
         root = Path(self.theme_root)
+        if root.is_absolute():
+            return root.resolve()
+        return (_BACKEND_ROOT / root).resolve()
+
+    @property
+    def module_root_path(self) -> Path:
+        """Resolve the configured module root into an absolute filesystem path.
+
+        Args:
+            None.
+
+        Returns:
+            Path: Absolute module root path.
+
+        Raises:
+            None.
+        """
+
+        root = Path(self.module_root)
         if root.is_absolute():
             return root.resolve()
         return (_BACKEND_ROOT / root).resolve()
