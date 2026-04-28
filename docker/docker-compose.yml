@@ -1,0 +1,140 @@
+name: pragma-production
+
+x-backend-build: &backend-build
+  context: ..
+  dockerfile: docker/backend/Dockerfile
+
+x-backend-environment: &backend-environment
+  PRAGMA_DATABASE_HOST: db
+  PRAGMA_DATABASE_PORT: "5432"
+  PRAGMA_DATABASE_NAME: ${PRAGMA_DATABASE_NAME:?PRAGMA_DATABASE_NAME must be set}
+  PRAGMA_DATABASE_USER: ${PRAGMA_DATABASE_USER:?PRAGMA_DATABASE_USER must be set}
+  PRAGMA_DATABASE_PASSWORD: ${PRAGMA_DATABASE_PASSWORD:?PRAGMA_DATABASE_PASSWORD must be set}
+  PRAGMA_DATABASE_ADMIN_DATABASE: ${PRAGMA_DATABASE_ADMIN_DATABASE:-postgres}
+  PRAGMA_DATABASE_POOL_MIN_SIZE: ${PRAGMA_DATABASE_POOL_MIN_SIZE:-1}
+  PRAGMA_DATABASE_POOL_MAX_SIZE: ${PRAGMA_DATABASE_POOL_MAX_SIZE:-10}
+  PRAGMA_JWT_SECRET_KEY: ${PRAGMA_JWT_SECRET_KEY:?PRAGMA_JWT_SECRET_KEY must be set}
+  PRAGMA_JWT_ALGORITHM: ${PRAGMA_JWT_ALGORITHM:-HS256}
+  PRAGMA_JWT_ACCESS_TOKEN_TTL_MINUTES: ${PRAGMA_JWT_ACCESS_TOKEN_TTL_MINUTES:-15}
+  PRAGMA_JWT_REFRESH_TOKEN_TTL_DAYS: ${PRAGMA_JWT_REFRESH_TOKEN_TTL_DAYS:-7}
+  PRAGMA_REFRESH_COOKIE_NAME: ${PRAGMA_REFRESH_COOKIE_NAME:-pragma_refresh_token}
+  PRAGMA_REFRESH_COOKIE_PATH: ${PRAGMA_REFRESH_COOKIE_PATH:-/api/v1/auth}
+  PRAGMA_REFRESH_COOKIE_SECURE: ${PRAGMA_REFRESH_COOKIE_SECURE:-false}
+  PRAGMA_REFRESH_COOKIE_SAMESITE: ${PRAGMA_REFRESH_COOKIE_SAMESITE:-lax}
+  PRAGMA_BASE_URL: ${PRAGMA_BASE_URL:?PRAGMA_BASE_URL must be set}
+  PRAGMA_MEDIA_STORAGE_BACKEND: local
+  PRAGMA_MEDIA_ROOT: /var/lib/pragma/media
+  PRAGMA_MEDIA_MAX_UPLOAD_BYTES: ${PRAGMA_MEDIA_MAX_UPLOAD_BYTES:-10485760}
+  PRAGMA_MEDIA_ALLOWED_MIME_TYPES: ${PRAGMA_MEDIA_ALLOWED_MIME_TYPES:-image/jpeg,image/png,image/gif,image/webp}
+  PRAGMA_THEME_ROOT: /app/themes
+  PRAGMA_MODULE_ROOT: /app/modules
+  PRAGMA_THEME_ACTIVE_ID: ${PRAGMA_THEME_ACTIVE_ID:-default}
+  PRAGMA_THEME_DEFAULT_ID: ${PRAGMA_THEME_DEFAULT_ID:-default}
+  PRAGMA_SEARCH_ENABLE_SEMANTIC: ${PRAGMA_SEARCH_ENABLE_SEMANTIC:-false}
+  PRAGMA_REALTIME_ENABLED: ${PRAGMA_REALTIME_ENABLED:-true}
+  PRAGMA_REALTIME_CHANNEL: ${PRAGMA_REALTIME_CHANNEL:-pragma_realtime}
+  PRAGMA_REALTIME_QUEUE_SIZE: ${PRAGMA_REALTIME_QUEUE_SIZE:-256}
+  PRAGMA_REALTIME_RECONNECT_MIN_SECONDS: ${PRAGMA_REALTIME_RECONNECT_MIN_SECONDS:-0.5}
+  PRAGMA_REALTIME_RECONNECT_MAX_SECONDS: ${PRAGMA_REALTIME_RECONNECT_MAX_SECONDS:-30.0}
+  PRAGMA_REALTIME_TICKET_TTL_SECONDS: ${PRAGMA_REALTIME_TICKET_TTL_SECONDS:-60}
+  PRAGMA_LOG_LEVEL: ${PRAGMA_LOG_LEVEL:-INFO}
+  PRAGMA_BACKEND_HOST: 0.0.0.0
+  PRAGMA_BACKEND_PORT: ${PRAGMA_BACKEND_PORT:-8000}
+  PRAGMA_DB_WAIT_TIMEOUT_SECONDS: ${PRAGMA_DB_WAIT_TIMEOUT_SECONDS:-90}
+
+services:
+  db:
+    build:
+      context: ./postgres
+      args:
+        PGVECTOR_POSTGRES_IMAGE: ${PRAGMA_PGVECTOR_POSTGRES_IMAGE:-pgvector/pgvector:pg18}
+    image: ${PRAGMA_POSTGRES_IMAGE:-pragma-postgres-pg18-vector:prod}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PRAGMA_DATABASE_NAME:?PRAGMA_DATABASE_NAME must be set}
+      POSTGRES_USER: ${PRAGMA_DATABASE_USER:?PRAGMA_DATABASE_USER must be set}
+      POSTGRES_PASSWORD: ${PRAGMA_DATABASE_PASSWORD:?PRAGMA_DATABASE_PASSWORD must be set}
+    ports:
+      - "${PRAGMA_DATABASE_PUBLISHED_HOST:-127.0.0.1}:${PRAGMA_DATABASE_PUBLISHED_PORT:?PRAGMA_DATABASE_PUBLISHED_PORT must be set}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" &&
+          psql -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -v ON_ERROR_STOP=1 -tAc
+          "SELECT current_setting('server_version_num')::integer >= 180000
+          AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')
+          AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm')" | grep -q t
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    volumes:
+      - db-data:/var/lib/postgresql
+
+  migrate:
+    build: *backend-build
+    image: ${PRAGMA_BACKEND_IMAGE:-pragma-backend:prod}
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *backend-environment
+    command: ["migrate"]
+    volumes:
+      - media:/var/lib/pragma/media
+      - modules:/app/modules
+
+  backend:
+    build: *backend-build
+    image: ${PRAGMA_BACKEND_IMAGE:-pragma-backend:prod}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment: *backend-environment
+    healthcheck:
+      test: ["CMD", "pragma-backend", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - media:/var/lib/pragma/media
+      - modules:/app/modules
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: docker/proxy/Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-/api/v1}
+    image: ${PRAGMA_PROXY_IMAGE:-pragma-proxy:prod}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      PRAGMA_BACKEND_UPSTREAM: backend:${PRAGMA_BACKEND_PORT:-8000}
+      PRAGMA_PROXY_CLIENT_MAX_BODY_SIZE: ${PRAGMA_PROXY_CLIENT_MAX_BODY_SIZE:-25m}
+      PRAGMA_PROXY_LISTEN_PORT: ${PRAGMA_PROXY_LISTEN_PORT:-8080}
+      PRAGMA_PROXY_WEBSOCKET_READ_TIMEOUT: ${PRAGMA_PROXY_WEBSOCKET_READ_TIMEOUT:-1h}
+      PRAGMA_PROXY_WEBSOCKET_SEND_TIMEOUT: ${PRAGMA_PROXY_WEBSOCKET_SEND_TIMEOUT:-1h}
+      PRAGMA_SERVER_NAME: ${PRAGMA_SERVER_NAME:-_}
+    ports:
+      - "${PRAGMA_PROXY_PUBLISHED_HOST:-0.0.0.0}:${PRAGMA_PROXY_PUBLISHED_PORT:?PRAGMA_PROXY_PUBLISHED_PORT must be set}:${PRAGMA_PROXY_LISTEN_PORT:-8080}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- "http://127.0.0.1:$${PRAGMA_PROXY_LISTEN_PORT}/healthz" >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  db-data:
+  media:
+  modules:

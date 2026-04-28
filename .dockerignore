@@ -1,0 +1,38 @@
+# Keep Docker build contexts small and prevent local secrets from entering images.
+.git
+.gitignore
+AGENTS.md
+progress.md
+
+# Python/local tooling caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+
+# Environment and secret files.
+.env
+.env.*
+backend/.env
+backend/.env.*
+docker/*.env
+docker/*.env.*
+!backend/.env.example
+!docker/*.env.example
+
+# Node and frontend build artifacts.
+node_modules/
+admin/node_modules/
+admin/dist/
+dist/
+build/
+
+# Editors and OS files.
+.DS_Store
+.vscode/
+.idea/

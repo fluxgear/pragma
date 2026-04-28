@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.14.0 — 2026-04-28
+
+### Added
+- Added the M14 production Docker deployment path with compose orchestration for PostgreSQL 18 + pgvector, backend migration/bootstrap sequencing, and Nginx reverse-proxy delivery
+- Added production container/runtime support for backend startup gating, database readiness checks, and static/public asset serving
+- Added deployment support artifacts for Docker rollout, including production environment templates and a production-validation helper script
 ## v0.13.1 — 2026-04-27
 
 ### Fixed
