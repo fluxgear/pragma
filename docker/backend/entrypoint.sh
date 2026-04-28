@@ -5,6 +5,12 @@ read_secret_file() {
   secret_var="$1"
   secret_file_var="${secret_var}_FILE"
   eval "secret_file=\${${secret_file_var}:-}"
+  eval "secret_value=\${${secret_var}:-}"
+
+  if [ -n "$secret_file" ] && [ -n "$secret_value" ]; then
+    echo "${secret_var} and ${secret_file_var} are mutually exclusive" >&2
+    exit 1
+  fi
 
   if [ -n "$secret_file" ]; then
     if [ ! -f "$secret_file" ]; then

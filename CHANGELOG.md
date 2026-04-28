@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.14.1 — 2026-04-28
+
+### Fixed
+- Completed Docker production secret-file handling by wiring file-based database and JWT secrets through compose and backend runtime validation
+- Added rejection for mutually exclusive raw/file secret pairs in the backend entrypoint and production validation helper
+- Preserved production validation coverage for default env, file-only secret, mixed raw+file rejection, compose config, shell syntax, and scoped diff hygiene
+
 ## v0.14.0 — 2026-04-28
 
 ### Added

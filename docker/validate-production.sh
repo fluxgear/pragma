@@ -29,11 +29,37 @@ require_docker() {
   fi
 }
 
-load_env_for_smoke() {
+load_env_file() {
   set -a
   # shellcheck disable=SC1090
   . "$ENV_FILE"
   set +a
+}
+
+load_env_for_smoke() {
+  load_env_file
+}
+
+require_secret_value_or_file() {
+  value_var="$1"
+  file_var="$2"
+  eval "secret_value=\${${value_var}:-}"
+  eval "secret_file=\${${file_var}:-}"
+
+  if [ -n "$secret_value" ] && [ -n "$secret_file" ]; then
+    echo "Set only one of ${value_var} or ${file_var}" >&2
+    exit 1
+  fi
+  if [ -z "$secret_value" ] && [ -z "$secret_file" ]; then
+    echo "Set either ${value_var} or ${file_var}" >&2
+    exit 1
+  fi
+}
+
+validate_secret_configuration() {
+  load_env_file
+  require_secret_value_or_file PRAGMA_DATABASE_PASSWORD PRAGMA_DATABASE_PASSWORD_FILE
+  require_secret_value_or_file PRAGMA_JWT_SECRET_KEY PRAGMA_JWT_SECRET_KEY_FILE
 }
 
 run_static_checks() {
@@ -123,6 +149,7 @@ cleanup_smoke_stack() {
 
 trap cleanup_smoke_stack EXIT INT TERM
 
+validate_secret_configuration
 run_static_checks
 run_compose_config
 
