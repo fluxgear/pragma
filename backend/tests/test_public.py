@@ -293,6 +293,110 @@ def test_published_page_renders_body_title_and_canonical(
     assert f'/pages/{page_entry["slug"]}' in response.text
 
 
+def test_published_page_renders_rich_text_markup_without_escaping(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify declared rich_text body fields render trusted HTML markup.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    page_type = _create_content_type(client, headers, name='Pages', slug='page')
+    page_entry = _create_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Trusted Rich Text Page',
+        body='<p>Trusted <strong>rich text</strong> body</p>',
+    )
+
+    response = client.get(f"/pages/{page_entry['slug']}")
+
+    assert response.status_code == 200
+    assert '<strong>rich text</strong>' in response.text
+    assert '&lt;strong&gt;rich text&lt;/strong&gt;' not in response.text
+
+
+def test_page_with_plain_text_body_html_field_escapes_untrusted_markup(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify plain-text body_html fields are escaped in public rendering.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type_response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json={
+            'name': 'Pages',
+            'slug': 'page',
+            'field_definitions': [
+                {
+                    'name': 'title',
+                    'label': 'Title',
+                    'kind': 'text',
+                    'required': True,
+                    'min_length': 1,
+                    'max_length': 200,
+                },
+                {
+                    'name': 'body_html',
+                    'label': 'Body HTML',
+                    'kind': 'text',
+                    'required': True,
+                    'min_length': 1,
+                    'max_length': 2000,
+                },
+            ],
+        },
+    )
+    assert content_type_response.status_code == 201
+    content_type_id = str(content_type_response.json()['id'])
+
+    entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type_id,
+            'status': 'published',
+            'payload': {
+                'title': 'Untrusted Body HTML',
+                'body_html': '<script>alert(1)</script><p>Injected paragraph</p>',
+            },
+        },
+    )
+    assert entry_response.status_code == 201
+    entry_slug = str(entry_response.json()['slug'])
+
+    response = client.get(f'/pages/{entry_slug}')
+
+    assert response.status_code == 200
+    assert '<script>alert(1)</script>' not in response.text
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in response.text
+    assert '&lt;p&gt;Injected paragraph&lt;/p&gt;' in response.text
+
+
 @pytest.mark.parametrize(
     ('content_type_slug', 'route_prefix'),
     [('page', 'pages'), ('post', 'posts')],
@@ -568,6 +672,27 @@ def test_search_with_query_maps_results_to_public_urls_and_excludes_unpublished_
     assert f'/pages/{page_entry["slug"]}' in response.text
     assert f'/posts/{post_entry["slug"]}' in response.text
     assert 'Nebula Draft Hidden' not in response.text
+
+
+def test_search_overlong_query_returns_visitor_safe_response(client: TestClient) -> None:
+    """Verify overlong public search queries render a safe HTML response.
+
+    Args:
+        client: FastAPI test client.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    response = client.get('/search', params={'q': 'x' * 201})
+
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/html')
+    assert 'Search is temporarily unavailable.' in response.text
+    assert 'Search queries must be 200 characters or fewer.' in response.text
 
 
 def test_search_no_results_state(client: TestClient) -> None:

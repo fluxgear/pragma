@@ -51,6 +51,7 @@ _DEFAULT_CATEGORY = 'Content'
 _WORDS_PER_MINUTE = 200
 _WHITESPACE_PATTERN = re.compile(r'\s+')
 _HTML_TAG_PATTERN = re.compile(r'<[^>]+>')
+_RICH_TEXT_FIELD_METADATA_KEY = '__pragma_rich_text_fields'
 
 
 def _collapse_whitespace(value: str) -> str:
@@ -110,6 +111,78 @@ def _extract_text(payload: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
+def _normalize_rich_text_field_names(value: Any) -> tuple[str, ...]:
+    """Normalize rich-text field names from metadata payloads.
+
+    Args:
+        value: Candidate metadata payload value.
+
+    Returns:
+        tuple[str, ...]: Deduplicated normalized rich-text field names.
+
+    Raises:
+        None.
+    """
+
+    if not isinstance(value, (list, tuple, set)):
+        return ()
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        field_name = _collapse_whitespace(item)
+        if not field_name:
+            continue
+        if field_name in seen:
+            continue
+        seen.add(field_name)
+        normalized.append(field_name)
+    return tuple(normalized)
+
+
+def _extract_rich_text_field_names(field_definitions: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Extract declared rich-text field names from a content-type schema.
+
+    Args:
+        field_definitions: Storage-layer field definition rows.
+
+    Returns:
+        tuple[str, ...]: Rich-text field names declared for the content type.
+
+    Raises:
+        None.
+    """
+
+    rich_text_names = [
+        row.get('name')
+        for row in field_definitions
+        if str(row.get('field_type') or '') == 'rich_text'
+    ]
+    return _normalize_rich_text_field_names(rich_text_names)
+
+
+def _load_rich_text_field_names(connection: Any, content_type_id: Any) -> tuple[str, ...]:
+    """Load rich-text field names for one content type.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        content_type_id: Content-type identifier.
+
+    Returns:
+        tuple[str, ...]: Rich-text field names for the content type.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    from pragma.storage.queries.content import get_field_definitions
+
+    field_definitions = get_field_definitions(connection, content_type_id)
+    return _extract_rich_text_field_names(field_definitions)
+
+
 def _extract_body_html(payload: dict[str, Any]) -> str:
     """Resolve rich body HTML while avoiding unsafe raw text rendering.
 
@@ -123,11 +196,18 @@ def _extract_body_html(payload: dict[str, Any]) -> str:
         None.
     """
 
-    body_html = _extract_text(payload, ('body_html',))
-    if body_html is not None:
-        return body_html
+    rich_text_fields = set(
+        _normalize_rich_text_field_names(payload.get(_RICH_TEXT_FIELD_METADATA_KEY))
+    )
+    trusted_keys = tuple(
+        key for key in ('body_html', 'body', 'content') if key in rich_text_fields
+    )
+    if trusted_keys:
+        trusted_body_html = _extract_text(payload, trusted_keys)
+        if trusted_body_html is not None:
+            return trusted_body_html
 
-    fallback = _extract_text(payload, ('body', 'content'))
+    fallback = _extract_text(payload, ('body', 'content', 'body_html'))
     if fallback is None:
         return ''
     return escape(fallback).replace('\n', '<br>\n')
@@ -541,6 +621,7 @@ def get_published_entry(
         content_type_row = get_content_type_by_slug(connection, normalized_type)
         if content_type_row is None:
             return None
+        rich_text_fields = _load_rich_text_field_names(connection, content_type_row['id'])
         entry_row = get_entry_by_slug(connection, content_type_row['id'], normalized_slug)
 
     if entry_row is None:
@@ -550,6 +631,7 @@ def get_published_entry(
 
     merged = dict(entry_row)
     merged['content_type_slug'] = str(content_type_row['slug'])
+    merged['rich_text_fields'] = rich_text_fields
     return merged
 
 
@@ -579,10 +661,15 @@ def list_published_entries(
     offset = (normalized_page - 1) * normalized_per_page
 
     with storage.connection() as connection:
+        content_type_row = get_content_type_by_slug(connection, normalized_type)
+        if content_type_row is None:
+            return [], 0
+
+        rich_text_fields = _load_rich_text_field_names(connection, content_type_row['id'])
         total = count_entries(
             connection=connection,
-            content_type_id=None,
-            content_type_slug=normalized_type,
+            content_type_id=content_type_row['id'],
+            content_type_slug=None,
             status=ContentStatus.PUBLISHED.value,
         )
         rows = list_entries(
@@ -590,12 +677,17 @@ def list_published_entries(
             limit=normalized_per_page,
             offset=offset,
             order_by='published_at',
-            content_type_id=None,
-            content_type_slug=normalized_type,
+            content_type_id=content_type_row['id'],
+            content_type_slug=None,
             status=ContentStatus.PUBLISHED.value,
         )
 
-    return [dict(row) for row in rows], total
+    serialized_rows: list[dict[str, Any]] = []
+    for row in rows:
+        serialized_row = dict(row)
+        serialized_row['rich_text_fields'] = rich_text_fields
+        serialized_rows.append(serialized_row)
+    return serialized_rows, total
 
 
 def build_public_entry_view(entry_row: dict[str, Any]) -> PublicEntryView:
@@ -612,6 +704,10 @@ def build_public_entry_view(entry_row: dict[str, Any]) -> PublicEntryView:
     """
 
     payload = dict(entry_row.get('payload') or {})
+    rich_text_fields = _normalize_rich_text_field_names(entry_row.get('rich_text_fields'))
+    if rich_text_fields:
+        payload[_RICH_TEXT_FIELD_METADATA_KEY] = rich_text_fields
+
     slug = str(entry_row['slug'])
     content_type_slug = str(entry_row.get('content_type_slug') or '')
 
@@ -786,11 +882,6 @@ def render_public_template(
         return HTMLResponse(content=rendered, status_code=status_code)
     except ThemeError:
         logger.exception('Public template render failed', extra={'template': template_name})
-    except Exception:
-        logger.exception(
-            'Unexpected public template render failure',
-            extra={'template': template_name},
-        )
 
     return HTMLResponse(
         content=_build_fallback_html(error_status_code),

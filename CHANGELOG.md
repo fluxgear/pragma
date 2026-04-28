@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.13.1 — 2026-04-27
+
+### Fixed
+- Fixed public `body_html` projection safety by trusting only schema-declared `rich_text` fields for HTML rendering and escaping plain-text `body_html` values
+- Fixed public search handling so overlong queries fail visitor-safe with `search_error` state instead of surfacing validation exceptions as 500 responses
+- Removed broad exception handling from public template rendering fallback and limited recovery behavior to `ThemeError`-driven paths with focused regression coverage
+
 ## v0.13.0 — 2026-04-27
 
 ### Added

@@ -42,6 +42,7 @@ from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 from pragma.themes import ThemeRuntime
 
+_PUBLIC_SEARCH_QUERY_MAX_LENGTH = 200
 router = APIRouter(include_in_schema=False)
 
 _RESERVED_PUBLIC_404_PATHS = {'openapi.json'}
@@ -438,7 +439,12 @@ def render_search(
     search_enabled = True
     total = 0
 
-    if query:
+    if query and len(query) > _PUBLIC_SEARCH_QUERY_MAX_LENGTH:
+        search_enabled = False
+        search_error = (
+            f'Search queries must be {_PUBLIC_SEARCH_QUERY_MAX_LENGTH} characters or fewer.'
+        )
+    elif query:
         params = SearchQueryParams(
             query=query,
             limit=normalized_per_page,
