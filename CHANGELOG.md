@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.15.1 — 2026-04-28
+
+### Added
+- Reworked the root GitHub README as a polished project landing page with badges, Mermaid diagrams, detailed install/deploy guidance, configuration notes, validation commands, and current product boundaries.
+
 ## v0.15.0 — 2026-04-28
 
 ### Added
