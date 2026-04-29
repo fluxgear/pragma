@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.15.0 — 2026-04-28
+
+### Added
+- Added comprehensive repository docs under `docs/` covering installation, configuration, setup wizard, development, testing, deployment, architecture, modules/themes, and troubleshooting.
+- Replaced the stale backend package README with implementation-accurate backend setup and run guidance plus links to root documentation.
+
 ## v0.14.1 — 2026-04-28
 
 ### Fixed
