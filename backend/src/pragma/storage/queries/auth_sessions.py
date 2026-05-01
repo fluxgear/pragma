@@ -83,7 +83,9 @@ def get_active_refresh_session(
         token_hash: SHA-256 hash of the raw refresh token.
 
     Returns:
-        dict[str, Any] | None: Session row when active, otherwise None.
+        dict[str, Any] | None: Session row when active, otherwise None. The
+            matching row is locked until transaction end to serialize refresh-token
+            rotation.
 
     Raises:
         psycopg.Error: If PostgreSQL query execution fails.
@@ -106,6 +108,7 @@ def get_active_refresh_session(
           AND revoked_at IS NULL
           AND expires_at > CURRENT_TIMESTAMP
         LIMIT 1
+        FOR UPDATE
         """,
         (session_id, token_hash),
     ).fetchone()

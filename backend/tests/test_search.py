@@ -643,12 +643,12 @@ def test_search_vector_mode_works_when_available(
     assert [item['id'] for item in payload['items']] == [alpha['id'], beta['id']]
 
 
-def test_search_vector_mode_ignores_mismatched_embedding_dimensions(
+def test_search_vector_mode_surfaces_mismatched_embedding_dimensions(
     apply_runtime_env: Callable[[dict[str, str]], None],
     migrated_database: dict[str, str],
     bootstrap_payload: dict[str, str],
 ) -> None:
-    '''Verify vector mode skips stored embeddings with incompatible dimensions.
+    '''Verify vector mode diagnoses stored embeddings with incompatible dimensions.
 
     Args:
         apply_runtime_env: Fixture helper that applies runtime environment values.
@@ -699,6 +699,9 @@ def test_search_vector_mode_ignores_mismatched_embedding_dimensions(
     assert payload['applied_strategies'] == ['vector']
     assert payload['total'] == 1
     assert [item['id'] for item in payload['items']] == [compatible['id']]
+    assert payload['semantic_diagnostics'] == [
+        '1 search document embedding(s) require rebuild for the active semantic contract'
+    ]
 
 
 def test_search_hybrid_mode_merges_available_strategies(
@@ -761,6 +764,142 @@ def test_search_hybrid_mode_merges_available_strategies(
         exact_match['id'],
         semantic_match['id'],
     }
+
+
+def test_search_auto_embedding_does_not_hold_storage_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    '''Verify provider I/O runs outside active search storage connections.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    '''
+
+    import pragma.ai.service as ai_service
+    import pragma.search.service as search_service
+
+    result_id = uuid4()
+    provider_connection_counts: list[int] = []
+    search_connection_counts: list[int] = []
+
+    class _GuardedStorage:
+        def __init__(self) -> None:
+            self.active_connections = 0
+            self.scope_count = 0
+
+        @contextmanager
+        def connection(self) -> Iterator[object]:
+            self.scope_count += 1
+            self.active_connections += 1
+            try:
+                yield object()
+            finally:
+                self.active_connections -= 1
+
+    class _SearchSettings:
+        search_enable_semantic = True
+
+    storage = _GuardedStorage()
+
+    def _mock_get_extension_capabilities(
+        _connection: object,
+    ) -> dict[str, dict[str, bool]]:
+        return {
+            'pgvector': {'installed': True},
+            'pg_trgm': {'installed': True},
+        }
+
+    def _mock_get_ai_provider_settings(_connection: object) -> dict[str, object]:
+        return {
+            'enabled': True,
+            'provider': 'voyage',
+            'base_url': 'https://api.voyageai.com/v1',
+            'api_key': 'test-ai-key',
+            'embedding_model': 'voyage-3.5-lite',
+            'request_timeout_seconds': 5,
+        }
+
+    def _mock_request_embedding(
+        _config: object,
+        text: str,
+        *,
+        input_type: str,
+    ) -> list[float]:
+        provider_connection_counts.append(storage.active_connections)
+        assert text == 'semantic guard'
+        assert input_type == 'query'
+        return [1.0, 0.0]
+
+    def _mock_search_documents(
+        _connection: object,
+        *,
+        query: str,
+        normalized_query: str,
+        limit: int,
+        offset: int,
+        content_type_slug: str | None,
+        strategies: list[str],
+        query_embedding: str | None = None,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+    ) -> list[dict[str, object]]:
+        search_connection_counts.append(storage.active_connections)
+        assert query == 'semantic guard'
+        assert normalized_query == 'semantic guard'
+        assert limit == 20
+        assert offset == 0
+        assert content_type_slug is None
+        assert strategies == ['vector']
+        assert query_embedding == '[1,0]'
+        assert embedding_provider == 'voyage'
+        assert embedding_model == 'voyage-3.5-lite'
+        return [
+            {
+                'id': result_id,
+                'content_type_slug': 'articles',
+                'slug': 'semantic-guard',
+                'title': 'Semantic Guard',
+                'body_text': 'Semantic provider pool guard',
+                'published_at': datetime.now(UTC),
+                'total_count': 1,
+            }
+        ]
+
+    monkeypatch.setattr(
+        search_service, 'get_extension_capabilities', _mock_get_extension_capabilities
+    )
+    monkeypatch.setattr(search_service, 'search_embedding_column_exists', lambda _: True)
+    monkeypatch.setattr(
+        search_service, 'count_search_embedding_contract_mismatches', lambda *_args, **_kwargs: 0
+    )
+    monkeypatch.setattr(ai_service, 'get_ai_provider_settings', _mock_get_ai_provider_settings)
+    monkeypatch.setattr(ai_service, 'request_embedding', _mock_request_embedding)
+    monkeypatch.setattr(search_service, 'search_documents', _mock_search_documents)
+
+    params = SearchQueryParams.model_construct(
+        query='semantic guard',
+        limit=20,
+        offset=0,
+        content_type_slug=None,
+        mode=SearchMode.VECTOR,
+        query_embedding=None,
+    )
+
+    response = search_public_entries(storage, _SearchSettings(), params)
+
+    assert provider_connection_counts == [0]
+    assert search_connection_counts == [1]
+    assert storage.scope_count == 2
+    assert storage.active_connections == 0
+    assert response.mode_applied == SearchMode.VECTOR
+    assert response.applied_strategies == ['vector']
+    assert [item.id for item in response.items] == [result_id]
 
 
 def test_search_degrades_cleanly_without_pg_trgm(

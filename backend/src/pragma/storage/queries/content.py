@@ -183,6 +183,78 @@ def get_content_type_by_id(connection: Connection, content_type_id: UUID) -> dic
     ).fetchone()
 
 
+def get_content_type_by_id_for_update(
+    connection: Connection, content_type_id: UUID
+) -> dict[str, Any] | None:
+    """Return a content type by identifier with a delete-conflicting row lock.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        content_type_id: Content-type identifier.
+
+    Returns:
+        dict[str, Any] | None: Content-type row when found, otherwise None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            name,
+            slug,
+            description,
+            created_by_user_id,
+            updated_by_user_id,
+            created_at,
+            updated_at
+        FROM pragma_content_types
+        WHERE id = %s
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (content_type_id,),
+    ).fetchone()
+
+
+def get_content_type_by_id_for_key_share(
+    connection: Connection, content_type_id: UUID
+) -> dict[str, Any] | None:
+    """Return a content type by identifier with a create-side key-share lock.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        content_type_id: Content-type identifier.
+
+    Returns:
+        dict[str, Any] | None: Content-type row when found, otherwise None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            name,
+            slug,
+            description,
+            created_by_user_id,
+            updated_by_user_id,
+            created_at,
+            updated_at
+        FROM pragma_content_types
+        WHERE id = %s
+        LIMIT 1
+        FOR KEY SHARE
+        """,
+        (content_type_id,),
+    ).fetchone()
+
+
 def get_content_type_by_slug(connection: Connection, slug: str) -> dict[str, Any] | None:
     """Return a content type by slug.
 
@@ -301,6 +373,36 @@ def delete_content_type(connection: Connection, content_type_id: UUID) -> None:
         """,
         (content_type_id,),
     )
+
+
+def delete_content_type_if_unused(connection: Connection, content_type_id: UUID) -> bool:
+    """Delete a content type only when no entries reference it.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        content_type_id: Content-type identifier to delete.
+
+    Returns:
+        bool: True when the content type row was deleted, otherwise False.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    row = connection.execute(
+        """
+        DELETE FROM pragma_content_types AS content_type
+        WHERE content_type.id = %s
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pragma_content_entries AS entry
+              WHERE entry.content_type_id = content_type.id
+          )
+        RETURNING content_type.id
+        """,
+        (content_type_id,),
+    ).fetchone()
+    return row is not None
 
 
 def replace_field_definitions(

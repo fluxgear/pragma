@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from pragma.auth.models import UserResponse
 
@@ -169,6 +169,25 @@ class AdminUserCreateRequest(BaseModel):
     role_keys: list[str] = Field(default_factory=list)
     force_password_change: bool = True
 
+    @field_validator("email", "username", mode="before")
+    @classmethod
+    def strip_identity_fields(cls, value: object) -> object:
+        """Strip managed-user identity fields before length validation.
+
+        Args:
+            value: Raw email or username input.
+
+        Returns:
+            object: Stripped string for string input; original value otherwise.
+
+        Raises:
+            None.
+        """
+
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
 
 class AdminUserUpdateRequest(BaseModel):
     """Payload for updating an existing managed user account.
@@ -187,6 +206,25 @@ class AdminUserUpdateRequest(BaseModel):
     username: str | None = Field(default=None, min_length=3, max_length=64)
     full_name: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
+
+    @field_validator("email", "username", mode="before")
+    @classmethod
+    def strip_identity_fields(cls, value: object) -> object:
+        """Strip managed-user identity fields before length validation.
+
+        Args:
+            value: Raw email or username input.
+
+        Returns:
+            object: Stripped string for string input; original value otherwise.
+
+        Raises:
+            None.
+        """
+
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class UserRoleAssignmentRequest(BaseModel):

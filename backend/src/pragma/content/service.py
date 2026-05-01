@@ -58,9 +58,11 @@ from pragma.storage.queries.content import (
     count_entries_for_content_type,
     create_content_type,
     create_entry,
-    delete_content_type,
+    delete_content_type_if_unused,
     delete_entry,
     get_content_type_by_id,
+    get_content_type_by_id_for_key_share,
+    get_content_type_by_id_for_update,
     get_content_type_by_slug,
     get_entry_by_id,
     get_entry_by_slug,
@@ -1245,7 +1247,7 @@ def delete_content_type_record(storage: DatabasePool, content_type_id: UUID) -> 
 
     try:
         with storage.connection() as connection, connection.transaction():
-            existing_type = get_content_type_by_id(connection, content_type_id)
+            existing_type = get_content_type_by_id_for_update(connection, content_type_id)
             if existing_type is None:
                 raise ContentError(
                     detail="Content type not found",
@@ -1260,7 +1262,12 @@ def delete_content_type_record(storage: DatabasePool, content_type_id: UUID) -> 
                     status_code=HTTPStatus.CONFLICT,
                 )
 
-            delete_content_type(connection, content_type_id)
+            if not delete_content_type_if_unused(connection, content_type_id):
+                raise ContentError(
+                    detail="Content type has existing entries and cannot be deleted",
+                    code="CONTENT_TYPE_IN_USE",
+                    status_code=HTTPStatus.CONFLICT,
+                )
     except ContentError:
         raise
     except PsycopgError as exc:
@@ -1305,7 +1312,9 @@ def create_entry_record(
 
     try:
         with storage.connection() as connection, connection.transaction():
-            content_type_row = get_content_type_by_id(connection, payload.content_type_id)
+            content_type_row = get_content_type_by_id_for_key_share(
+                connection, payload.content_type_id
+            )
             if content_type_row is None:
                 raise ContentError(
                     detail='Content type not found',

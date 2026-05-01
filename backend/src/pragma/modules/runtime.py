@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Marc Mironescu / FluxGear. MIT License.
-"""Runtime registry and dispatcher for constrained backend modules.
+"""Runtime registry and dispatcher for trusted operator-installed backend modules.
 
 Args:
     None.
@@ -387,6 +387,15 @@ class ModuleRuntime:
             )
 
         module = importlib.util.module_from_spec(spec)
+        logger.warning(
+            'Loading trusted operator-installed module Python code; module entrypoints '
+            'execute in the backend process with application privileges and are not sandboxed',
+            extra={
+                'module_id': discovered_module.manifest.id,
+                'module_code': 'MODULE_TRUSTED_CODE_EXECUTION',
+                'module_entrypoint': str(discovered_module.entrypoint_path),
+            },
+        )
         try:
             spec.loader.exec_module(module)
         except ModuleError:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -704,6 +705,82 @@ def test_search_auto_embedding_uses_provider_when_available(
     assert [item['id'] for item in payload['items']] == [alpha['id'], beta['id']]
 
 
+def test_search_auto_embedding_enforces_provider_model_contract(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify semantic search reports same-dimension provider/model drift.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.service as ai_service
+
+    def _mock_request_embedding(config, text: str, *, input_type: str) -> list[float]:
+        return [1.0, 0.0]
+
+    monkeypatch.setattr(ai_service, 'request_embedding', _mock_request_embedding)
+
+    with _ai_client(apply_runtime_env, migrated_database, search_enable_semantic=True) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        _update_ai_settings(client, headers)
+        content_type = _create_content_type(client, headers)
+        current = _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Model Contract Current',
+            body='<p>Current model vector body</p>',
+        )
+        stale_model = _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Model Contract Stale',
+            body='<p>Stale model vector body</p>',
+        )
+        _seed_search_embedding(
+            migrated_database,
+            current['id'],
+            [1.0, 0.0],
+            provider='voyage',
+            embedding_model='voyage-3.5-lite',
+        )
+        _seed_search_embedding(
+            migrated_database,
+            stale_model['id'],
+            [1.0, 0.0],
+            provider='voyage',
+            embedding_model='voyage-old',
+        )
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'model contract', 'mode': 'vector'},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['mode_applied'] == 'vector'
+    assert payload['applied_strategies'] == ['vector']
+    assert [item['id'] for item in payload['items']] == [current['id']]
+    assert payload['semantic_diagnostics'] == [
+        '1 search document embedding(s) require rebuild for the active semantic contract'
+    ]
+
+
 def test_search_falls_back_to_keyword_when_auto_embedding_fails(
     apply_runtime_env: Callable[[dict[str, str]], None],
     migrated_database: dict[str, str],
@@ -883,6 +960,129 @@ def test_rebuild_embeddings_route_updates_search_metadata(
     assert row[0] == 'voyage'
     assert row[1] == 'voyage-3.5-lite'
     assert row[2] is not None
+
+
+def test_rebuild_embeddings_does_not_hold_storage_connection_during_provider_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify rebuild releases DB resources before provider embedding requests.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.service as ai_service
+
+    entry_id = uuid4()
+    provider_connection_counts: list[int] = []
+    update_connection_counts: list[int] = []
+
+    class _FakeConnection:
+        def __init__(self, storage: _GuardedStorage) -> None:
+            self.storage = storage
+
+        @contextmanager
+        def transaction(self) -> Iterator[None]:
+            yield
+
+    class _GuardedStorage:
+        def __init__(self) -> None:
+            self.active_connections = 0
+            self.scope_count = 0
+
+        @contextmanager
+        def connection(self) -> Iterator[_FakeConnection]:
+            self.scope_count += 1
+            self.active_connections += 1
+            try:
+                yield _FakeConnection(self)
+            finally:
+                self.active_connections -= 1
+
+    storage = _GuardedStorage()
+    batches = [
+        [
+            {
+                'entry_id': entry_id,
+                'title_text': 'Rebuild Guard',
+                'body_text': 'Provider calls happen without a DB connection',
+            }
+        ],
+        [],
+    ]
+
+    def _mock_get_extension_capabilities(
+        _connection: object,
+    ) -> dict[str, dict[str, bool]]:
+        return {
+            'pgvector': {'installed': True},
+            'pg_trgm': {'installed': True},
+        }
+
+    def _mock_get_ai_provider_settings(_connection: object) -> dict[str, object]:
+        return {
+            'enabled': True,
+            'provider': 'voyage',
+            'base_url': 'https://api.voyageai.com/v1',
+            'api_key': 'test-ai-key',
+            'embedding_model': 'voyage-3.5-lite',
+            'request_timeout_seconds': 5,
+        }
+
+    def _mock_list_search_documents_for_embedding_rebuild(
+        _connection: object,
+        **_kwargs: object,
+    ) -> list[dict[str, object]]:
+        return batches.pop(0)
+
+    def _mock_request_embedding(
+        _config: object,
+        text: str,
+        *,
+        input_type: str,
+    ) -> list[float]:
+        provider_connection_counts.append(storage.active_connections)
+        assert text == 'Rebuild Guard Provider calls happen without a DB connection'
+        assert input_type == 'document'
+        return [0.25, 0.75]
+
+    def _mock_update_search_document_embedding(_connection: object, **_kwargs: object) -> None:
+        update_connection_counts.append(storage.active_connections)
+
+    monkeypatch.setattr(
+        ai_service, 'get_extension_capabilities', _mock_get_extension_capabilities
+    )
+    monkeypatch.setattr(ai_service, 'search_embedding_column_exists', lambda _: True)
+    monkeypatch.setattr(ai_service, 'get_ai_provider_settings', _mock_get_ai_provider_settings)
+    monkeypatch.setattr(
+        ai_service,
+        'list_search_documents_for_embedding_rebuild',
+        _mock_list_search_documents_for_embedding_rebuild,
+    )
+    monkeypatch.setattr(ai_service, 'request_embedding', _mock_request_embedding)
+    monkeypatch.setattr(
+        ai_service, 'update_search_document_embedding', _mock_update_search_document_embedding
+    )
+
+    response = ai_service.rebuild_search_embeddings(
+        storage,
+        ai_service.AISearchEmbeddingRebuildRequest(batch_size=10, max_documents=10),
+    )
+
+    assert provider_connection_counts == [0]
+    assert update_connection_counts == [1]
+    assert storage.scope_count == 4
+    assert storage.active_connections == 0
+    assert response.attempted == 1
+    assert response.embedded == 1
+    assert response.failed == 0
+    assert response.failed_entry_ids == []
 
 
 def test_content_save_paths_never_call_provider(

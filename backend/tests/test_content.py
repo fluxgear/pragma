@@ -14,7 +14,11 @@ Raises:
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from fastapi.testclient import TestClient
@@ -1196,3 +1200,118 @@ def test_content_type_delete_rejects_types_with_entries(
         'detail': 'Content type has existing entries and cannot be deleted',
         'code': 'CONTENT_TYPE_IN_USE',
     }
+
+
+def test_content_type_delete_conflicts_with_concurrent_entry_create(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify delete does not cascade an entry created after its precheck.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If delete wins by cascading the concurrent entry.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    content_type_id = content_type['id']
+    entry_id = uuid4()
+    timestamp = datetime.now(UTC)
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+
+    with (
+        psycopg.connect(dsn, row_factory=dict_row) as creator_connection,
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
+        with creator_connection.transaction():
+            locked_type = creator_connection.execute(
+                """
+                SELECT id
+                FROM pragma_content_types
+                WHERE id = %s
+                FOR KEY SHARE
+                """,
+                (content_type_id,),
+            ).fetchone()
+            assert locked_type is not None
+
+            delete_future = executor.submit(
+                client.delete,
+                f'/api/v1/content/types/{content_type_id}',
+                headers=headers,
+            )
+            time.sleep(0.2)
+
+            creator_connection.execute(
+                """
+                INSERT INTO pragma_content_entries (
+                    id,
+                    content_type_id,
+                    slug,
+                    status,
+                    payload,
+                    published_at,
+                    created_by_user_id,
+                    updated_by_user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                """,
+                (
+                    entry_id,
+                    content_type_id,
+                    'created-during-delete',
+                    'draft',
+                    json.dumps(
+                        {
+                            'title': 'Created During Delete',
+                            'body': '<p>Must remain stored.</p>',
+                            'views': 1,
+                        }
+                    ),
+                    None,
+                    None,
+                    None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+        delete_response = delete_future.result(timeout=5)
+
+    assert delete_response.status_code == 409
+    assert delete_response.json() == {
+        'detail': 'Content type has existing entries and cannot be deleted',
+        'code': 'CONTENT_TYPE_IN_USE',
+    }
+
+    with psycopg.connect(dsn, row_factory=dict_row) as verification_connection:
+        remaining_entry = verification_connection.execute(
+            """
+            SELECT id
+            FROM pragma_content_entries
+            WHERE id = %s AND content_type_id = %s
+            """,
+            (entry_id, content_type_id),
+        ).fetchone()
+        remaining_type = verification_connection.execute(
+            """
+            SELECT id
+            FROM pragma_content_types
+            WHERE id = %s
+            """,
+            (content_type_id,),
+        ).fetchone()
+
+    assert remaining_entry is not None
+    assert remaining_type is not None

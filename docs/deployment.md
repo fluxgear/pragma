@@ -13,7 +13,7 @@ db -> migrate -> backend -> proxy
 - `backend`: runs Uvicorn with `pragma.app:create_app --factory`.
 - `proxy`: builds/serves the admin SPA and proxies API, WebSocket, health, readiness, and public routes.
 
-Named volumes are `db-data`, `media`, and `modules`.
+Named volumes are `db-data`, `media`, and `modules`. The `modules` volume contains trusted executable Python module code when modules are installed; keep writes to it under operator control.
 
 ## PostgreSQL requirement
 
@@ -38,7 +38,33 @@ For production Docker, configure exactly one source for each secret:
 - `PRAGMA_DATABASE_PASSWORD` or `PRAGMA_DATABASE_PASSWORD_FILE`
 - `PRAGMA_JWT_SECRET_KEY` or `PRAGMA_JWT_SECRET_KEY_FILE`
 
-The compose file forwards both variants, the backend entrypoint loads file secrets, and validation rejects raw+file conflicts or missing values.
+Raw-secret deployments use only `docker/docker-compose.yml` and set the raw variables in `docker/prod.env`.
+
+File-secret deployments use the supported bind-mount override file so the same paths exist in `db`, `migrate`, and `backend`:
+
+```bash
+mkdir -p docker/secrets
+printf '%s' 'replace-with-a-random-database-password' > docker/secrets/pragma_database_password
+printf '%s' 'replace-with-at-least-32-random-characters' > docker/secrets/pragma_jwt_secret_key
+chmod 600 docker/secrets/pragma_database_password docker/secrets/pragma_jwt_secret_key
+```
+
+Then leave `PRAGMA_DATABASE_PASSWORD` and `PRAGMA_JWT_SECRET_KEY` empty in `docker/prod.env` and set:
+
+```env
+PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
+PRAGMA_JWT_SECRET_KEY_FILE=/run/secrets/pragma_jwt_secret_key
+PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./docker/secrets/pragma_database_password
+PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./docker/secrets/pragma_jwt_secret_key
+```
+
+Start or validate with both compose files:
+
+```bash
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.secrets.yml --env-file docker/prod.env up -d --build
+```
+
+The base compose file forwards both secret variants, `docker/docker-compose.secrets.yml` bind-mounts the host secret files to the documented `/run/secrets/...` paths for `db`, `migrate`, and `backend`, the backend entrypoint loads file secrets, and validation rejects raw+file conflicts or missing values.
 
 ## Migration and start commands
 

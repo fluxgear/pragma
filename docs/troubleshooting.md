@@ -53,7 +53,7 @@ If public pages render 404s or theme errors, verify `PRAGMA_THEME_ROOT`, `PRAGMA
 
 ## Module load isolation
 
-Module discovery/loading failures should not take down core content operations, but failed modules may not register hooks. Check backend logs and `/api/v1/modules` with a user that has module-management permission. No bundled modules are expected in a fresh checkout.
+Module discovery/loading failures should not take down core content operations, but failed modules may not register hooks. Check backend logs and `/api/v1/modules` with a user that has module-management permission. A `MODULE_TRUSTED_CODE_EXECUTION` warning means Pragma imported an enabled module entrypoint as trusted in-process Python code; verify that `PRAGMA_MODULE_ROOT` is writable only by your operator-controlled deployment path. No bundled modules are expected in a fresh checkout.
 
 ## Semantic search fallback
 

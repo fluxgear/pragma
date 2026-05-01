@@ -26,6 +26,7 @@ from pragma.auth.permissions import (
     PERMISSION_MEDIA_ASSETS_UPLOAD,
 )
 from pragma.config import Settings, get_settings
+from pragma.errors import MediaError
 from pragma.media.models import MediaAssetListParams, MediaAssetListResponse, MediaAssetResponse
 from pragma.media.service import (
     create_media_asset,
@@ -97,6 +98,61 @@ _DETAIL_MEDIA_ERROR_RESPONSES = {
 }
 
 
+def _raise_upload_too_large() -> None:
+    """Raise the standard oversized media-upload error.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        MediaError: Always raised with the media upload size-limit code.
+    """
+
+    raise MediaError(
+        detail='Upload exceeds the configured size limit',
+        code='MEDIA_UPLOAD_TOO_LARGE',
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+    )
+
+
+async def _read_limited_upload_body(request: Request, settings: Settings) -> bytes:
+    """Read raw upload bytes while enforcing the configured size limit.
+
+    Args:
+        request: FastAPI request carrying raw upload bytes.
+        settings: Application settings with the media upload limit.
+
+    Returns:
+        bytes: Raw request body bytes capped by the configured limit.
+
+    Raises:
+        MediaError: If Content-Length or streamed bytes exceed the limit.
+    """
+
+    content_length = request.headers.get('content-length')
+    if content_length is not None:
+        normalized_content_length = content_length.strip()
+        if normalized_content_length.isdecimal():
+            declared_size = int(normalized_content_length)
+            if declared_size > settings.media_max_upload_bytes:
+                _raise_upload_too_large()
+
+    body = bytearray()
+    received_size = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        received_size += len(chunk)
+        if received_size > settings.media_max_upload_bytes:
+            _raise_upload_too_large()
+        body.extend(chunk)
+
+    return bytes(body)
+
+
 @router.post(
     '/assets',
     response_model=MediaAssetResponse,
@@ -135,7 +191,7 @@ async def upload_media_asset(
         StorageError: If the storage layer fails.
     """
 
-    body = await request.body()
+    body = await _read_limited_upload_body(request, settings)
     declared_content_type = request.headers.get('content-type')
     return create_media_asset(
         storage=storage,

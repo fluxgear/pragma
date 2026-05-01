@@ -912,15 +912,25 @@ def test_checked_in_default_theme_shipped_sources_match_runtime_contracts() -> N
     """
 
     theme_root = _repo_theme_root() / 'default'
+    archive_source = (
+        theme_root / 'templates' / 'archive.html'
+    ).read_text(encoding='utf-8')
+    search_source = (
+        theme_root / 'templates' / 'search.html'
+    ).read_text(encoding='utf-8')
     page_source = (theme_root / 'templates' / 'page.html').read_text(encoding='utf-8')
     post_source = (theme_root / 'templates' / 'post.html').read_text(encoding='utf-8')
     css_source = (theme_root / 'static' / 'css' / 'main.css').read_text(encoding='utf-8')
     js_source = (theme_root / 'static' / 'js' / 'theme.js').read_text(encoding='utf-8')
 
-    assert 'backend rich-text allowlist validation' in page_source
-    assert 'backend rich-text allowlist validation' in post_source
-    assert 'sanitized via nh3' not in page_source
-    assert 'sanitized via nh3' not in post_source
+    assert 'aria-disabled="true"' in archive_source
+    assert 'aria-disabled="true"' in search_source
+    assert "pagination.prev_url|default('#', true)" not in archive_source
+    assert "pagination.next_url|default('#', true)" not in archive_source
+    assert "pagination.prev_url|default('#', true)" not in search_source
+    assert "pagination.next_url|default('#', true)" not in search_source
+    assert '{# SECURITY: sanitized via nh3 #}' in page_source
+    assert '{# SECURITY: sanitized via nh3 #}' in post_source
     assert '.meta-list' in css_source
     assert '.post-shell' in css_source
     assert 'resolveServerMode' in js_source

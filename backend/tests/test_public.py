@@ -13,12 +13,15 @@ Raises:
 
 from __future__ import annotations
 
+import json
 from importlib import import_module
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from pragma.errors import ThemeError
+from pragma.errors import StorageError, ThemeError
+from tests.helpers import build_database_dsn
 
 public_router_module = import_module('pragma.public.router')
 
@@ -235,6 +238,33 @@ def _create_entry(
     return response.json()
 
 
+def _overwrite_entry_payload(
+    migrated_database: dict[str, str],
+    entry_id: str,
+    payload: dict[str, object],
+) -> None:
+    """Overwrite stored entry payload to simulate imported legacy content.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        entry_id: Stored content-entry identifier.
+        payload: Replacement JSON payload.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot update the stored payload.
+    """
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn) as connection, connection.transaction():
+        connection.execute(
+            "UPDATE pragma_content_entries SET payload = %s::jsonb WHERE id = %s",
+            (json.dumps(payload), entry_id),
+        )
+
+
 def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
     """Verify the public homepage renders SEO metadata and theme assets.
 
@@ -325,6 +355,75 @@ def test_published_page_renders_rich_text_markup_without_escaping(
     assert response.status_code == 200
     assert '<strong>rich text</strong>' in response.text
     assert '&lt;strong&gt;rich text&lt;/strong&gt;' not in response.text
+
+
+def test_updated_legacy_rich_text_is_sanitized_in_public_rendering(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify unchanged legacy rich text is sanitized before public safe rendering.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    page_type = _create_content_type(client, headers, name='Pages', slug='page')
+    page_entry = _create_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Legacy Rich Text Page',
+        body='<p>Initial safe body</p>',
+    )
+    legacy_body = (
+        '<p>Safe text before payload</p>'
+        '<img src=x onerror=alert(1)>'
+        '<script>alert(2)</script>'
+    )
+    _overwrite_entry_payload(
+        migrated_database,
+        str(page_entry['id']),
+        {
+            **page_entry['payload'],
+            'body': legacy_body,
+        },
+    )
+
+    update_response = client.put(
+        f"/api/v1/content/entries/{page_entry['id']}",
+        headers=headers,
+        json={
+            'status': 'published',
+            'payload': {
+                **page_entry['payload'],
+                'title': 'Updated Legacy Rich Text Page',
+                'body': legacy_body,
+            },
+        },
+    )
+    assert update_response.status_code == 200
+
+    response = client.get(f"/pages/{page_entry['slug']}")
+
+    assert response.status_code == 200
+    assert 'Updated Legacy Rich Text Page' in response.text
+    assert '<p>Safe text before payload</p>' in response.text
+    assert '<img src=x' not in response.text
+    assert 'onerror=alert(1)' not in response.text
+    assert '<script>alert' not in response.text
+    assert 'alert(2)' not in response.text
+    assert '&lt;img' not in response.text
+    assert '&lt;script' not in response.text
 
 
 def test_page_with_plain_text_body_html_field_escapes_untrusted_markup(
@@ -586,7 +685,26 @@ def test_archive_pagination_lists_only_published_entries_and_supports_empty_stat
     assert second_title in combined_pages
     assert third_title in combined_pages
     assert 'Archive Post Draft' not in combined_pages
-    assert '/archive?page=2&amp;per_page=2' in page_one.text
+    disabled_previous = (
+        '<span class="button button--secondary" aria-disabled="true">Previous</span>'
+    )
+    assert disabled_previous in page_one.text
+    page_two_link = (
+        '<a class="button button--secondary" href="/archive?page=2&amp;per_page=2">'
+        'Next</a>'
+    )
+    assert page_two_link in page_one.text
+    page_one_link = (
+        '<a class="button button--secondary" href="/archive?page=1&amp;per_page=2">'
+        'Previous</a>'
+    )
+    assert page_one_link in page_two.text
+    disabled_next = (
+        '<span class="button button--secondary" aria-disabled="true">Next</span>'
+    )
+    assert disabled_next in page_two.text
+    assert 'pagination.prev_url|default' not in combined_pages
+    assert 'pagination.next_url|default' not in combined_pages
 
     assert empty_state.status_code == 200
     assert 'No archive entries are available.' in empty_state.text
@@ -672,6 +790,16 @@ def test_search_with_query_maps_results_to_public_urls_and_excludes_unpublished_
     assert f'/pages/{page_entry["slug"]}' in response.text
     assert f'/posts/{post_entry["slug"]}' in response.text
     assert 'Nebula Draft Hidden' not in response.text
+    disabled_previous = (
+        '<span class="button button--secondary" aria-disabled="true">Previous</span>'
+    )
+    disabled_next = (
+        '<span class="button button--secondary" aria-disabled="true">Next</span>'
+    )
+    assert disabled_previous in response.text
+    assert disabled_next in response.text
+    assert 'pagination.prev_url|default' not in response.text
+    assert 'pagination.next_url|default' not in response.text
 
 
 def test_search_overlong_query_returns_visitor_safe_response(client: TestClient) -> None:
@@ -782,6 +910,98 @@ def test_unknown_api_paths_preserve_structured_json_404(client: TestClient) -> N
     payload = response.json()
     assert payload['detail'] == 'Not Found'
     assert payload['code'] == 'HTTP_404'
+
+
+@pytest.mark.parametrize(
+    ('route', 'patched_name'),
+    [
+        ('/', 'list_published_entries'),
+        ('/pages/storage-outage', 'get_published_entry'),
+        ('/posts/storage-outage', 'get_published_entry'),
+        ('/archive', 'list_published_entries'),
+    ],
+)
+def test_public_storage_outages_return_html_unavailable_response(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    patched_name: str,
+) -> None:
+    """Verify public visitor routes render HTML during storage outages.
+
+    Args:
+        client: FastAPI test client.
+        monkeypatch: Pytest monkeypatch fixture.
+        route: Public visitor route under test.
+        patched_name: Public router storage helper to fail for the route.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    def _raise_storage_error(*args: object, **kwargs: object) -> None:
+        raise StorageError(
+            detail='Internal storage failure detail should never leak',
+            code='DATABASE_UNAVAILABLE',
+        )
+
+    monkeypatch.setattr(public_router_module, patched_name, _raise_storage_error)
+
+    response = client.get(route)
+
+    assert response.status_code == 503
+    assert response.headers['content-type'].startswith('text/html')
+    assert 'This page is temporarily unavailable.' in response.text
+    assert 'Internal storage failure detail should never leak' not in response.text
+    assert 'DATABASE_UNAVAILABLE' not in response.text
+
+
+def test_public_storage_outage_fallback_preserves_html_when_theme_fails(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify storage outage handling still returns fallback HTML if theming fails.
+
+    Args:
+        client: FastAPI test client.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    def _raise_storage_error(*args: object, **kwargs: object) -> None:
+        raise StorageError(
+            detail='Internal storage failure detail should never leak',
+            code='DATABASE_UNAVAILABLE',
+        )
+
+    def _raise_theme_error(*args: object, **kwargs: object) -> str:
+        raise ThemeError(
+            detail='Internal template details should never leak',
+            code='THEME_TEMPLATE_RENDER_FAILED',
+        )
+
+    monkeypatch.setattr(
+        public_router_module,
+        'list_published_entries',
+        _raise_storage_error,
+    )
+    monkeypatch.setattr(client.app.state.theme_runtime, 'render_template', _raise_theme_error)
+
+    response = client.get('/')
+
+    assert response.status_code == 503
+    assert response.headers['content-type'].startswith('text/html')
+    assert 'temporarily unavailable' in response.text.lower()
+    assert 'Internal storage failure detail should never leak' not in response.text
+    assert 'Internal template details should never leak' not in response.text
 
 
 def test_theme_render_failure_returns_visitor_safe_500_response(

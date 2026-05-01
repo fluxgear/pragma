@@ -223,6 +223,47 @@ def _embedding_source_text(title_text: str, body_text: str) -> str:
     return re.sub(r'\s+', ' ', f'{title_text} {body_text}').strip()
 
 
+def get_query_embedding_provider_config(
+    connection: Connection,
+) -> EmbeddingProviderConfig | None:
+    """Load provider configuration for public query embeddings without I/O.
+
+    Args:
+        connection: Open PostgreSQL connection.
+
+    Returns:
+        EmbeddingProviderConfig | None: Provider config when semantic AI is enabled.
+
+    Raises:
+        ConfigError: If enabled provider settings are invalid.
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    settings_row = get_ai_provider_settings(connection)
+    return _provider_config_from_row(settings_row, require_enabled=False)
+
+
+def generate_query_embedding_from_config(
+    provider_config: EmbeddingProviderConfig,
+    *,
+    query: str,
+) -> list[float]:
+    """Generate a query embedding from preloaded provider configuration.
+
+    Args:
+        provider_config: Provider configuration loaded outside provider I/O.
+        query: Normalized search-query text.
+
+    Returns:
+        list[float]: Embedding values returned by the configured provider.
+
+    Raises:
+        SearchError: If the provider request fails.
+    """
+
+    return request_embedding(provider_config, query, input_type='query')
+
+
 def get_ai_provider_settings_snapshot(storage: DatabasePool) -> AIProviderSettingsResponse:
     """Return the current AI-provider settings snapshot.
 
@@ -374,11 +415,10 @@ def generate_query_embedding_for_search(
         SearchError: If the provider request fails.
     """
 
-    settings_row = get_ai_provider_settings(connection)
-    provider_config = _provider_config_from_row(settings_row, require_enabled=False)
+    provider_config = get_query_embedding_provider_config(connection)
     if provider_config is None:
         return None
-    return request_embedding(provider_config, query, input_type='query')
+    return generate_query_embedding_from_config(provider_config, query=query)
 
 
 def test_ai_provider_connection(
@@ -446,9 +486,15 @@ def rebuild_search_embeddings(
     embedded = 0
     failed = 0
     failed_entry_ids: list[str] = []
+    expected_embedding_dimensions: int | None = None
+    content_type_slug = (
+        _normalize_content_type_slug(payload.content_type_slug)
+        if payload.content_type_slug is not None
+        else None
+    )
 
     try:
-        with storage.connection() as connection, connection.transaction():
+        with storage.connection() as connection:
             capabilities = get_extension_capabilities(connection)
             if not capabilities['pgvector']['installed'] or not search_embedding_column_exists(
                 connection
@@ -461,43 +507,52 @@ def rebuild_search_embeddings(
 
             settings_row = get_ai_provider_settings(connection)
             provider_config = _provider_config_from_row(settings_row, require_enabled=True)
-            remaining = payload.max_documents
-            offset = 0
-            content_type_slug = (
-                _normalize_content_type_slug(payload.content_type_slug)
-                if payload.content_type_slug is not None
-                else None
-            )
 
-            while remaining > 0:
-                batch_limit = min(payload.batch_size, remaining)
+        remaining = payload.max_documents
+        offset = 0
+
+        while remaining > 0:
+            batch_limit = min(payload.batch_size, remaining)
+            with storage.connection() as connection:
                 rows = list_search_documents_for_embedding_rebuild(
                     connection,
                     provider=provider_config.provider.value,
                     embedding_model=provider_config.embedding_model,
+                    expected_embedding_dimensions=expected_embedding_dimensions,
                     content_type_slug=content_type_slug,
                     limit=batch_limit,
                     offset=offset if payload.force else 0,
                     stale_only=not payload.force,
                 )
-                if not rows:
-                    break
-                if payload.force:
-                    offset += len(rows)
+            if not rows:
+                break
+            if payload.force:
+                offset += len(rows)
 
-                for row in rows:
-                    attempted += 1
-                    remaining -= 1
-                    source_text = _embedding_source_text(
-                        str(row['title_text']),
-                        str(row['body_text']),
+            for row in rows:
+                attempted += 1
+                remaining -= 1
+                source_text = _embedding_source_text(
+                    str(row['title_text']),
+                    str(row['body_text']),
+                )
+                try:
+                    embedding = request_embedding(
+                        provider_config,
+                        source_text,
+                        input_type='document',
                     )
-                    try:
-                        embedding = request_embedding(
-                            provider_config,
-                            source_text,
-                            input_type='document',
+                    if expected_embedding_dimensions is None:
+                        expected_embedding_dimensions = len(embedding)
+                    elif len(embedding) != expected_embedding_dimensions:
+                        raise SearchError(
+                            detail=(
+                                'Embedding provider returned inconsistent vector dimensions'
+                            ),
+                            code='SEARCH_EMBEDDING_DIMENSION_MISMATCH',
+                            status_code=HTTPStatus.BAD_GATEWAY,
                         )
+                    with storage.connection() as connection, connection.transaction():
                         update_search_document_embedding(
                             connection,
                             entry_id=row['entry_id'],
@@ -506,17 +561,17 @@ def rebuild_search_embeddings(
                             embedding_model=provider_config.embedding_model,
                             embedded_at=datetime.now(UTC),
                         )
-                        embedded += 1
-                    except SearchError as exc:
-                        failed += 1
-                        failed_entry_ids.append(str(row['entry_id']))
-                        logging.getLogger(__name__).warning(
-                            'Search embedding rebuild failed for entry',
-                            extra={
-                                'entry_id': str(row['entry_id']),
-                                'search_code': exc.code,
-                            },
-                        )
+                    embedded += 1
+                except SearchError as exc:
+                    failed += 1
+                    failed_entry_ids.append(str(row['entry_id']))
+                    logging.getLogger(__name__).warning(
+                        'Search embedding rebuild failed for entry',
+                        extra={
+                            'entry_id': str(row['entry_id']),
+                            'search_code': exc.code,
+                        },
+                    )
     except ConfigError:
         raise
     except SearchError:

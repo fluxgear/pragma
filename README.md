@@ -1,77 +1,99 @@
+<p align="center">
+  <img alt="Pragma admin dashboard" src="docs/assets/screenshots/admin-dashboard.png" width="920">
+</p>
+
 <h1 align="center">Pragma</h1>
 
 <p align="center">
-  <strong>A PostgreSQL-native CMS for single-site teams that want a serious backend, a modern admin, and server-rendered public pages.</strong>
+  <strong>A PostgreSQL-native CMS with a refined Vue admin, a FastAPI core, and server-rendered public pages.</strong>
 </p>
 
 <p align="center">
-  <a href="docs/installation.md"><img alt="Install" src="https://img.shields.io/badge/install-Docker%20or%20manual-2ea44f?style=for-the-badge"></a>
-  <a href="docs/deployment.md"><img alt="Deploy" src="https://img.shields.io/badge/deploy-PostgreSQL%2018%20%2B%20pgvector-4169e1?style=for-the-badge"></a>
-  <a href="docs/architecture.md"><img alt="Architecture" src="https://img.shields.io/badge/backend-FastAPI-009688?style=for-the-badge"></a>
+  <a href="docs/installation.md"><img alt="Install" src="https://img.shields.io/badge/install-Docker%20DB%20or%20manual-111111?style=for-the-badge"></a>
+  <a href="docs/deployment.md"><img alt="Deploy" src="https://img.shields.io/badge/deploy-Compose%20production-111111?style=for-the-badge"></a>
+  <a href="backend/pyproject.toml"><img alt="Backend" src="https://img.shields.io/badge/backend-FastAPI%20%2B%20Python%203.12-0f766e?style=for-the-badge"></a>
   <a href="admin/package.json"><img alt="Admin" src="https://img.shields.io/badge/admin-Vue%203%20%2B%20PrimeVue-42b883?style=for-the-badge"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-black?style=for-the-badge"></a>
+  <a href="docs/architecture.md"><img alt="Database" src="https://img.shields.io/badge/database-PostgreSQL%2018%20%2B%20pgvector-4169e1?style=for-the-badge"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-000000?style=for-the-badge"></a>
 </p>
 
 <p align="center">
-  <code>FastAPI</code> · <code>Vue 3</code> · <code>PrimeVue</code> · <code>PostgreSQL 18</code> · <code>pg_trgm</code> · <code>pgvector</code> · <code>Jinja2</code> · <code>HTMX-ready themes</code>
+  <code>FastAPI</code> · <code>Vue 3</code> · <code>PrimeVue</code> · <code>PostgreSQL 18</code> · <code>pg_trgm</code> · <code>pgvector</code> · <code>Jinja themes</code> · <code>WebSockets</code>
 </p>
 
 ---
 
-## The short version
+## Designed for teams that want the database to be the architecture
 
-Pragma is a **single-site, multi-user content management system** built around PostgreSQL instead of an ORM abstraction layer. It ships with:
+Pragma is a **single-site, multi-user content management system** for operators who prefer explicit infrastructure over opaque platform magic. PostgreSQL is the system of record, the search engine, the realtime coordination point, and the schema contract. The backend uses raw SQL query modules instead of an ORM layer.
 
-- a Python 3.12 / FastAPI backend with REST APIs under `/api/v1`;
-- a Vue 3 + PrimeVue admin SPA for setup, content, media, users, AI settings, and account flows;
-- a backend-rendered public frontend using filesystem themes and Jinja templates;
-- PostgreSQL-native keyword, fuzzy, and optional vector/semantic search;
-- a production Docker stack with PostgreSQL, migrations, backend, admin/proxy, media, and modules volumes.
+You get a modern administration workspace, a REST API under `/api/v1`, local image media, filesystem themes, trusted backend modules, optional semantic search, and backend-rendered public pages from the same deployment.
 
-It is designed to be explicit: infrastructure belongs in env/config and operator setup; application onboarding belongs in the setup wizard.
+Pragma release copy is currently aligned to **v1.0.0-beta.1**. The backend Python package uses the PEP 440-compatible version **1.0.0b1**, and the admin package uses the semver prerelease **1.0.0-beta.1**.
 
 ---
 
-## What you get
+## Interface gallery
 
-| Area | Implemented capability |
+Real screenshots captured from a live local Pragma backend and admin session.
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Setup wizard" src="docs/assets/screenshots/admin-setup.png"><br><strong>Setup wizard</strong></td>
+    <td width="50%"><img alt="Login" src="docs/assets/screenshots/admin-login.png"><br><strong>Login</strong></td>
+  </tr>
+  <tr>
+    <td width="50%"><img alt="Dashboard" src="docs/assets/screenshots/admin-dashboard.png"><br><strong>Dashboard</strong></td>
+    <td width="50%"><img alt="Content workspace" src="docs/assets/screenshots/admin-content.png"><br><strong>Content workspace</strong></td>
+  </tr>
+  <tr>
+    <td width="50%"><img alt="Media library" src="docs/assets/screenshots/admin-media.png"><br><strong>Media library</strong></td>
+    <td width="50%"><img alt="Public homepage" src="docs/assets/screenshots/public-home.png"><br><strong>Public homepage</strong></td>
+  </tr>
+</table>
+
+---
+
+## Highlights
+
+| Area | Current capability |
 | --- | --- |
-| **Backend** | FastAPI app factory, structured errors, health/readiness, install detection, Alembic migrations |
-| **Auth** | JWT bearer access tokens, HTTP-only refresh cookie, first-admin bootstrap, roles and permissions |
-| **Content** | Content types, entries, publishing state, backend query modules, public page/post/archive routes |
-| **Media** | Local filesystem image library for JPEG, PNG, GIF, and WebP uploads |
-| **Search** | Keyword/fuzzy PostgreSQL search plus optional semantic/vector behavior when embeddings are configured |
-| **Admin** | Vue 3 SPA with PrimeVue, Pinia, router guards, setup/content/media/AI/users/account surfaces |
-| **Public frontend** | Server-rendered Jinja theme routes for home, pages, posts, archive, search, static theme assets, and themed 404s |
-| **Themes** | Filesystem-discovered themes with a complete checked-in default theme |
-| **Modules** | Filesystem-discovered backend modules with permission-gated APIs and isolated hook failures |
-| **Realtime** | Admin-facing ticketed WebSockets backed by PostgreSQL LISTEN/NOTIFY |
-| **Deployment** | Production Compose stack: `db -> migrate -> backend -> proxy` |
+| **Admin** | Vue 3 + PrimeVue SPA with setup, login, dashboard, content, media, AI settings, users, and account routes. |
+| **Backend** | Python 3.12 + FastAPI app factory, structured errors, health/readiness, install detection, REST APIs, WebSocket realtime. |
+| **Database** | PostgreSQL 18 with `pg_trgm` and `vector`/pgvector as the supported database contract. |
+| **Content** | Content types, entries, publishing state, rich-text validation, public pages/posts/archive/search routes. |
+| **Media** | Local filesystem-backed image uploads for JPEG, PNG, GIF, and WebP. |
+| **Search** | Keyword/fuzzy search with optional semantic/vector behavior when embeddings and database capabilities are available. |
+| **Public frontend** | Backend-rendered Jinja theme routes using the active filesystem theme. |
+| **Themes** | Filesystem discovery with a checked-in `themes/default` bundle. |
+| **Modules** | Filesystem-discovered trusted Python modules with manifests, persisted enablement, and isolated hook failures. |
+| **Deployment** | Production Compose stack ordered `db -> migrate -> backend -> proxy`, with media and module volumes. |
 
 ---
 
-## Architecture at a glance
+## Architecture
 
 ```mermaid
 flowchart TD
     Browser["Browser"]
-
-    Browser -->|"/login /setup /app/*"| Admin["Vue 3 Admin SPA<br/>PrimeVue + Pinia + Vite"]
+    Browser -->|"/login /setup /app"| Admin["Vue 3 admin SPA<br/>PrimeVue + Pinia + Vite"]
     Browser -->|"/api/v1/*"| API["FastAPI API<br/>REST + WebSocket"]
-    Browser -->|"/ /pages/* /posts/* /archive /search"| Public["FastAPI Public Frontend<br/>Jinja themes"]
+    Browser -->|"/ /pages/* /posts/* /archive /search"| Public["FastAPI public renderer<br/>Jinja theme templates"]
 
     Admin --> API
     Public --> API
 
-    API --> Auth["Auth + RBAC"]
-    API --> Content["Content + Media"]
-    API --> Search["Search + Optional Embeddings"]
-    API --> Modules["Module Runtime"]
-    API --> Realtime["Realtime Hub"]
+    API --> Auth["Auth + roles + permissions"]
+    API --> Content["Content + media"]
+    API --> Search["Keyword/fuzzy search<br/>optional embeddings"]
+    API --> AI["Privileged AI settings"]
+    API --> Modules["Trusted module runtime"]
+    API --> Realtime["Realtime hub"]
 
     Auth --> DB[("PostgreSQL 18<br/>pg_trgm + pgvector")]
     Content --> DB
     Search --> DB
+    AI --> DB
     Modules --> DB
     Realtime --> DB
 
@@ -80,69 +102,81 @@ flowchart TD
     Modules --> ModuleFS["Module filesystem"]
 ```
 
-The backend uses raw SQL through `backend/src/pragma/storage/queries/`. No ORM. No alternate database backend. PostgreSQL 18 with `pg_trgm` and `vector`/pgvector is the supported database contract.
+```mermaid
+sequenceDiagram
+    participant Operator
+    participant Proxy
+    participant DB as PostgreSQL
+    participant Migrate as Alembic migrate
+    participant Backend as FastAPI backend
 
----
+    Operator->>Proxy: docker compose up -d --build
+    Proxy->>DB: start PostgreSQL 18 + extensions
+    DB-->>Migrate: database ready
+    Migrate->>DB: upgrade schema to head
+    Migrate-->>Backend: migrations complete
+    Backend->>DB: readiness checks schema + extensions
+    Backend-->>Proxy: health/readiness endpoints
+```
 
-## Repository map
+```mermaid
+flowchart LR
+    Save["Content create/update"] --> Tx["PostgreSQL transaction"]
+    Tx --> Index["Search document update"]
+    Tx --> Notify["Realtime event"]
+    Tx --> Hooks["Module hooks"]
+
+    Index -. "degrade/log on optional failure" .-> Done["Content operation remains explicit"]
+    Notify -. "admin-facing update" .-> Done
+    Hooks -. "hook failures isolated" .-> Done
+```
+
+```mermaid
+flowchart TD
+    Root["Configured roots"] --> Themes["PRAGMA_THEME_ROOT"]
+    Root --> Modules["PRAGMA_MODULE_ROOT"]
+
+    Themes --> Active["Active theme id"]
+    Themes --> Default["Default theme fallback"]
+    Active --> Render["Jinja public rendering"]
+    Default --> Render
+
+    Modules --> Manifest["Module manifests"]
+    Manifest --> Enabled["Persisted enablement state"]
+    Enabled --> Entrypoint["Enabled Python entrypoints"]
+    Entrypoint --> Hooks["In-process hooks"]
+```
+
+### Repository map
 
 ```text
 pragma/
-├── backend/          FastAPI backend, Alembic migrations, backend tests, package README
-├── admin/            Vue 3 admin SPA, Vite config, Vitest tests
-├── docker/           Development DB compose, production compose, images, proxy, validation
+├── backend/          FastAPI backend, Alembic migrations, backend tests
+├── admin/            Vue 3 admin SPA, Vite, Vitest specs
+├── docker/           Dev DB compose, production compose, proxy, validation
 ├── themes/default/   Checked-in public theme templates and static assets
-├── docs/             Installation, deployment, architecture, config, testing, troubleshooting
-└── scripts/          Backend test wrapper and pre-commit validation helpers
+├── docs/             Install, deployment, architecture, configuration, testing
+└── scripts/          Backend test and pre-commit helpers
 ```
-
----
-
-## Pick your path
-
-| Path | Best for | What starts |
-| --- | --- | --- |
-| **Docker-backed development DB** | local development | PostgreSQL only; backend/admin run on your host |
-| **Manual non-Docker install** | bare-metal or custom infra | your PostgreSQL, your process manager, your proxy |
-| **Production Docker Compose** | full packaged deployment | PostgreSQL, migrations, backend, admin/proxy |
-
-> The development Compose file is intentionally **not** a full application stack. It starts PostgreSQL only.
 
 ---
 
 ## Quick start: Docker-backed development database
 
-Start a local PostgreSQL 18 database with the required extensions available:
+This path starts PostgreSQL only. Run the backend and admin directly on your host.
 
 ```bash
 docker compose -f docker/docker-compose.dev.yml --env-file docker/dev.env.example up -d
-docker compose -f docker/docker-compose.dev.yml --env-file docker/dev.env.example ps
-```
-
-Create backend runtime configuration:
-
-```bash
 cp backend/.env.example backend/.env
-```
 
-Install backend dependencies and apply migrations:
-
-```bash
 cd backend
 uv sync --dev
 set -a && . ./.env && set +a
 uv run alembic upgrade head
-```
-
-Run the backend:
-
-```bash
-cd backend
-set -a && . ./.env && set +a
 uv run uvicorn pragma.app:create_app --factory --host 127.0.0.1 --port 8000 --proxy-headers
 ```
 
-In another shell, install and run the admin SPA:
+In another shell:
 
 ```bash
 cd admin
@@ -150,97 +184,55 @@ npm ci
 VITE_BACKEND_PROXY_TARGET=http://127.0.0.1:8000 npm run dev
 ```
 
-Then open the admin app and complete the [setup wizard](docs/setup-wizard.md). The wizard creates the first administrator; it does not provision PostgreSQL or run migrations.
+Open the admin app and complete the setup wizard. The wizard creates the first administrator; database provisioning and migrations stay operator-controlled.
 
-See the full guide: [Installation](docs/installation.md) and [Development](docs/development.md).
+Full guide: [Installation](docs/installation.md) and [Development](docs/development.md).
 
 ---
 
-## Manual non-Docker installation
+## Manual installation
 
 Use this path when you provide PostgreSQL, process supervision, TLS, and reverse proxying yourself.
 
-1. Install Python 3.12, `uv`, Node.js/npm, and PostgreSQL 18.
-2. Install/enable required database extensions in the Pragma database:
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS vector;
+```
 
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS pg_trgm;
-   CREATE EXTENSION IF NOT EXISTS vector;
-   ```
+```bash
+cp backend/.env.example backend/.env
+cd backend
+uv sync --dev
+set -a && . ./.env && set +a
+uv run alembic upgrade head
+uv run uvicorn pragma.app:create_app --factory --host 127.0.0.1 --port 8000 --proxy-headers
+```
 
-3. Copy and edit backend runtime config:
+```bash
+cd admin
+npm ci
+npm run build
+```
 
-   ```bash
-   cp backend/.env.example backend/.env
-   ```
+Route `/api/v1` and `/api/v1/realtime/stream` to the backend, serve admin SPA routes such as `/login`, `/setup`, and `/app/*` from `admin/dist`, and send public routes such as `/`, `/pages/*`, `/posts/*`, `/archive`, and `/search` to the backend public renderer.
 
-4. Install dependencies, run migrations, and start the backend:
-
-   ```bash
-   cd backend
-   uv sync --dev
-   set -a && . ./.env && set +a
-   uv run alembic upgrade head
-   uv run uvicorn pragma.app:create_app --factory --host 127.0.0.1 --port 8000 --proxy-headers
-   ```
-
-5. Build the admin SPA:
-
-   ```bash
-   cd admin
-   npm ci
-   npm run build
-   ```
-
-6. Configure your reverse proxy so that:
-   - `/api/v1` and `/api/v1/realtime/stream` go to the backend;
-   - admin SPA routes such as `/login`, `/setup`, and `/app/*` serve `admin/dist`;
-   - public `/`, `/pages/*`, `/posts/*`, `/archive`, and `/search` go to the backend-rendered public frontend.
-
-Detailed notes: [Installation](docs/installation.md#manual-non-docker-path) and [Deployment](docs/deployment.md#non-docker-deployment-notes).
+More: [Installation](docs/installation.md#manual-non-docker-path) and [Deployment](docs/deployment.md#non-docker-deployment-notes).
 
 ---
 
 ## Production Docker deployment
 
-The production Compose path builds the full stack:
-
-```mermaid
-flowchart LR
-    DB["db<br/>PostgreSQL 18 + extensions"] --> Migrate["migrate<br/>Alembic upgrade head"]
-    Migrate --> Backend["backend<br/>Uvicorn + FastAPI"]
-    Backend --> Proxy["proxy<br/>admin assets + reverse proxy"]
-    Proxy --> Users["users / operators"]
-
-    Backend --> Media[("media volume")]
-    Backend --> Modules[("modules volume")]
-    DB --> Data[("db-data volume")]
-```
-
-Prepare production env:
-
 ```bash
 cp docker/prod.env.example docker/prod.env
-```
-
-Edit `docker/prod.env` for your deployment: database credentials, JWT secret, `PRAGMA_BASE_URL`, published ports, proxy settings, and secret handling.
-
-Start the stack:
-
-```bash
+# edit docker/prod.env for credentials, JWT secret, base URL, ports, and proxy settings
 docker compose -f docker/docker-compose.yml --env-file docker/prod.env up -d --build
 ```
 
-Inspect it:
+Inspect and validate:
 
 ```bash
 docker compose -f docker/docker-compose.yml --env-file docker/prod.env ps
 docker compose -f docker/docker-compose.yml --env-file docker/prod.env logs backend proxy
-```
-
-Validate it:
-
-```bash
 ./docker/validate-production.sh docker/prod.env
 ```
 
@@ -250,57 +242,15 @@ Optional smoke validation, with real secrets and available ports:
 PRAGMA_VALIDATE_SMOKE=1 ./docker/validate-production.sh docker/prod.env
 ```
 
-Production details: [Deployment](docs/deployment.md).
-
----
-
-## Configuration cheat sheet
-
-Pragma uses two env families. Keep them separate.
-
-| File | Consumer | Prefix |
-| --- | --- | --- |
-| `docker/dev.env.example` | development PostgreSQL container only | `PRAGMA_DB_*` |
-| `backend/.env.example` | backend settings loader | `PRAGMA_DATABASE_*`, `PRAGMA_*` |
-| `docker/prod.env.example` | production Compose stack | `PRAGMA_DATABASE_*`, `PRAGMA_*`, proxy settings |
-
-High-signal backend settings:
-
-| Setting | Purpose |
-| --- | --- |
-| `PRAGMA_DATABASE_HOST` | PostgreSQL host |
-| `PRAGMA_DATABASE_PORT` | PostgreSQL port |
-| `PRAGMA_DATABASE_NAME` | database name |
-| `PRAGMA_DATABASE_USER` | database user |
-| `PRAGMA_DATABASE_PASSWORD` | database password |
-| `PRAGMA_JWT_SECRET_KEY` | token signing secret |
-| `PRAGMA_BASE_URL` | canonical public/admin base URL |
-| `PRAGMA_MEDIA_ROOT` | local media storage root |
-| `PRAGMA_THEME_ROOT` | filesystem theme root |
-| `PRAGMA_MODULE_ROOT` | filesystem module root |
-| `PRAGMA_SEARCH_SEMANTIC_ENABLED` | enables semantic search behavior when embeddings are available |
-| `PRAGMA_REALTIME_ENABLED` | enables realtime admin event infrastructure |
-
-Production Docker secret-file variants are supported for the database password and JWT secret:
-
-- `PRAGMA_DATABASE_PASSWORD` **or** `PRAGMA_DATABASE_PASSWORD_FILE`
-- `PRAGMA_JWT_SECRET_KEY` **or** `PRAGMA_JWT_SECRET_KEY_FILE`
-
-Configure exactly one source for each secret. The production validator rejects raw+file conflicts and missing values.
-
-Full reference: [Configuration](docs/configuration.md).
+Production Docker supports raw env secrets or file-secret variants for the database password and JWT secret. Configure exactly one source per secret. See [Deployment](docs/deployment.md) and [Configuration](docs/configuration.md#docker-secret-file-variables).
 
 ---
 
 ## Testing and validation
 
-Run the backend test suite:
-
 ```bash
 scripts/run-backend-tests.sh
 ```
-
-Run admin tests and production build:
 
 ```bash
 cd admin
@@ -308,65 +258,83 @@ npm run test
 npm run build
 ```
 
-Run the repo pre-commit gate:
-
 ```bash
 scripts/pre-commit-checks.sh
 ```
-
-Validate Compose files:
 
 ```bash
 docker compose -f docker/docker-compose.dev.yml --env-file docker/dev.env.example config >/dev/null
 docker compose -f docker/docker-compose.yml --env-file docker/prod.env.example config >/dev/null
 ```
 
-The backend wrapper runs pytest through `uv` and uses the project xdist defaults. The pre-commit helper runs backend Ruff plus the admin production build; it does not replace the backend test suite.
+The backend wrapper runs one pytest command through `uv` and applies the project xdist defaults. The pre-commit helper runs backend Ruff plus the admin production build; it does not replace the backend pytest suite.
 
 More: [Testing](docs/testing.md).
 
 ---
 
-## Themes and modules
+## Configuration that matters first
 
-Pragma's public frontend is theme-driven. The checked-in default theme includes templates for home, pages, posts, archives, search, themed 404s, shared layout, static CSS, JavaScript, and image assets.
+| Setting | Purpose |
+| --- | --- |
+| `PRAGMA_DATABASE_HOST`, `PRAGMA_DATABASE_PORT`, `PRAGMA_DATABASE_NAME` | PostgreSQL connection target. |
+| `PRAGMA_DATABASE_USER`, `PRAGMA_DATABASE_PASSWORD` | Database credentials, unless using the documented file-secret path. |
+| `PRAGMA_JWT_SECRET_KEY` | Token signing secret, unless using the documented file-secret path. |
+| `PRAGMA_BASE_URL` | Canonical public/admin base URL. |
+| `PRAGMA_MEDIA_ROOT` | Local media storage root. |
+| `PRAGMA_THEME_ROOT`, `PRAGMA_THEME_ACTIVE_ID`, `PRAGMA_THEME_DEFAULT_ID` | Theme discovery and fallback selection. |
+| `PRAGMA_MODULE_ROOT` | Trusted module root; control write access at the deployment layer. |
+| `PRAGMA_SEARCH_ENABLE_SEMANTIC` | Enables semantic/vector behavior only when prerequisites are available. |
+| `PRAGMA_REALTIME_ENABLED` | Enables ticketed admin WebSocket realtime. |
 
-Modules are discovered from the configured module root and expose backend lifecycle/configuration APIs. Module hook failures are isolated so one module cannot crash the core operation that triggered the hook.
+Keep `docker/dev.env.example` (`PRAGMA_DB_*`) separate from backend runtime settings (`PRAGMA_DATABASE_*`).
 
-Current boundaries:
+Full reference: [Configuration](docs/configuration.md).
 
-- no bundled example modules;
-- no admin module-management UI yet;
-- no admin theme-management UI yet.
+---
+
+## Module trust boundary
+
+Modules are backend Python code installed by an operator under `PRAGMA_MODULE_ROOT`. When enabled, entrypoints and hooks execute inside the backend process with backend privileges. Treat write access to the module root as equivalent to permission to run backend Python code.
+
+What Pragma does provide today:
+
+- manifest discovery from the configured module root;
+- persisted enablement state;
+- permission-gated module APIs under `/api/v1/modules`;
+- deterministic hook dispatch;
+- logging and failure isolation so a failed hook does not crash the core operation that triggered it.
+
+What Pragma does not provide today:
+
+- bundled example modules;
+- a graphical module lifecycle screen in the admin SPA;
+- an isolation boundary for untrusted extension code.
 
 More: [Modules and themes](docs/modules-themes.md).
 
 ---
 
-## Health, readiness, and operations
+## Current boundaries
 
-Backend endpoints:
+Pragma is intentionally conservative about what it claims today:
 
-- `/api/v1/system/health`
-- `/api/v1/system/ready`
-
-Production proxy aliases:
-
-- `/healthz` -> `/api/v1/system/health`
-- `/readyz` -> `/api/v1/system/ready`
-
-Readiness includes database/schema/capability state. The production backend healthcheck requires schema readiness plus the required PostgreSQL extensions.
-
-Troubleshooting guide: [Troubleshooting](docs/troubleshooting.md).
+- one site per installation;
+- the development Compose file starts PostgreSQL only;
+- local image media only;
+- no bundled module catalog;
+- no admin UI for module or theme lifecycle management;
+- optional semantic search, not a required runtime dependency;
+- no checked-in non-Docker process-manager or reverse-proxy unit files.
 
 ---
 
 ## Documentation index
 
 - [Installation](docs/installation.md)
+- [Development](docs/development.md)
 - [Configuration](docs/configuration.md)
 - [Setup wizard](docs/setup-wizard.md)
-- [Development](docs/development.md)
 - [Testing](docs/testing.md)
 - [Deployment](docs/deployment.md)
 - [Architecture](docs/architecture.md)
@@ -376,24 +344,6 @@ Troubleshooting guide: [Troubleshooting](docs/troubleshooting.md).
 
 ---
 
-## Current boundaries
-
-Pragma intentionally does **not** currently claim:
-
-- multi-site hosting;
-- a full-stack Docker development app stack;
-- bundled modules;
-- module or theme management screens in the admin SPA;
-- object storage/S3;
-- non-image uploads;
-- generated thumbnails/derivatives;
-- mandatory semantic search;
-- checked-in non-Docker systemd/nginx/service-manager units.
-
-Those boundaries keep the current product contract honest while the project evolves.
-
----
-
 <p align="center">
-  <strong>Pragma: explicit infrastructure, PostgreSQL-native content, modern admin tooling, and server-rendered public pages.</strong>
+  <strong>Pragma keeps content operations close to PostgreSQL, the admin experience fast, and public rendering explicit.</strong>
 </p>

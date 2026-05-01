@@ -13,10 +13,15 @@ Raises:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import psycopg
+import pytest
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
+from pydantic import ValidationError
 
+from pragma.install.models import BootstrapRequest
 from tests.helpers import build_database_dsn
 
 
@@ -222,3 +227,95 @@ def test_bootstrap_rejects_second_attempt(
         "detail": "Install bootstrap has already completed",
         "code": "INSTALL_ALREADY_COMPLETED",
     }
+
+
+def test_concurrent_bootstrap_allows_only_one_superuser(
+    client: TestClient,
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify concurrent first-run bootstrap requests serialize to one root user.
+
+    Args:
+        client: FastAPI test client.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    competing_payload = {
+        **bootstrap_payload,
+        "email": "admin-two@example.com",
+        "username": "admin-two",
+    }
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                client.post,
+                "/api/v1/install/bootstrap",
+                json=payload,
+            )
+            for payload in (bootstrap_payload, competing_payload)
+        ]
+        responses = [future.result(timeout=15) for future in futures]
+
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    failure_response = next(response for response in responses if response.status_code == 409)
+    assert failure_response.json() == {
+        "detail": "Install bootstrap has already completed",
+        "code": "INSTALL_ALREADY_COMPLETED",
+    }
+
+    dsn = build_database_dsn(migrated_database, migrated_database["PRAGMA_DATABASE_NAME"])
+    with psycopg.connect(dsn, row_factory=dict_row) as connection:
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM pragma_users
+            WHERE is_superuser = TRUE AND is_active = TRUE
+            """
+        ).fetchone()
+
+    assert row["total"] == 1
+
+
+def test_bootstrap_request_strips_identity_fields_before_length_validation() -> None:
+    """Verify bootstrap email and username strip before length validation.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    with pytest.raises(ValidationError):
+        BootstrapRequest(
+            email='   ',
+            username='admin',
+            password='valid-password-123',
+        )
+    with pytest.raises(ValidationError):
+        BootstrapRequest(
+            email='admin@example.com',
+            username='   ',
+            password='valid-password-123',
+        )
+
+    request = BootstrapRequest(
+        email='  admin@example.com  ',
+        username='  admin  ',
+        password='valid-password-123',
+    )
+
+    assert request.email == 'admin@example.com'
+    assert request.username == 'admin'

@@ -5,6 +5,7 @@ import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
+import { useAuthStore } from '@/stores/auth'
 import MediaLibraryView from '@/views/MediaLibraryView.vue'
 
 const mediaApiMocks = vi.hoisted(() => ({
@@ -72,9 +73,27 @@ function createTestRouter() {
   })
 }
 
-async function mountView() {
+async function mountView(permissions = [
+  'media.assets.read',
+  'media.assets.upload',
+  'media.assets.delete',
+]) {
   const pinia = createPinia()
   setActivePinia(pinia)
+
+  const authStore = useAuthStore()
+  authStore.accessToken = 'token-123'
+  authStore.user = {
+    id: 'user-1',
+    email: 'media@example.com',
+    username: 'media-user',
+    full_name: null,
+    is_active: true,
+    is_superuser: false,
+    roles: ['media'],
+    permissions,
+    force_password_change: false,
+  }
 
   const router = createTestRouter()
   await router.push('/app/media')
@@ -119,6 +138,11 @@ describe('MediaLibraryView', () => {
     const { wrapper } = await mountView()
 
     expect(mediaApiMocks.listMediaAssets).toHaveBeenCalledTimes(1)
+    expect(mediaApiMocks.listMediaAssets).toHaveBeenCalledWith({
+      limit: 50,
+      offset: 0,
+      order_by: 'updated_at',
+    })
     expect(mediaApiMocks.fetchMediaContentBlob).toHaveBeenCalledWith('media-1')
     expect(wrapper.text()).toContain('Media library')
     expect(wrapper.text()).toContain('hero.png')
@@ -134,6 +158,51 @@ describe('MediaLibraryView', () => {
     expect(wrapper.text()).not.toContain('No media has been uploaded yet.')
   })
 
+  it('navigates backend media pages with visible range controls', async () => {
+    const secondMediaAsset = {
+      ...mediaAsset,
+      id: 'media-2',
+      original_filename: 'gallery.png',
+      storage_key: '2026/04/media-2-gallery.png',
+      alt_text: 'Gallery image',
+      content_url: '/api/v1/media/assets/media-2/content',
+      selection: {
+        ...mediaAsset.selection,
+        id: 'media-2',
+        filename: 'gallery.png',
+        alt_text: 'Gallery image',
+        content_url: '/api/v1/media/assets/media-2/content',
+      },
+    }
+    mediaApiMocks.listMediaAssets
+      .mockResolvedValueOnce({
+        items: [mediaAsset],
+        total: 75,
+        limit: 50,
+        offset: 0,
+      })
+      .mockResolvedValueOnce({
+        items: [secondMediaAsset],
+        total: 75,
+        limit: 50,
+        offset: 50,
+      })
+
+    const { wrapper } = await mountView()
+
+    expect(wrapper.get('[data-testid="media-pagination-summary"]').text()).toContain('1-1 of 75')
+
+    await wrapper.get('[data-testid="media-next"]').trigger('click')
+    await flushPromises()
+
+    expect(mediaApiMocks.listMediaAssets).toHaveBeenLastCalledWith({
+      limit: 50,
+      offset: 50,
+      order_by: 'updated_at',
+    })
+    expect(wrapper.get('[data-testid="media-pagination-summary"]').text()).toContain('51-51 of 75')
+    expect(wrapper.text()).toContain('gallery.png')
+  })
 
   it('uploads the selected file with metadata and reloads the list', async () => {
     const { wrapper } = await mountView()
@@ -166,14 +235,27 @@ describe('MediaLibraryView', () => {
   it('deletes an asset from the table action', async () => {
     const { wrapper } = await mountView()
 
-    const deleteButton = wrapper.findAll('button').find((button) => button.text().includes('Delete'))
-    if (!deleteButton) {
-      throw new Error('Delete button not found')
-    }
-
-    await deleteButton.trigger('click')
+    await wrapper.get('[data-testid="media-delete"]').trigger('click')
     await flushPromises()
 
     expect(mediaApiMocks.deleteMediaAsset).toHaveBeenCalledWith('media-1')
+  })
+
+  it('keeps read-only browsing while disabling upload and delete controls without permissions', async () => {
+    const { wrapper } = await mountView(['media.assets.read'])
+
+    expect(wrapper.text()).toContain('hero.png')
+    expect(wrapper.text()).toContain('Uploading media requires the media.assets.upload permission.')
+    expect(wrapper.text()).toContain('Deleting media requires the media.assets.delete permission.')
+    expect(wrapper.get('[data-testid="media-choose-file"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="media-upload-now"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="media-delete"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('input[type="file"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="media-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(mediaApiMocks.uploadMediaAsset).not.toHaveBeenCalled()
+    expect(mediaApiMocks.deleteMediaAsset).not.toHaveBeenCalled()
   })
 })

@@ -36,6 +36,28 @@ describe('content API helpers', () => {
     })
   })
 
+  it('propagates pagination parameters when listing content types', async () => {
+    apiClientMocks.apiRequest.mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 25,
+      offset: 50,
+    })
+
+    await listContentTypes({
+      limit: 25,
+      offset: 50,
+      order_by: 'name',
+    })
+
+    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith(
+      '/content/types?limit=25&offset=50&order_by=name',
+      {
+        accessToken,
+      },
+    )
+  })
+
   it('passes the bearer token when listing content entries', async () => {
     apiClientMocks.apiRequest.mockResolvedValue({
       items: [],
@@ -51,6 +73,30 @@ describe('content API helpers', () => {
 
     expect(apiClientMocks.apiRequest).toHaveBeenCalledWith(
       '/content/entries?content_type_id=type-1&status=draft',
+      {
+        accessToken,
+      },
+    )
+  })
+
+  it('propagates filters and pagination parameters when listing content entries', async () => {
+    apiClientMocks.apiRequest.mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 25,
+      offset: 25,
+    })
+
+    await listContentEntries({
+      content_type_slug: 'articles',
+      status: 'published',
+      limit: 25,
+      offset: 25,
+      order_by: 'published_at',
+    })
+
+    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith(
+      '/content/entries?content_type_slug=articles&status=published&limit=25&offset=25&order_by=published_at',
       {
         accessToken,
       },

@@ -74,6 +74,22 @@ def get_install_state(connection: Connection) -> dict[str, Any] | None:
     ).fetchone()
 
 
+def acquire_bootstrap_lock(connection: Connection) -> None:
+    """Acquire the transaction-scoped bootstrap serialization lock.
+
+    Args:
+        connection: Open PostgreSQL connection.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    connection.execute("SELECT pg_advisory_xact_lock(814_743_389)")
+
+
 def mark_installed(
     connection: Connection,
     installed_by_user_id: UUID,

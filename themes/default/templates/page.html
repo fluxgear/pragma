@@ -17,7 +17,7 @@
             <p class="article-lead">{{ page.subtitle|default('Use this template for service pages, company overviews, or editorial landing pages with optional sidebars and a table of contents.', true) }}</p>
             {% if body_html %}
             <div class="content-prose">
-                {# SECURITY: rendered with |safe after backend rich-text allowlist validation #}
+                {# SECURITY: sanitized via nh3 #}
                 {{ body_html|safe }}
             </div>
             {% else %}

@@ -13,13 +13,17 @@
           icon="pi pi-upload"
           severity="secondary"
           variant="outlined"
-          :disabled="uploading"
+          data-testid="media-choose-file"
+          :disabled="uploading || !canUploadMediaAssets"
+          :title="uploadDisabledReason"
           @click="openFileDialog"
         />
         <Button
           label="Upload now"
           icon="pi pi-cloud-upload"
-          :disabled="selectedFile === null"
+          data-testid="media-upload-now"
+          :disabled="selectedFile === null || !canUploadMediaAssets"
+          :title="uploadDisabledReason"
           :loading="uploading"
           @click="handleUpload"
         />
@@ -39,11 +43,18 @@
       type="file"
       accept="image/png,image/jpeg,image/gif,image/webp"
       class="media-library__file-input"
+      :disabled="uploading || !canUploadMediaAssets"
       @change="handleFileSelection"
     >
 
     <Message v-if="pageErrorMessage" severity="error" :closable="false">
       {{ pageErrorMessage }}
+    </Message>
+    <Message v-if="!canUploadMediaAssets" severity="info" :closable="false">
+      Uploading media requires the media.assets.upload permission.
+    </Message>
+    <Message v-if="!canDeleteMediaAssets" severity="info" :closable="false">
+      Deleting media requires the media.assets.delete permission.
     </Message>
 
     <Card>
@@ -56,6 +67,7 @@
               id="media-file-name"
               :modelValue="selectedFile?.name ?? ''"
               readonly
+              :disabled="!canUploadMediaAssets"
               placeholder="Choose an image to upload"
             />
             <small class="muted">Supported types: PNG, JPEG, GIF, and WebP.</small>
@@ -66,7 +78,7 @@
             <InputText
               id="media-alt-text"
               v-model.trim="uploadForm.altText"
-              :disabled="uploading"
+              :disabled="uploading || !canUploadMediaAssets"
               placeholder="Describe the image for accessibility"
             />
           </div>
@@ -76,7 +88,7 @@
             <Textarea
               id="media-caption"
               v-model.trim="uploadForm.caption"
-              :disabled="uploading"
+              :disabled="uploading || !canUploadMediaAssets"
               rows="3"
               autoResize
               placeholder="Optional display caption"
@@ -88,7 +100,7 @@
             <Textarea
               id="media-description"
               v-model.trim="uploadForm.description"
-              :disabled="uploading"
+              :disabled="uploading || !canUploadMediaAssets"
               rows="4"
               autoResize
               placeholder="Optional internal description"
@@ -162,6 +174,9 @@
                 severity="danger"
                 variant="outlined"
                 size="small"
+                data-testid="media-delete"
+                :disabled="!canDeleteMediaAssets"
+                :title="deleteDisabledReason"
                 :loading="deletingAssetId === slotProps.data.id"
                 @click="removeAsset(slotProps.data.id)"
               />
@@ -174,13 +189,39 @@
             </div>
           </template>
         </DataTable>
+
+        <div class="inline-actions">
+          <span class="muted" data-testid="media-pagination-summary">
+            Assets {{ assetsRangeLabel }}
+          </span>
+          <Button
+            type="button"
+            label="Previous"
+            severity="secondary"
+            variant="outlined"
+            size="small"
+            data-testid="media-previous"
+            :disabled="!hasPreviousAssetsPage || loading"
+            @click="goToPreviousAssetsPage"
+          />
+          <Button
+            type="button"
+            label="Next"
+            severity="secondary"
+            variant="outlined"
+            size="small"
+            data-testid="media-next"
+            :disabled="!hasNextAssetsPage || loading"
+            @click="goToNextAssetsPage"
+          />
+        </div>
       </template>
     </Card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Column from 'primevue/column'
@@ -198,6 +239,12 @@ import {
 } from '@/api/media'
 import { asUserMessage } from '@/api/errors'
 import type { MediaAssetResponse } from '@/api/types'
+import { useAuthStore } from '@/stores/auth'
+
+const MEDIA_PAGE_SIZE = 50
+const MEDIA_ORDER_BY = 'updated_at'
+
+const authStore = useAuthStore()
 
 const assets = ref<MediaAssetResponse[]>([])
 const previewUrls = ref<Record<string, string>>({})
@@ -205,6 +252,9 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const loading = ref(false)
 const uploading = ref(false)
+const assetsTotal = ref(0)
+const assetsLimit = ref(MEDIA_PAGE_SIZE)
+const assetsOffset = ref(0)
 const deletingAssetId = ref<string | null>(null)
 const pageErrorMessage = ref<string | null>(null)
 const uploadErrorMessage = ref<string | null>(null)
@@ -214,13 +264,41 @@ const uploadForm = reactive({
   description: '',
 })
 
+const canUploadMediaAssets = computed(() => authStore.hasPermission('media.assets.upload'))
+const canDeleteMediaAssets = computed(() => authStore.hasPermission('media.assets.delete'))
+const uploadDisabledReason = computed(() => (
+  canUploadMediaAssets.value ? undefined : 'Requires media.assets.upload.'
+))
+const deleteDisabledReason = computed(() => (
+  canDeleteMediaAssets.value ? undefined : 'Requires media.assets.delete.'
+))
+const assetsRangeLabel = computed(() => paginationRangeLabel(
+  assetsOffset.value,
+  assets.value.length,
+  assetsTotal.value,
+))
+const hasPreviousAssetsPage = computed(() => assetsOffset.value > 0)
+const hasNextAssetsPage = computed(() => assetsOffset.value + assetsLimit.value < assetsTotal.value)
+
+function paginationRangeLabel(offset: number, itemCount: number, total: number): string {
+  if (total === 0 || itemCount === 0) {
+    return '0 of 0'
+  }
+
+  return `${offset + 1}-${offset + itemCount} of ${total}`
+}
+
 function openFileDialog(): void {
+  if (!canUploadMediaAssets.value) {
+    return
+  }
+
   fileInput.value?.click()
 }
 
 function handleFileSelection(event: Event): void {
   const input = event.target as HTMLInputElement
-  selectedFile.value = input.files?.[0] ?? null
+  selectedFile.value = canUploadMediaAssets.value ? input.files?.[0] ?? null : null
 }
 
 function clearPreviewUrls(): void {
@@ -250,12 +328,20 @@ async function loadAssets(): Promise<void> {
   pageErrorMessage.value = null
 
   try {
-    const response = await listMediaAssets()
+    const response = await listMediaAssets({
+      limit: assetsLimit.value,
+      offset: assetsOffset.value,
+      order_by: MEDIA_ORDER_BY,
+    })
     assets.value = response.items
+    assetsTotal.value = response.total
+    assetsLimit.value = response.limit
+    assetsOffset.value = response.offset
     await loadPreviewUrls(response.items)
   } catch (error) {
     pageErrorMessage.value = asUserMessage(error)
     assets.value = []
+    assetsTotal.value = 0
     clearPreviewUrls()
   } finally {
     loading.value = false
@@ -273,6 +359,11 @@ function resetUploadForm(): void {
 }
 
 async function handleUpload(): Promise<void> {
+  if (!canUploadMediaAssets.value) {
+    uploadErrorMessage.value = 'Uploading media requires the media.assets.upload permission.'
+    return
+  }
+
   if (selectedFile.value === null) {
     return
   }
@@ -296,6 +387,11 @@ async function handleUpload(): Promise<void> {
 }
 
 async function removeAsset(mediaId: string): Promise<void> {
+  if (!canDeleteMediaAssets.value) {
+    pageErrorMessage.value = 'Deleting media requires the media.assets.delete permission.'
+    return
+  }
+
   deletingAssetId.value = mediaId
   pageErrorMessage.value = null
 
@@ -307,6 +403,24 @@ async function removeAsset(mediaId: string): Promise<void> {
   } finally {
     deletingAssetId.value = null
   }
+}
+
+async function goToPreviousAssetsPage(): Promise<void> {
+  if (!hasPreviousAssetsPage.value) {
+    return
+  }
+
+  assetsOffset.value = Math.max(0, assetsOffset.value - assetsLimit.value)
+  await loadAssets()
+}
+
+async function goToNextAssetsPage(): Promise<void> {
+  if (!hasNextAssetsPage.value) {
+    return
+  }
+
+  assetsOffset.value += assetsLimit.value
+  await loadAssets()
 }
 
 function previewUrl(mediaId: string): string | null {

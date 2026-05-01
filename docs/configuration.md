@@ -52,7 +52,7 @@ There is no object storage/S3 backend, non-image upload support, or generated th
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `PRAGMA_THEME_ROOT` | `../themes` | Filesystem theme root; production Docker uses `/app/themes`. |
-| `PRAGMA_MODULE_ROOT` | `../modules` | Filesystem module root; production Docker uses `/app/modules`. |
+| `PRAGMA_MODULE_ROOT` | `../modules` | Filesystem module root for trusted operator-installed Python modules; production Docker uses `/app/modules`. Control write access to this root. |
 | `PRAGMA_THEME_ACTIVE_ID` | `default` | Lowercase letters, numbers, hyphens, underscores; must start/end alphanumeric. |
 | `PRAGMA_THEME_DEFAULT_ID` | `default` | Fallback theme id; same validation as active id. |
 
@@ -95,3 +95,19 @@ Production Docker supports file-based alternatives for the two required secrets:
 - `PRAGMA_JWT_SECRET_KEY_FILE` instead of `PRAGMA_JWT_SECRET_KEY`
 
 For each secret, set exactly one raw value or file path. The backend entrypoint and production validator reject raw+file conflicts and missing secret sources.
+
+When using the documented production bind-mount override, set the container file paths to:
+
+```env
+PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
+PRAGMA_JWT_SECRET_KEY_FILE=/run/secrets/pragma_jwt_secret_key
+```
+
+Then provide host-side source files for the override mounts:
+
+```env
+PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./docker/secrets/pragma_database_password
+PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./docker/secrets/pragma_jwt_secret_key
+```
+
+Use `docker/docker-compose.secrets.yml` together with the base compose file so those two files are mounted read-only into `db`, `migrate`, and `backend`. Raw-env deployments do not use the override file.

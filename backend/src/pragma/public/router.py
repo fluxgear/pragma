@@ -13,14 +13,17 @@ Raises:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
+from psycopg import Error as PsycopgError
+from psycopg_pool import PoolTimeout
 
 from pragma.config import Settings, get_settings
-from pragma.errors import SearchError, ThemeError
+from pragma.errors import SearchError, StorageError, ThemeError
 from pragma.public.service import (
     build_archive_url,
     build_common_context,
@@ -41,6 +44,8 @@ from pragma.search.service import search_public_entries
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 from pragma.themes import ThemeRuntime
+
+logger = logging.getLogger(__name__)
 
 _PUBLIC_SEARCH_QUERY_MAX_LENGTH = 200
 router = APIRouter(include_in_schema=False)
@@ -122,6 +127,51 @@ def _render_not_found(
     )
 
 
+def _render_storage_unavailable(
+    request: Request,
+    settings: Settings,
+    theme_runtime: ThemeRuntime,
+    site_context: Any,
+    exc: StorageError | PsycopgError | PoolTimeout,
+) -> HTMLResponse:
+    """Render a visitor-safe public outage response for storage failures.
+
+    Args:
+        request: FastAPI request object.
+        settings: Application settings.
+        theme_runtime: Active theme runtime instance.
+        site_context: Public site context payload.
+        exc: Storage-layer failure being handled for the public route.
+
+    Returns:
+        HTMLResponse: Themed 503 response or visitor-safe fallback HTML.
+
+    Raises:
+        None.
+    """
+
+    logger.warning(
+        'Public route storage unavailable',
+        extra={'path': str(request.url.path), 'error_type': type(exc).__name__},
+        exc_info=True,
+    )
+    seo_context = build_seo_context(
+        settings=settings,
+        site=site_context,
+        page_title='Temporarily unavailable',
+        page_description='This page is temporarily unavailable. Please try again in a moment.',
+        route_path=_request_path_with_query(request),
+        robots='noindex,follow',
+    )
+    context = build_common_context(site_context, seo_context)
+    return render_public_template(
+        theme_runtime=theme_runtime,
+        template_name='503.html',
+        context=context,
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        error_status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
 def _normalize_content_type_slug(content_type: str | None) -> str:
     """Normalize archive content-type filter values.
 
@@ -178,7 +228,7 @@ def render_home(
         HTMLResponse: Rendered homepage response.
 
     Raises:
-        StorageError: If PostgreSQL access fails.
+        None.
     """
 
     site_context = build_site_context(settings, theme_runtime)
@@ -190,7 +240,17 @@ def render_home(
         route_path=_request_path_with_query(request),
         robots='index,follow',
     )
-    entry_rows, _ = list_published_entries(storage, 'post', page=1, per_page=3)
+    try:
+        entry_rows, _ = list_published_entries(storage, 'post', page=1, per_page=3)
+    except (StorageError, PsycopgError, PoolTimeout) as exc:
+        return _render_storage_unavailable(
+            request,
+            settings,
+            theme_runtime,
+            site_context,
+            exc,
+        )
+
     featured_posts = [
         to_post_card(build_public_entry_view(entry_row))
         for entry_row in entry_rows
@@ -225,14 +285,24 @@ def render_page(
         theme_runtime: Active theme runtime instance.
 
     Returns:
-        HTMLResponse: Rendered page response or themed 404.
+        HTMLResponse: Rendered page response, themed 404, or outage fallback.
 
     Raises:
-        StorageError: If PostgreSQL access fails.
+        None.
     """
 
     site_context = build_site_context(settings, theme_runtime)
-    entry_row = get_published_entry(storage, 'page', slug)
+    try:
+        entry_row = get_published_entry(storage, 'page', slug)
+    except (StorageError, PsycopgError, PoolTimeout) as exc:
+        return _render_storage_unavailable(
+            request,
+            settings,
+            theme_runtime,
+            site_context,
+            exc,
+        )
+
     if entry_row is None:
         return _render_not_found(request, settings, theme_runtime, site_context)
 
@@ -276,18 +346,29 @@ def render_post(
         theme_runtime: Active theme runtime instance.
 
     Returns:
-        HTMLResponse: Rendered post response or themed 404.
+        HTMLResponse: Rendered post response, themed 404, or outage fallback.
 
     Raises:
-        StorageError: If PostgreSQL access fails.
+        None.
     """
 
     site_context = build_site_context(settings, theme_runtime)
-    entry_row = get_published_entry(storage, 'post', slug)
-    if entry_row is None:
-        return _render_not_found(request, settings, theme_runtime, site_context)
+    try:
+        entry_row = get_published_entry(storage, 'post', slug)
+        if entry_row is None:
+            return _render_not_found(request, settings, theme_runtime, site_context)
 
-    post_view = build_public_entry_view(entry_row)
+        post_view = build_public_entry_view(entry_row)
+        related_rows, _ = list_published_entries(storage, 'post', page=1, per_page=6)
+    except (StorageError, PsycopgError, PoolTimeout) as exc:
+        return _render_storage_unavailable(
+            request,
+            settings,
+            theme_runtime,
+            site_context,
+            exc,
+        )
+
     seo_context = build_seo_context(
         settings=settings,
         site=site_context,
@@ -299,7 +380,6 @@ def render_post(
         og_image=post_view.featured_image_url,
     )
 
-    related_rows, _ = list_published_entries(storage, 'post', page=1, per_page=6)
     related_posts: list[dict[str, str | None]] = []
     for related_row in related_rows:
         if str(related_row['slug']) == post_view.slug:
@@ -341,22 +421,32 @@ def render_archive(
         content_type: Optional content-type slug filter.
 
     Returns:
-        HTMLResponse: Rendered archive response.
+        HTMLResponse: Rendered archive response or outage fallback.
 
     Raises:
-        StorageError: If PostgreSQL access fails.
+        None.
     """
 
     site_context = build_site_context(settings, theme_runtime)
     normalized_content_type = _normalize_content_type_slug(content_type)
     normalized_page, normalized_per_page = normalize_pagination(page, per_page)
 
-    entry_rows, total = list_published_entries(
-        storage,
-        normalized_content_type,
-        page=normalized_page,
-        per_page=normalized_per_page,
-    )
+    try:
+        entry_rows, total = list_published_entries(
+            storage,
+            normalized_content_type,
+            page=normalized_page,
+            per_page=normalized_per_page,
+        )
+    except (StorageError, PsycopgError, PoolTimeout) as exc:
+        return _render_storage_unavailable(
+            request,
+            settings,
+            theme_runtime,
+            site_context,
+            exc,
+        )
+
     items = [to_post_card(build_public_entry_view(entry_row)) for entry_row in entry_rows]
 
     query_params = (

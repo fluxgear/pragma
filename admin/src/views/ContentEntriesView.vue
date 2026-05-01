@@ -19,7 +19,8 @@
         <Button
           label="New entry"
           icon="pi pi-plus"
-          :disabled="selectedContentType === null"
+          :disabled="selectedContentType === null || !canWriteContentEntries"
+          :title="newEntryDisabledReason"
           @click="openCreateDialog"
         />
       </div>
@@ -27,6 +28,12 @@
 
     <Message v-if="pageErrorMessage" severity="error" :closable="false">
       {{ pageErrorMessage }}
+    </Message>
+    <Message v-if="!canWriteContentEntries" severity="info" :closable="false">
+      You have read-only access to content entries. New and edit actions are disabled.
+    </Message>
+    <Message v-else-if="!canPublishContentEntries" severity="info" :closable="false">
+      Publishing entries requires the content.entries.publish permission.
     </Message>
 
     <Card>
@@ -37,16 +44,43 @@
             No content types are configured yet. Create a content type through the content API first, then return here to author entries.
           </Message>
         </div>
-        <div v-else class="form-grid">
-          <div class="field">
-            <label for="content-type-select">Select content type</label>
-            <Select
-              id="content-type-select"
-              v-model="selectedContentTypeId"
-              :options="contentTypeOptions"
-              optionLabel="label"
-              optionValue="value"
-              :disabled="contentTypesLoading"
+        <div v-else class="form-stack">
+          <div class="form-grid">
+            <div class="field">
+              <label for="content-type-select">Select content type</label>
+              <Select
+                id="content-type-select"
+                v-model="selectedContentTypeId"
+                :options="contentTypeOptions"
+                optionLabel="label"
+                optionValue="value"
+                :disabled="contentTypesLoading"
+              />
+            </div>
+          </div>
+          <div class="inline-actions">
+            <span class="muted" data-testid="content-types-pagination-summary">
+              Content types {{ contentTypesRangeLabel }}
+            </span>
+            <Button
+              type="button"
+              label="Previous"
+              severity="secondary"
+              variant="outlined"
+              size="small"
+              data-testid="content-types-previous"
+              :disabled="!hasPreviousContentTypesPage || contentTypesLoading"
+              @click="goToPreviousContentTypesPage"
+            />
+            <Button
+              type="button"
+              label="Next"
+              severity="secondary"
+              variant="outlined"
+              size="small"
+              data-testid="content-types-next"
+              :disabled="!hasNextContentTypesPage || contentTypesLoading"
+              @click="goToNextContentTypesPage"
             />
           </div>
         </div>
@@ -106,6 +140,9 @@
                 size="small"
                 severity="secondary"
                 variant="outlined"
+                data-testid="entry-edit"
+                :disabled="!canEditEntry(slotProps.data)"
+                :title="editDisabledReason(slotProps.data)"
                 @click="openEditDialog(slotProps.data)"
               />
             </template>
@@ -117,6 +154,32 @@
             </div>
           </template>
         </DataTable>
+
+        <div class="inline-actions">
+          <span class="muted" data-testid="entries-pagination-summary">
+            Entries {{ entriesRangeLabel }}
+          </span>
+          <Button
+            type="button"
+            label="Previous"
+            severity="secondary"
+            variant="outlined"
+            size="small"
+            data-testid="entries-previous"
+            :disabled="!hasPreviousEntriesPage || entriesLoading"
+            @click="goToPreviousEntriesPage"
+          />
+          <Button
+            type="button"
+            label="Next"
+            severity="secondary"
+            variant="outlined"
+            size="small"
+            data-testid="entries-next"
+            :disabled="!hasNextEntriesPage || entriesLoading"
+            @click="goToNextEntriesPage"
+          />
+        </div>
       </template>
     </Card>
 
@@ -134,6 +197,8 @@
         :entry="editingEntry"
         :error-message="dialogErrorMessage"
         :submitting="submitting"
+        :read-only="!canSaveDialogEntry"
+        :can-publish="canPublishContentEntries"
         @submit="saveEntry"
       />
     </Dialog>
@@ -166,8 +231,14 @@ import type {
 } from '@/api/types'
 import ContentEntryForm from '@/components/content/ContentEntryForm.vue'
 import { getContentEntryDisplayTitle } from '@/features/content/form'
+import { useAuthStore } from '@/stores/auth'
 import { useRealtimeStore } from '@/stores/realtime'
 
+const CONTENT_PAGE_SIZE = 50
+const CONTENT_TYPE_ORDER_BY = 'updated_at'
+const CONTENT_ENTRY_ORDER_BY = 'updated_at'
+
+const authStore = useAuthStore()
 const realtimeStore = useRealtimeStore()
 
 const contentTypes = ref<ContentTypeResponse[]>([])
@@ -175,6 +246,12 @@ const entries = ref<ContentEntryResponse[]>([])
 const selectedContentTypeId = ref<string | null>(null)
 const contentTypesLoading = ref(false)
 const entriesLoading = ref(false)
+const contentTypesTotal = ref(0)
+const contentTypesLimit = ref(CONTENT_PAGE_SIZE)
+const contentTypesOffset = ref(0)
+const entriesTotal = ref(0)
+const entriesLimit = ref(CONTENT_PAGE_SIZE)
+const entriesOffset = ref(0)
 const dialogVisible = ref(false)
 const editingEntry = ref<ContentEntryResponse | null>(null)
 const pageErrorMessage = ref<string | null>(null)
@@ -196,17 +273,65 @@ const selectedContentType = computed(
 )
 
 const dialogTitle = computed(() => (editingEntry.value === null ? 'Create content entry' : 'Edit content entry'))
+const canWriteContentEntries = computed(() => authStore.hasPermission('content.entries.write'))
+const canPublishContentEntries = computed(() => authStore.hasPermission('content.entries.publish'))
+const newEntryDisabledReason = computed(() => {
+  if (selectedContentType.value === null) {
+    return 'Select a content type before creating an entry.'
+  }
+  return canWriteContentEntries.value ? undefined : 'Requires content.entries.write.'
+})
+const contentTypesRangeLabel = computed(() => paginationRangeLabel(
+  contentTypesOffset.value,
+  contentTypes.value.length,
+  contentTypesTotal.value,
+))
+const entriesRangeLabel = computed(() => paginationRangeLabel(
+  entriesOffset.value,
+  entries.value.length,
+  entriesTotal.value,
+))
+const hasPreviousContentTypesPage = computed(() => contentTypesOffset.value > 0)
+const hasNextContentTypesPage = computed(
+  () => contentTypesOffset.value + contentTypes.value.length < contentTypesTotal.value,
+)
+const hasPreviousEntriesPage = computed(() => entriesOffset.value > 0)
+const hasNextEntriesPage = computed(() => entriesOffset.value + entries.value.length < entriesTotal.value)
+const canSaveDialogEntry = computed(() => {
+  if (!canWriteContentEntries.value) {
+    return false
+  }
+  return editingEntry.value === null || editingEntry.value.status !== 'published' || canPublishContentEntries.value
+})
+
+function paginationRangeLabel(offset: number, itemCount: number, total: number): string {
+  if (total === 0 || itemCount === 0) {
+    return '0 of 0'
+  }
+
+  return `${offset + 1}-${offset + itemCount} of ${total}`
+}
 
 async function loadContentTypes(): Promise<void> {
   contentTypesLoading.value = true
   pageErrorMessage.value = null
 
   try {
-    const response = await listContentTypes()
+    const response = await listContentTypes({
+      limit: contentTypesLimit.value,
+      offset: contentTypesOffset.value,
+      order_by: CONTENT_TYPE_ORDER_BY,
+    })
     contentTypes.value = response.items
+    contentTypesTotal.value = response.total
+    contentTypesLimit.value = response.limit
+    contentTypesOffset.value = response.offset
+
     if (response.items.length === 0) {
       selectedContentTypeId.value = null
       entries.value = []
+      entriesTotal.value = 0
+      entriesOffset.value = 0
       return
     }
 
@@ -227,6 +352,8 @@ async function loadContentTypes(): Promise<void> {
 async function loadEntries(): Promise<void> {
   if (selectedContentTypeId.value === null) {
     entries.value = []
+    entriesTotal.value = 0
+    entriesOffset.value = 0
     return
   }
 
@@ -236,11 +363,18 @@ async function loadEntries(): Promise<void> {
   try {
     const response = await listContentEntries({
       content_type_id: selectedContentTypeId.value,
+      limit: entriesLimit.value,
+      offset: entriesOffset.value,
+      order_by: CONTENT_ENTRY_ORDER_BY,
     })
     entries.value = response.items
+    entriesTotal.value = response.total
+    entriesLimit.value = response.limit
+    entriesOffset.value = response.offset
   } catch (error) {
     pageErrorMessage.value = asUserMessage(error)
     entries.value = []
+    entriesTotal.value = 0
   } finally {
     entriesLoading.value = false
   }
@@ -253,13 +387,77 @@ async function refreshWorkspace(): Promise<void> {
   }
 }
 
+async function goToPreviousContentTypesPage(): Promise<void> {
+  if (!hasPreviousContentTypesPage.value) {
+    return
+  }
+
+  contentTypesOffset.value = Math.max(0, contentTypesOffset.value - contentTypesLimit.value)
+  await loadContentTypes()
+}
+
+async function goToNextContentTypesPage(): Promise<void> {
+  if (!hasNextContentTypesPage.value) {
+    return
+  }
+
+  contentTypesOffset.value += contentTypesLimit.value
+  await loadContentTypes()
+}
+
+async function goToPreviousEntriesPage(): Promise<void> {
+  if (!hasPreviousEntriesPage.value) {
+    return
+  }
+
+  entriesOffset.value = Math.max(0, entriesOffset.value - entriesLimit.value)
+  await loadEntries()
+}
+
+async function goToNextEntriesPage(): Promise<void> {
+  if (!hasNextEntriesPage.value) {
+    return
+  }
+
+  entriesOffset.value += entriesLimit.value
+  await loadEntries()
+}
+
 function openCreateDialog(): void {
+  if (selectedContentType.value === null || !canWriteContentEntries.value) {
+    return
+  }
+
   editingEntry.value = null
   dialogErrorMessage.value = null
   dialogVisible.value = true
 }
 
+function canEditEntry(entry: ContentEntryResponse): boolean {
+  if (!canWriteContentEntries.value) {
+    return false
+  }
+
+  return entry.status !== 'published' || canPublishContentEntries.value
+}
+
+function editDisabledReason(entry: ContentEntryResponse): string | undefined {
+  if (!canWriteContentEntries.value) {
+    return 'Requires content.entries.write.'
+  }
+
+  if (entry.status === 'published' && !canPublishContentEntries.value) {
+    return 'Published entries require content.entries.publish.'
+  }
+
+  return undefined
+}
+
 function openEditDialog(entry: ContentEntryResponse): void {
+  if (!canEditEntry(entry)) {
+    return
+  }
+
   editingEntry.value = entry
   dialogErrorMessage.value = null
   dialogVisible.value = true
@@ -271,6 +469,16 @@ async function saveEntry(payload: {
   payload: Record<string, unknown>
 }): Promise<void> {
   if (selectedContentType.value === null) {
+    return
+  }
+
+  if (!canSaveDialogEntry.value) {
+    dialogErrorMessage.value = 'You do not have permission to save this content entry.'
+    return
+  }
+
+  if (payload.status === 'published' && !canPublishContentEntries.value) {
+    dialogErrorMessage.value = 'Publishing entries requires the content.entries.publish permission.'
     return
   }
 
@@ -353,6 +561,7 @@ function handleRealtimeResync(): void {
 }
 
 watch(selectedContentTypeId, async () => {
+  entriesOffset.value = 0
   await loadEntries()
 })
 

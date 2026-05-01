@@ -6,6 +6,12 @@
     <Message v-if="localErrorMessage" severity="warn" :closable="false">
       {{ localErrorMessage }}
     </Message>
+    <Message v-if="readOnly" severity="info" :closable="false">
+      You can view this entry, but you do not have permission to save changes.
+    </Message>
+    <Message v-else-if="cannotSubmitPublishedStatus" severity="warn" :closable="false">
+      Publishing entries requires the content.entries.publish permission.
+    </Message>
 
     <div class="form-grid">
       <div class="field">
@@ -16,7 +22,7 @@
           :options="statusOptions"
           optionLabel="label"
           optionValue="value"
-          :disabled="submitting"
+          :disabled="formDisabled || statusSelectDisabled"
         />
       </div>
 
@@ -25,7 +31,7 @@
         <InputText
           id="entry-slug"
           v-model.trim="formState.slug"
-          :disabled="submitting"
+          :disabled="formDisabled"
           placeholder="Leave blank to auto-generate"
         />
         <small class="muted">Leave empty to auto-generate a slug from the entry content.</small>
@@ -47,14 +53,14 @@
         v-if="fieldDefinition.kind === 'text'"
         :id="fieldId(fieldDefinition.name)"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
       />
 
       <Textarea
         v-else-if="fieldDefinition.kind === 'long_text'"
         :id="fieldId(fieldDefinition.name)"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
         rows="6"
         autoResize
       />
@@ -62,14 +68,14 @@
       <RichTextEditor
         v-else-if="fieldDefinition.kind === 'rich_text'"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
       />
 
       <InputNumber
         v-else-if="fieldDefinition.kind === 'integer'"
         :id="fieldId(fieldDefinition.name)"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
         :min="fieldDefinition.minimum ?? undefined"
         :max="fieldDefinition.maximum ?? undefined"
         :useGrouping="false"
@@ -80,7 +86,7 @@
         v-else-if="fieldDefinition.kind === 'number'"
         :id="fieldId(fieldDefinition.name)"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
         :min="fieldDefinition.minimum ?? undefined"
         :max="fieldDefinition.maximum ?? undefined"
         :useGrouping="false"
@@ -92,7 +98,7 @@
           :inputId="fieldId(fieldDefinition.name)"
           v-model="formState.fields[fieldDefinition.name]"
           binary
-          :disabled="submitting"
+          :disabled="formDisabled"
         />
         <label :for="fieldId(fieldDefinition.name)">Enabled</label>
       </div>
@@ -101,7 +107,7 @@
         v-else-if="fieldDefinition.kind === 'date'"
         :id="fieldId(fieldDefinition.name)"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
         type="date"
       />
 
@@ -109,7 +115,7 @@
         v-else-if="fieldDefinition.kind === 'datetime'"
         :id="fieldId(fieldDefinition.name)"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
         type="datetime-local"
       />
 
@@ -117,7 +123,7 @@
         v-else
         :id="fieldId(fieldDefinition.name)"
         v-model="formState.fields[fieldDefinition.name]"
-        :disabled="submitting"
+        :disabled="formDisabled"
         rows="8"
         autoResize
         spellcheck="false"
@@ -129,7 +135,13 @@
     </div>
 
     <div class="inline-actions">
-      <Button type="submit" :label="submitLabel" icon="pi pi-save" :loading="submitting" />
+      <Button
+        type="submit"
+        :label="submitLabel"
+        icon="pi pi-save"
+        :loading="submitting"
+        :disabled="formDisabled || cannotSubmitPublishedStatus"
+      />
     </div>
   </form>
 </template>
@@ -163,11 +175,15 @@ const props = withDefaults(
     entry?: ContentEntryResponse | null
     errorMessage?: string | null
     submitting?: boolean
+    readOnly?: boolean
+    canPublish?: boolean
   }>(),
   {
     entry: null,
     errorMessage: null,
     submitting: false,
+    readOnly: false,
+    canPublish: false,
   },
 )
 
@@ -175,7 +191,7 @@ const emit = defineEmits<{
   submit: [payload: { slug: string | null; status: ContentEntryStatus; payload: Record<string, unknown> }]
 }>()
 
-const statusOptions: Array<{ label: string; value: ContentEntryStatus }> = [
+const baseStatusOptions: Array<{ label: string; value: ContentEntryStatus }> = [
   { label: 'Draft', value: 'draft' },
   { label: 'Published', value: 'published' },
   { label: 'Archived', value: 'archived' },
@@ -183,6 +199,13 @@ const statusOptions: Array<{ label: string; value: ContentEntryStatus }> = [
 
 const formState = reactive(buildContentEntryFormState(props.contentType, props.entry))
 const localErrorMessage = ref<string | null>(null)
+
+const formDisabled = computed(() => props.submitting || props.readOnly)
+const statusOptions = computed(() =>
+  baseStatusOptions.filter((option) => option.value !== 'published' || props.canPublish || props.entry?.status === 'published'),
+)
+const cannotSubmitPublishedStatus = computed(() => formState.status === 'published' && !props.canPublish)
+const statusSelectDisabled = computed(() => !props.canPublish && props.entry?.status === 'published')
 
 function resetFormState(): void {
   const nextState = buildContentEntryFormState(props.contentType, props.entry)
@@ -222,6 +245,16 @@ function isWideField(kind: ContentFieldDefinition['kind']): boolean {
 
 async function handleSubmit(): Promise<void> {
   localErrorMessage.value = null
+
+  if (props.readOnly) {
+    localErrorMessage.value = 'You do not have permission to save content entries.'
+    return
+  }
+
+  if (cannotSubmitPublishedStatus.value) {
+    localErrorMessage.value = 'Publishing entries requires the content.entries.publish permission.'
+    return
+  }
 
   try {
     emit('submit', serializeContentEntryFormState(props.contentType, formState))

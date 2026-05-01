@@ -10,9 +10,9 @@ Returns:
 Raises:
     None.
 """
-
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -125,6 +125,36 @@ def media_client(
         {
             'PRAGMA_MEDIA_ROOT': str(media_root),
             'PRAGMA_MEDIA_MAX_UPLOAD_BYTES': '1048576',
+        }
+    )
+    with TestClient(create_app()) as client:
+        yield client
+
+
+@pytest.fixture()
+def small_upload_limit_media_client(
+    migrated_database: dict[str, str],
+    apply_runtime_env,
+    media_root: Path,
+) -> Iterator[TestClient]:
+    """Return a media test client with a small upload limit.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        apply_runtime_env: Runtime environment helper fixture.
+        media_root: Isolated local media root.
+
+    Returns:
+        Iterator[TestClient]: Active FastAPI test client.
+
+    Raises:
+        StorageError: If application startup cannot connect to PostgreSQL.
+    """
+
+    apply_runtime_env(
+        {
+            'PRAGMA_MEDIA_ROOT': str(media_root),
+            'PRAGMA_MEDIA_MAX_UPLOAD_BYTES': '16',
         }
     )
     with TestClient(create_app()) as client:
@@ -496,6 +526,102 @@ def test_media_upload_rejects_payload_too_large(
     }
 
 
+def test_media_upload_rejects_oversized_content_length_before_service(
+    small_upload_limit_media_client: TestClient,
+    bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify oversized Content-Length is rejected before media service work.
+
+    Args:
+        small_upload_limit_media_client: FastAPI test client with a small media limit.
+        bootstrap_payload: Bootstrap request payload.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = {
+        **_auth_headers(small_upload_limit_media_client, bootstrap_payload),
+        'Content-Type': 'image/png',
+        'Content-Length': '17',
+    }
+    create_calls: list[object] = []
+
+    def _record_create_media_asset(**kwargs) -> object:
+        create_calls.append(kwargs)
+        raise AssertionError('create_media_asset must not run for oversized uploads')
+
+    monkeypatch.setattr('pragma.media.router.create_media_asset', _record_create_media_asset)
+
+    response = small_upload_limit_media_client.post(
+        '/api/v1/media/assets?filename=declared-too-large.png',
+        headers=headers,
+        content=b'',
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        'detail': 'Upload exceeds the configured size limit',
+        'code': 'MEDIA_UPLOAD_TOO_LARGE',
+    }
+    assert create_calls == []
+
+
+def test_media_upload_rejects_streaming_oversize_before_service(
+    small_upload_limit_media_client: TestClient,
+    bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify streamed oversized uploads are rejected before media service work.
+
+    Args:
+        small_upload_limit_media_client: FastAPI test client with a small media limit.
+        bootstrap_payload: Bootstrap request payload.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = {
+        **_auth_headers(small_upload_limit_media_client, bootstrap_payload),
+        'Content-Type': 'image/png',
+    }
+    create_calls: list[object] = []
+
+    def _record_create_media_asset(**kwargs) -> object:
+        create_calls.append(kwargs)
+        raise AssertionError('create_media_asset must not run for oversized uploads')
+
+    def _oversized_body() -> Iterator[bytes]:
+        yield b'0' * 8
+        yield b'1' * 8
+        yield b'2'
+
+    monkeypatch.setattr('pragma.media.router.create_media_asset', _record_create_media_asset)
+
+    response = small_upload_limit_media_client.post(
+        '/api/v1/media/assets?filename=stream-too-large.png',
+        headers=headers,
+        content=_oversized_body(),
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        'detail': 'Upload exceeds the configured size limit',
+        'code': 'MEDIA_UPLOAD_TOO_LARGE',
+    }
+    assert create_calls == []
+
+
 def test_media_content_returns_not_found_when_file_missing(
     media_client: TestClient,
     bootstrap_payload: dict[str, str],
@@ -583,13 +709,13 @@ def test_media_upload_rejects_symlink_escape_attempt(
     assert list(outside_root.iterdir()) == []
 
 
-def test_media_delete_surfaces_storage_failures_without_orphaning_metadata(
+def test_media_delete_metadata_failure_does_not_delete_storage(
     media_client: TestClient,
     bootstrap_payload: dict[str, str],
     media_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify delete failures propagate and preserve metadata for retry.
+    """Verify metadata delete failures do not remove stored media bytes.
 
     Args:
         media_client: FastAPI test client configured for media tests.
@@ -606,7 +732,7 @@ def test_media_delete_surfaces_storage_failures_without_orphaning_metadata(
 
     headers = {**_auth_headers(media_client, bootstrap_payload), 'Content-Type': 'image/png'}
     upload_response = media_client.post(
-        '/api/v1/media/assets?filename=delete-failure.png',
+        '/api/v1/media/assets?filename=metadata-delete-failure.png',
         headers=headers,
         content=_PNG_1X1,
     )
@@ -614,16 +740,23 @@ def test_media_delete_surfaces_storage_failures_without_orphaning_metadata(
 
     uploaded = upload_response.json()
     stored_path = media_root / uploaded['storage_key']
+    delete_calls: list[str] = []
 
-    def _fail_delete(self, storage_key: str) -> None:
-        raise StorageError(
-            detail='Unable to delete media bytes from local storage',
-            code='MEDIA_STORAGE_DELETE_FAILED',
-        )
+    def _record_delete(self, storage_key: str) -> None:
+        _ = self
+        delete_calls.append(storage_key)
+
+    def _fail_metadata_delete(connection, media_id) -> None:
+        _ = connection, media_id
+        raise psycopg.OperationalError('metadata delete failed')
 
     monkeypatch.setattr(
         'pragma.media.storage.LocalFilesystemStorageBackend.delete',
-        _fail_delete,
+        _record_delete,
+    )
+    monkeypatch.setattr(
+        'pragma.media.service.media_queries.delete_media',
+        _fail_metadata_delete,
     )
 
     delete_response = media_client.delete(
@@ -633,13 +766,92 @@ def test_media_delete_surfaces_storage_failures_without_orphaning_metadata(
 
     assert delete_response.status_code == 503
     assert delete_response.json() == {
-        'detail': 'Unable to delete media bytes from local storage',
-        'code': 'MEDIA_STORAGE_DELETE_FAILED',
+        'detail': 'Unable to delete the requested media asset',
+        'code': 'MEDIA_DELETE_FAILED',
     }
+    assert delete_calls == []
+    assert stored_path.exists()
 
     detail_response = media_client.get(
         f"/api/v1/media/assets/{uploaded['id']}",
         headers={'Authorization': headers['Authorization']},
     )
     assert detail_response.status_code == 200
+
+
+def test_media_delete_logs_storage_cleanup_failures_after_metadata_delete(
+    media_client: TestClient,
+    bootstrap_payload: dict[str, str],
+    media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify cleanup failures do not restore deleted metadata.
+
+    Args:
+        media_client: FastAPI test client configured for media tests.
+        bootstrap_payload: Bootstrap request payload.
+        media_root: Isolated local media root.
+        monkeypatch: Pytest monkeypatch fixture.
+        caplog: Pytest log capture fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = {**_auth_headers(media_client, bootstrap_payload), 'Content-Type': 'image/png'}
+    upload_response = media_client.post(
+        '/api/v1/media/assets?filename=cleanup-failure.png',
+        headers=headers,
+        content=_PNG_1X1,
+    )
+    assert upload_response.status_code == 201
+
+    uploaded = upload_response.json()
+    stored_path = media_root / uploaded['storage_key']
+    delete_calls: list[str] = []
+
+    def _fail_delete(self, storage_key: str) -> None:
+        _ = self
+        delete_calls.append(storage_key)
+        raise StorageError(
+            detail='Unable to delete media bytes from local storage',
+            code='MEDIA_STORAGE_DELETE_FAILED',
+        )
+
+    monkeypatch.setattr(
+        'pragma.media.storage.LocalFilesystemStorageBackend.delete',
+        _fail_delete,
+    )
+    service_logger = logging.getLogger('pragma.media.service')
+    monkeypatch.setattr(service_logger, 'disabled', False)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger='pragma.media.service'):
+        delete_response = media_client.delete(
+            f"/api/v1/media/assets/{uploaded['id']}",
+            headers={'Authorization': headers['Authorization']},
+        )
+
+    assert delete_response.status_code == 204
+    assert delete_calls == [uploaded['storage_key']]
     assert stored_path.exists()
+    assert any(
+        record.name == 'pragma.media.service'
+        and record.levelno == logging.WARNING
+        and record.getMessage() == 'Failed to clean up deleted media bytes'
+        for record in caplog.records
+    )
+
+    detail_response = media_client.get(
+        f"/api/v1/media/assets/{uploaded['id']}",
+        headers={'Authorization': headers['Authorization']},
+    )
+    assert detail_response.status_code == 404
+    assert detail_response.json() == {
+        'detail': 'Media asset not found',
+        'code': 'MEDIA_NOT_FOUND',
+    }

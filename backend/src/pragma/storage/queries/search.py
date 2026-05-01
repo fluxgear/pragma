@@ -69,6 +69,7 @@ def list_search_documents_for_embedding_rebuild(
     *,
     provider: str,
     embedding_model: str,
+    expected_embedding_dimensions: int | None,
     content_type_slug: str | None,
     limit: int,
     offset: int = 0,
@@ -80,6 +81,7 @@ def list_search_documents_for_embedding_rebuild(
         connection: Open PostgreSQL connection.
         provider: Provider key expected in embedding metadata.
         embedding_model: Model key expected in embedding metadata.
+        expected_embedding_dimensions: Optional vector dimension count expected for the model.
         content_type_slug: Optional content-type slug filter.
         limit: Maximum number of rows to return.
         offset: Number of rows to skip before returning rows.
@@ -111,9 +113,19 @@ def list_search_documents_for_embedding_rebuild(
                 OR embedding_updated_at < updated_at
                 OR embedding_provider IS DISTINCT FROM %s
                 OR embedding_model IS DISTINCT FROM %s
+                OR (
+                    %s::integer IS NOT NULL
+                    AND embedding IS NOT NULL
+                    AND vector_dims(embedding) IS DISTINCT FROM %s::integer
+                )
             )
         """
-        params.extend([provider, embedding_model])
+        params.extend([
+            provider,
+            embedding_model,
+            expected_embedding_dimensions,
+            expected_embedding_dimensions,
+        ])
 
     sql += """
         ORDER BY updated_at DESC, entry_id DESC
@@ -122,6 +134,61 @@ def list_search_documents_for_embedding_rebuild(
     """
     params.extend([limit, offset])
     return connection.execute(sql, tuple(params)).fetchall()
+
+
+def count_search_embedding_contract_mismatches(
+    connection: Connection,
+    *,
+    embedding_dimensions: int,
+    embedding_provider: str | None,
+    embedding_model: str | None,
+    content_type_slug: str | None,
+) -> int:
+    """Return count of stored vectors outside the active semantic contract.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        embedding_dimensions: Expected query/provider embedding dimension count.
+        embedding_provider: Optional expected embedding provider key.
+        embedding_model: Optional expected embedding model key.
+        content_type_slug: Optional content-type slug filter.
+
+    Returns:
+        int: Number of indexed documents requiring embedding rebuild for this contract.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    row = connection.execute(
+        """
+        SELECT COUNT(*) AS mismatch_count
+        FROM pragma_search_documents
+        WHERE embedding IS NOT NULL
+          AND (%s::text IS NULL OR content_type_slug = %s::text)
+          AND (
+              vector_dims(embedding) IS DISTINCT FROM %s::integer
+              OR (
+                  %s::text IS NOT NULL
+                  AND embedding_provider IS DISTINCT FROM %s::text
+              )
+              OR (
+                  %s::text IS NOT NULL
+                  AND embedding_model IS DISTINCT FROM %s::text
+              )
+          )
+        """,
+        (
+            content_type_slug,
+            content_type_slug,
+            embedding_dimensions,
+            embedding_provider,
+            embedding_provider,
+            embedding_model,
+            embedding_model,
+        ),
+    ).fetchone()
+    return int(row['mismatch_count'])
 
 
 def search_embedding_column_exists(connection: Connection) -> bool:
@@ -352,6 +419,8 @@ def search_documents(
     content_type_slug: str | None,
     strategies: Sequence[str],
     query_embedding: str | None = None,
+    embedding_provider: str | None = None,
+    embedding_model: str | None = None,
     trigram_threshold: float = _DEFAULT_TRIGRAM_THRESHOLD,
 ) -> list[dict[str, Any]]:
     """Return public search results for the active strategy set.
@@ -365,6 +434,8 @@ def search_documents(
         content_type_slug: Optional content-type slug filter.
         strategies: Active ranking strategies to execute.
         query_embedding: Optional pgvector literal for semantic search.
+        embedding_provider: Optional provider key required for vector candidates.
+        embedding_model: Optional model key required for vector candidates.
         trigram_threshold: Minimum trigram similarity score to keep a row.
 
     Returns:
@@ -450,11 +521,21 @@ def search_documents(
                 CROSS JOIN (SELECT %s::vector AS query_embedding) AS q
                 WHERE d.embedding IS NOT NULL
                   AND vector_dims(d.embedding) = vector_dims(q.query_embedding)
+                  AND (%s::text IS NULL OR d.embedding_provider = %s::text)
+                  AND (%s::text IS NULL OR d.embedding_model = %s::text)
                   AND (%s::text IS NULL OR d.content_type_slug = %s::text)
             )
             """
         )
-        params.extend([query_embedding, content_type_slug, content_type_slug])
+        params.extend([
+            query_embedding,
+            embedding_provider,
+            embedding_provider,
+            embedding_model,
+            embedding_model,
+            content_type_slug,
+            content_type_slug,
+        ])
         ranked_sources.append('SELECT entry_id, rank_position FROM vector_ranked')
 
     union_sql = '\n                    UNION ALL\n                    '.join(ranked_sources)

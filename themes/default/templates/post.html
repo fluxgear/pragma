@@ -29,7 +29,7 @@
             {% endif %}
             {% if body_html %}
             <div class="content-prose">
-                {# SECURITY: rendered with |safe after backend rich-text allowlist validation #}
+                {# SECURITY: sanitized via nh3 #}
                 {{ body_html|safe }}
             </div>
             {% else %}

@@ -110,6 +110,7 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
             set_active_module_runtime(None)
             await realtime_listener.stop()
             await realtime_hub.shutdown()
+            realtime_publisher.close()
             storage.close()
 
     return lifespan

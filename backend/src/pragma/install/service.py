@@ -25,7 +25,12 @@ from pragma.errors import ConfigError, StorageError
 from pragma.install.models import BootstrapRequest
 from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.capabilities import get_extension_capabilities
-from pragma.storage.queries.install import get_install_state, get_schema_status, mark_installed
+from pragma.storage.queries.install import (
+    acquire_bootstrap_lock,
+    get_install_state,
+    get_schema_status,
+    mark_installed,
+)
 from pragma.storage.queries.users import count_superusers, create_user
 
 
@@ -101,6 +106,8 @@ def bootstrap_install(
                     code="MIGRATION_REQUIRED",
                     status_code=503,
                 )
+
+            acquire_bootstrap_lock(connection)
 
             install_state = get_install_state(connection)
             if (install_state and bool(install_state["is_installed"])) or count_superusers(

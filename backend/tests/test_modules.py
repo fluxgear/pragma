@@ -14,6 +14,7 @@ Raises:
 from __future__ import annotations
 
 import json
+import logging
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -369,6 +370,72 @@ def test_modules_api_lists_and_updates_persisted_state(
         ).fetchone()
 
     assert row[0] is False
+
+
+def test_enabled_module_load_logs_trusted_code_boundary(
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify enabled module imports log the trusted-code boundary.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+        apply_runtime_env: Helper that applies runtime environment values.
+        tmp_path: Temporary filesystem path for module fixtures.
+        caplog: Pytest log-capture fixture.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    module_root = tmp_path / 'modules-trusted-boundary'
+    module_root.mkdir(parents=True, exist_ok=True)
+    _write_module(
+        module_root,
+        'trusted-boundary-module',
+        """
+        def on_created(event):
+            return None
+        """,
+        hooks={'content.entry.created': 'on_created'},
+    )
+
+    env_values = dict(migrated_database)
+    env_values['PRAGMA_MODULE_ROOT'] = str(module_root)
+    apply_runtime_env(env_values)
+    runtime_logger = logging.getLogger('pragma.modules.runtime')
+    monkeypatch.setattr(runtime_logger, 'disabled', False)
+
+    with (
+        caplog.at_level(logging.WARNING, logger='pragma.modules.runtime'),
+        TestClient(create_app()) as client,
+    ):
+        headers = _auth_headers(client, bootstrap_payload)
+        _enable_module(client, headers, 'trusted-boundary-module')
+
+    trusted_code_records = [
+        record
+        for record in caplog.records
+        if getattr(record, 'module_code', None) == 'MODULE_TRUSTED_CODE_EXECUTION'
+    ]
+    assert len(trusted_code_records) == 1
+    record = trusted_code_records[0]
+    assert record.module_id == 'trusted-boundary-module'
+    assert record.module_entrypoint == str(
+        module_root / 'trusted-boundary-module' / 'hooks.py'
+    )
+    message = record.getMessage()
+    assert 'trusted operator-installed module Python code' in message
+    assert 'not sandboxed' in message
 
 
 def test_modules_api_requires_superuser(

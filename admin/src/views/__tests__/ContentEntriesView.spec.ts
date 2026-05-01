@@ -11,6 +11,7 @@ import type {
   RealtimeEventEnvelope,
 } from '@/api/types'
 import ContentEntryForm from '@/components/content/ContentEntryForm.vue'
+import { useAuthStore } from '@/stores/auth'
 import ContentEntriesView from '@/views/ContentEntriesView.vue'
 
 const contentApiMocks = vi.hoisted(() => ({
@@ -128,9 +129,27 @@ function createTestRouter() {
   })
 }
 
-async function mountView() {
+async function mountView(permissions = [
+  'content.entries.read',
+  'content.entries.write',
+  'content.entries.publish',
+]) {
   const pinia = createPinia()
   setActivePinia(pinia)
+
+  const authStore = useAuthStore()
+  authStore.accessToken = 'token-123'
+  authStore.user = {
+    id: 'user-1',
+    email: 'author@example.com',
+    username: 'author',
+    full_name: null,
+    is_active: true,
+    is_superuser: false,
+    roles: ['author'],
+    permissions,
+    force_password_change: false,
+  }
 
   const router = createTestRouter()
   await router.push('/app/content')
@@ -171,9 +190,16 @@ describe('ContentEntriesView', () => {
   it('loads content types and existing entries into the workspace', async () => {
     const { wrapper } = await mountView()
 
-    expect(contentApiMocks.listContentTypes).toHaveBeenCalledTimes(1)
+    expect(contentApiMocks.listContentTypes).toHaveBeenCalledWith({
+      limit: 50,
+      offset: 0,
+      order_by: 'updated_at',
+    })
     expect(contentApiMocks.listContentEntries).toHaveBeenCalledWith({
       content_type_id: 'type-1',
+      limit: 50,
+      offset: 0,
+      order_by: 'updated_at',
     })
     expect(wrapper.text()).toContain('Content entries')
     expect(wrapper.text()).toContain('Articles')
@@ -296,5 +322,139 @@ describe('ContentEntriesView', () => {
 
     expect(contentApiMocks.listContentTypes).toHaveBeenCalledTimes(2)
     expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(2)
+  })
+
+  it('navigates content type and entry pages with backend pagination parameters', async () => {
+    const secondContentType: ContentTypeResponse = {
+      ...contentType,
+      id: 'type-2',
+      name: 'Pages',
+      slug: 'pages',
+    }
+    contentApiMocks.listContentTypes
+      .mockResolvedValueOnce({
+        items: [contentType],
+        total: 75,
+        limit: 50,
+        offset: 0,
+      })
+      .mockResolvedValueOnce({
+        items: [secondContentType],
+        total: 75,
+        limit: 50,
+        offset: 50,
+      })
+    contentApiMocks.listContentEntries
+      .mockResolvedValueOnce({
+        items: [existingEntry],
+        total: 75,
+        limit: 50,
+        offset: 0,
+      })
+      .mockResolvedValueOnce({
+        items: [],
+        total: 75,
+        limit: 50,
+        offset: 50,
+      })
+      .mockResolvedValueOnce({
+        items: [],
+        total: 0,
+        limit: 50,
+        offset: 0,
+      })
+
+    const { wrapper } = await mountView()
+
+    expect(wrapper.get('[data-testid="content-types-pagination-summary"]').text()).toContain('1-1 of 75')
+    expect(wrapper.get('[data-testid="entries-pagination-summary"]').text()).toContain('1-1 of 75')
+
+    await wrapper.get('[data-testid="entries-next"]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledWith({
+      content_type_id: 'type-1',
+      limit: 50,
+      offset: 50,
+      order_by: 'updated_at',
+    })
+
+    await wrapper.get('[data-testid="content-types-next"]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.listContentTypes).toHaveBeenLastCalledWith({
+      limit: 50,
+      offset: 50,
+      order_by: 'updated_at',
+    })
+  })
+
+  it('disables create and edit controls for read-only users', async () => {
+    const { wrapper } = await mountView(['content.entries.read'])
+
+    const newEntryButton = wrapper.findAll('button').find((button) => button.text().includes('New entry'))
+    if (!newEntryButton) {
+      throw new Error('New entry button not found')
+    }
+
+    const editButton = wrapper.get('[data-testid="entry-edit"]')
+
+    expect(newEntryButton.attributes('disabled')).toBeDefined()
+    expect(editButton.attributes('disabled')).toBeDefined()
+    await newEntryButton.trigger('click')
+    await editButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(ContentEntryForm).exists()).toBe(false)
+    expect(contentApiMocks.createContentEntry).not.toHaveBeenCalled()
+    expect(contentApiMocks.updateContentEntry).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('read-only access')
+  })
+
+  it('prevents publish submissions for writers without publish permission', async () => {
+    const { wrapper } = await mountView(['content.entries.read', 'content.entries.write'])
+
+    const newEntryButton = wrapper.findAll('button').find((button) => button.text().includes('New entry'))
+    if (!newEntryButton) {
+      throw new Error('New entry button not found')
+    }
+
+    await newEntryButton.trigger('click')
+    await flushPromises()
+
+    const form = wrapper.getComponent(ContentEntryForm)
+    expect(form.props('canPublish')).toBe(false)
+    form.vm.$emit('submit', {
+      slug: null,
+      status: 'published',
+      payload: {
+        title: 'Blocked publish',
+        body: '<p>Blocked</p>',
+      },
+    })
+    await flushPromises()
+
+    expect(contentApiMocks.createContentEntry).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('content.entries.publish permission')
+  })
+
+  it('disables editing published entries for writers without publish permission', async () => {
+    contentApiMocks.listContentEntries.mockResolvedValue({
+      items: [{ ...existingEntry, status: 'published' }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper } = await mountView(['content.entries.read', 'content.entries.write'])
+
+    const editButton = wrapper.get('[data-testid="entry-edit"]')
+
+    expect(editButton.attributes('disabled')).toBeDefined()
+    await editButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(ContentEntryForm).exists()).toBe(false)
+    expect(contentApiMocks.updateContentEntry).not.toHaveBeenCalled()
   })
 })

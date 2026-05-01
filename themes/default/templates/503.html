@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% set home_url = home_url|default('/', true) %}
+{% block content %}
+<section class="section unavailable-section">
+    <div class="shell-container not-found-card">
+        <p class="eyebrow">Service unavailable</p>
+        <h1>This page is temporarily unavailable.</h1>
+        <p>Storage is temporarily unavailable, so public content cannot be loaded right now. Please try again in a moment.</p>
+        <div class="button-row">
+            <a class="button button--primary" href="{{ home_url }}">Return home</a>
+        </div>
+    </div>
+</section>
+{% endblock %}

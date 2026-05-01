@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.1 — 2026-04-30
+
+### Changed
+- Prepared the beta release metadata after expanded audit remediation, including backend/admin version alignment and explicit package-version choices.
+- Refreshed the root README release copy and validated the screenshot gallery, Mermaid diagrams, and conservative product-boundary claims.
+- Confirmed Docker secret-file documentation and validation coverage remain part of the release gate.
+- Recorded final gate status for backend Ruff, backend tests, admin tests, admin build, and pre-commit checks.
+
 ## v0.15.1 — 2026-04-28
 
 ### Added

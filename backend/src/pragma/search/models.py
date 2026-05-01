@@ -159,3 +159,4 @@ class SearchQueryResponse(BaseModel):
     mode_requested: SearchMode
     mode_applied: SearchMode
     applied_strategies: list[SearchStrategy]
+    semantic_diagnostics: list[str] = Field(default_factory=list)

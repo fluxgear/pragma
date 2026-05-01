@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class UserResponse(BaseModel):
@@ -85,6 +85,25 @@ class LoginRequest(BaseModel):
 
     identity: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=512)
+
+    @field_validator("identity", mode="before")
+    @classmethod
+    def strip_identity(cls, value: object) -> object:
+        """Strip login identity before length validation.
+
+        Args:
+            value: Raw identity input.
+
+        Returns:
+            object: Stripped string for string input; original value otherwise.
+
+        Raises:
+            None.
+        """
+
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class ChangePasswordRequest(BaseModel):

@@ -22,6 +22,7 @@ from html import escape, unescape
 from typing import Any
 from urllib.parse import urlencode
 
+import nh3
 from fastapi.responses import HTMLResponse
 
 from pragma.config import Settings
@@ -52,6 +53,28 @@ _WORDS_PER_MINUTE = 200
 _WHITESPACE_PATTERN = re.compile(r'\s+')
 _HTML_TAG_PATTERN = re.compile(r'<[^>]+>')
 _RICH_TEXT_FIELD_METADATA_KEY = '__pragma_rich_text_fields'
+_PUBLIC_BODY_HTML_TAGS = frozenset(
+    {
+        'blockquote',
+        'br',
+        'code',
+        'em',
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'hr',
+        'li',
+        'ol',
+        'p',
+        'pre',
+        's',
+        'strong',
+        'ul',
+    }
+)
 
 
 def _collapse_whitespace(value: str) -> str:
@@ -183,6 +206,43 @@ def _load_rich_text_field_names(connection: Any, content_type_id: Any) -> tuple[
     return _extract_rich_text_field_names(field_definitions)
 
 
+def _sanitize_public_body_html(value: str) -> str:
+    """Sanitize public rich-text HTML before template safe rendering.
+
+    Args:
+        value: Candidate rich-text HTML fragment.
+
+    Returns:
+        str: Sanitized HTML fragment that only contains public rich-text tags.
+
+    Raises:
+        None.
+    """
+
+    return nh3.clean(
+        value,
+        tags=_PUBLIC_BODY_HTML_TAGS,
+        attributes={},
+        strip_comments=True,
+    )
+
+
+def _escape_body_text(value: str) -> str:
+    """Escape an untrusted body string for safe HTML display.
+
+    Args:
+        value: Untrusted body text.
+
+    Returns:
+        str: Escaped HTML with newlines preserved as line breaks.
+
+    Raises:
+        None.
+    """
+
+    return escape(value).replace('\n', '<br>\n')
+
+
 def _extract_body_html(payload: dict[str, Any]) -> str:
     """Resolve rich body HTML while avoiding unsafe raw text rendering.
 
@@ -190,7 +250,7 @@ def _extract_body_html(payload: dict[str, Any]) -> str:
         payload: Entry payload dictionary.
 
     Returns:
-        str: HTML-safe body string.
+        str: HTML-safe body string sanitized for template safe rendering.
 
     Raises:
         None.
@@ -205,12 +265,12 @@ def _extract_body_html(payload: dict[str, Any]) -> str:
     if trusted_keys:
         trusted_body_html = _extract_text(payload, trusted_keys)
         if trusted_body_html is not None:
-            return trusted_body_html
+            return _sanitize_public_body_html(trusted_body_html)
 
     fallback = _extract_text(payload, ('body', 'content', 'body_html'))
     if fallback is None:
         return ''
-    return escape(fallback).replace('\n', '<br>\n')
+    return _sanitize_public_body_html(_escape_body_text(fallback))
 
 
 def _strip_html(value: str) -> str:

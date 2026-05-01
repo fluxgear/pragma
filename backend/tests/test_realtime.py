@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from threading import Event
+from time import perf_counter
 from uuid import UUID, uuid4
 
 import jwt
@@ -373,6 +375,7 @@ def test_realtime_listener_and_publisher_round_trip(migrated_database: dict[str,
                     await asyncio.sleep(0.1)
         finally:
             await listener.stop()
+            publisher.close()
 
         if received is None:
             raise AssertionError('Realtime listener did not receive a published NOTIFY payload')
@@ -381,6 +384,130 @@ def test_realtime_listener_and_publisher_round_trip(migrated_database: dict[str,
     received_envelope = asyncio.run(_exercise())
     assert received_envelope.type == 'realtime.resync_required'
     assert received_envelope.data['reason'] == 'round_trip'
+
+
+def test_realtime_publisher_publish_is_bounded_when_connect_is_slow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify slow PostgreSQL connects do not block publish callers unboundedly.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    class _SlowConnectConnection:
+        """Connection double returned after the fake slow connect releases.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+
+        def __init__(self) -> None:
+            """Initialize the fake connection as open.
+
+            Args:
+                None.
+
+            Returns:
+                None.
+
+            Raises:
+                None.
+            """
+
+            self.closed = False
+
+        def execute(self, query: str, params: tuple[str, str]) -> None:
+            """Accept a pg_notify statement without touching PostgreSQL.
+
+            Args:
+                query: SQL statement text.
+                params: SQL parameters.
+
+            Returns:
+                None.
+
+            Raises:
+                None.
+            """
+
+            _ = query, params
+
+        def close(self) -> None:
+            """Mark the fake connection closed.
+
+            Args:
+                None.
+
+            Returns:
+                None.
+
+            Raises:
+                None.
+            """
+
+            self.closed = True
+
+    connect_started = Event()
+    release_connect = Event()
+    connect_timeout_seconds: list[int] = []
+
+    def _slow_connect(
+        dsn: str,
+        *,
+        autocommit: bool,
+        connect_timeout: int,
+    ) -> _SlowConnectConnection:
+        """Block in connect until the test releases the fake connection attempt.
+
+        Args:
+            dsn: Database DSN.
+            autocommit: Requested autocommit mode.
+            connect_timeout: Requested connection timeout in seconds.
+
+        Returns:
+            _SlowConnectConnection: Fake open connection.
+
+        Raises:
+            None.
+        """
+
+        _ = dsn, autocommit
+        connect_timeout_seconds.append(connect_timeout)
+        connect_started.set()
+        release_connect.wait(timeout=2)
+        return _SlowConnectConnection()
+
+    monkeypatch.setattr('pragma.realtime.publisher.psycopg.connect', _slow_connect)
+    settings = get_settings().model_copy(update={'realtime_queue_size': 1})
+    publisher = RealtimePublisher(settings)
+
+    try:
+        started_at = perf_counter()
+        assert publisher.publish(build_resync_required_event(reason='slow_connect')) is True
+        assert perf_counter() - started_at < 0.5
+        assert connect_started.wait(timeout=2)
+        assert connect_timeout_seconds == [1]
+
+        assert publisher.publish(build_resync_required_event(reason='queued')) is True
+        started_at = perf_counter()
+        assert publisher.publish(build_resync_required_event(reason='queue_full')) is False
+        assert perf_counter() - started_at < 0.5
+    finally:
+        release_connect.set()
+        publisher.close()
 
 
 def test_postgresql_notifications_reach_websocket_transport(
@@ -436,6 +563,7 @@ def test_postgresql_notifications_reach_websocket_transport(
             await listener.stop()
             await hub.disconnect(client_id)
             await hub.shutdown()
+            publisher.close()
 
         if received is None:
             raise AssertionError('PostgreSQL NOTIFY payload did not reach websocket transport')

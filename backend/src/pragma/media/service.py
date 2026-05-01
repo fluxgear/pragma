@@ -209,7 +209,7 @@ def get_media_asset(storage: DatabasePool, media_id: UUID) -> MediaAssetResponse
 
 
 def delete_media_asset(storage: DatabasePool, settings: Settings, media_id: UUID) -> None:
-    """Delete a stored media asset and its metadata record.
+    """Delete a media asset metadata record, then clean up stored bytes.
 
     Args:
         storage: Initialized database pool manager.
@@ -221,7 +221,7 @@ def delete_media_asset(storage: DatabasePool, settings: Settings, media_id: UUID
 
     Raises:
         MediaError: If the media asset does not exist.
-        StorageError: If metadata lookup fails.
+        StorageError: If metadata lookup or deletion fails.
     """
 
     backend = build_storage_backend(settings)
@@ -229,13 +229,21 @@ def delete_media_asset(storage: DatabasePool, settings: Settings, media_id: UUID
     try:
         with storage.connection() as connection, connection.transaction():
             row = _get_media_row(connection=connection, media_id=media_id)
-            backend.delete(str(row['storage_key']))
+            storage_key = str(row['storage_key'])
             media_queries.delete_media(connection, media_id)
     except PsycopgError as exc:
         raise StorageError(
             detail='Unable to delete the requested media asset',
             code='MEDIA_DELETE_FAILED',
         ) from exc
+
+    try:
+        backend.delete(storage_key)
+    except StorageError:
+        logger.warning(
+            'Failed to clean up deleted media bytes',
+            extra={'media_id': str(media_id), 'storage_key': storage_key},
+        )
 
 
 def resolve_media_content(

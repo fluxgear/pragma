@@ -65,7 +65,7 @@ The public site is rendered by the backend through the active theme's Jinja temp
 ## Theme and module working directories
 
 - Themes are loaded from `PRAGMA_THEME_ROOT` and selected with `PRAGMA_THEME_ACTIVE_ID` plus `PRAGMA_THEME_DEFAULT_ID`. The checked-in default theme is `themes/default`.
-- Modules are loaded from `PRAGMA_MODULE_ROOT`. No module directory or bundled module is currently checked in. Module APIs exist on the backend and require module-management permission.
+- Modules are loaded from `PRAGMA_MODULE_ROOT`. Enabled module entrypoints are trusted operator-installed Python code that runs inside the backend process and is not sandboxed. No module directory or bundled module is currently checked in. Module APIs exist on the backend and require module-management permission.
 
 ## Reset and cleanup notes
 

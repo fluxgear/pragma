@@ -196,7 +196,9 @@ def _build_isolated_runtime_env(
     env_values.update({
         key: os.environ.get(key, value)
         for key, value in env_values.items()
+        if key != 'PRAGMA_DATABASE_NAME'
     })
+    env_values['PRAGMA_DATABASE_NAME'] = database_name
     return database_name, env_values
 
 

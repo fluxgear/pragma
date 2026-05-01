@@ -28,9 +28,17 @@
             {% endfor %}
         </div>
         <nav class="pagination" aria-label="Archive pagination">
-            <a class="button button--secondary" href="{{ pagination.prev_url|default('#', true) }}">Previous</a>
+            {% if pagination.prev_url %}
+            <a class="button button--secondary" href="{{ pagination.prev_url }}">Previous</a>
+            {% else %}
+            <span class="button button--secondary" aria-disabled="true">Previous</span>
+            {% endif %}
             <span>Page {{ pagination.page|default(1, true) }}</span>
-            <a class="button button--secondary" href="{{ pagination.next_url|default('#', true) }}">Next</a>
+            {% if pagination.next_url %}
+            <a class="button button--secondary" href="{{ pagination.next_url }}">Next</a>
+            {% else %}
+            <span class="button button--secondary" aria-disabled="true">Next</span>
+            {% endif %}
         </nav>
         {% else %}
         <div class="empty-panel">

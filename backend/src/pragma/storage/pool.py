@@ -68,12 +68,17 @@ class DatabasePool:
             )
             self._pool.open()
             self._pool.wait()
-            self.check_connection()
         except (PsycopgError, PoolTimeout) as exc:
             raise StorageError(
                 detail="Unable to connect to PostgreSQL with the configured settings",
                 code="DATABASE_CONNECTION_FAILED",
             ) from exc
+
+        try:
+            self.check_connection()
+        except StorageError:
+            self.close()
+            raise
 
     def close(self) -> None:
         """Close the connection pool if it is open.

@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from pragma.auth.admin_models import AdminUserCreateRequest, AdminUserUpdateRequest
 
 
 def _bootstrap_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> None:
@@ -385,3 +389,49 @@ def test_root_cannot_deactivate_own_account(
         'detail': 'You cannot deactivate your own account',
         'code': 'AUTH_SELF_DEACTIVATE_FORBIDDEN',
     }
+
+
+def test_admin_user_requests_strip_identity_fields_before_length_validation() -> None:
+    """Verify user-admin identity fields strip before length validation.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    with pytest.raises(ValidationError):
+        AdminUserCreateRequest(
+            email='   ',
+            username='managed',
+            password='valid-password',
+        )
+    with pytest.raises(ValidationError):
+        AdminUserCreateRequest(
+            email='managed@example.com',
+            username='   ',
+            password='valid-password',
+        )
+    with pytest.raises(ValidationError):
+        AdminUserUpdateRequest(email='   ')
+    with pytest.raises(ValidationError):
+        AdminUserUpdateRequest(username='   ')
+
+    create_request = AdminUserCreateRequest(
+        email='  managed@example.com  ',
+        username='  managed  ',
+        password='valid-password',
+    )
+    update_request = AdminUserUpdateRequest(
+        email='  managed-updated@example.com  ',
+        username='  managed-updated  ',
+    )
+
+    assert create_request.email == 'managed@example.com'
+    assert create_request.username == 'managed'
+    assert update_request.email == 'managed-updated@example.com'
+    assert update_request.username == 'managed-updated'

@@ -51,7 +51,7 @@ Realtime is admin-facing. Authenticated users obtain short-lived tickets, then c
 
 ## Modules
 
-Modules are filesystem-discovered backend extensions with manifests, persisted enablement state, and content-entry hooks. Module APIs are backend-only and permission-gated. There are no bundled modules and no admin module-management route in the current SPA.
+Modules are filesystem-discovered backend extensions with manifests, persisted enablement state, and content-entry hooks. Enabled module entrypoints and hooks are trusted operator-installed Python code running in the backend process, not sandboxed extensions. Module APIs are backend-only and permission-gated. There are no bundled modules and no admin module-management route in the current SPA.
 
 ## Themes
 
