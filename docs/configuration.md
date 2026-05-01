@@ -103,11 +103,11 @@ PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
 PRAGMA_JWT_SECRET_KEY_FILE=/run/secrets/pragma_jwt_secret_key
 ```
 
-Then provide host-side source files for the override mounts:
+Then provide host-side source files for the override mounts. These source paths are relative to the compose file directory (`docker/`), so the following values point to `docker/secrets/...` from the repo root:
 
 ```env
-PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./docker/secrets/pragma_database_password
-PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./docker/secrets/pragma_jwt_secret_key
+PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./secrets/pragma_database_password
+PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./secrets/pragma_jwt_secret_key
 ```
 
 Use `docker/docker-compose.secrets.yml` together with the base compose file so those two files are mounted read-only into `db`, `migrate`, and `backend`. Raw-env deployments do not use the override file.

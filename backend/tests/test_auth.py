@@ -78,7 +78,7 @@ def test_login_success_sets_refresh_cookie(
     client: TestClient,
     bootstrap_payload: dict[str, str],
 ) -> None:
-    """Verify successful login returns an access token and refresh cookie.
+    """Verify successful login returns validated JWTs and refresh cookie.
 
     Args:
         client: FastAPI test client.
@@ -106,16 +106,38 @@ def test_login_success_sets_refresh_cookie(
     assert payload["user"]["email"] == bootstrap_payload["email"]
     assert "pragma_refresh_token=" in response.headers["set-cookie"]
 
+    settings = get_settings()
+    access_payload = decode_token(
+        settings=settings,
+        token=payload["access_token"],
+        expected_token_type="access",
+    )
+    assert access_payload["iss"] == settings.jwt_issuer
+    assert access_payload["aud"] == settings.jwt_audience
+    assert "pwd" in access_payload
+
+    refresh_token = client.cookies.get(settings.refresh_cookie_name)
+    assert refresh_token is not None
+    refresh_payload = decode_token(
+        settings=settings,
+        token=refresh_token,
+        expected_token_type=REFRESH_TOKEN_TYPE,
+    )
+    assert refresh_payload["iss"] == settings.jwt_issuer
+    assert refresh_payload["aud"] == settings.jwt_audience
+
 
 def test_login_failure_returns_structured_error(
     client: TestClient,
     bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify login failure returns the structured API error contract.
+    """Verify login failures keep the structured API error contract.
 
     Args:
         client: FastAPI test client.
         bootstrap_payload: Bootstrap request payload.
+        monkeypatch: Pytest monkeypatch helper.
 
     Returns:
         None.
@@ -138,6 +160,26 @@ def test_login_failure_returns_structured_error(
         "detail": "Invalid credentials",
         "code": "INVALID_CREDENTIALS",
     }
+
+    verify_calls: list[tuple[str, str]] = []
+
+    def fake_verify_password(password: str, password_hash: str) -> bool:
+        verify_calls.append((password, password_hash))
+        return False
+
+    monkeypatch.setattr(auth_service, "verify_password", fake_verify_password)
+    missing_response = client.post(
+        "/api/v1/auth/login",
+        json={"identity": "missing@example.com", "password": "missing-password"},
+    )
+
+    assert missing_response.status_code == 401
+    assert missing_response.json() == {
+        "detail": "Invalid credentials",
+        "code": "INVALID_CREDENTIALS",
+    }
+    assert len(verify_calls) == 1
+    assert verify_calls[0][0] == "missing-password"
 
 
 def test_refresh_success_rotates_session(
@@ -173,7 +215,7 @@ def test_concurrent_refresh_reuse_creates_single_successor(
     bootstrap_payload: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify concurrent reuse of one refresh token creates one successor.
+    """Verify concurrent reuse revokes the rotated successor.
 
     Args:
         client: FastAPI test client.
@@ -267,7 +309,7 @@ def test_concurrent_refresh_reuse_creates_single_successor(
 
         assert results.count(("success", "")) == 1
         assert results.count(("auth_error", "TOKEN_REVOKED")) == 1
-        assert successor_row == {"active_count": 1, "total_count": 1}
+        assert successor_row == {"active_count": 0, "total_count": 1}
     finally:
         first_lookup_release.set()
         storage.close()
@@ -277,7 +319,7 @@ def test_change_password_revokes_existing_refresh_session(
     client: TestClient,
     bootstrap_payload: dict[str, str],
 ) -> None:
-    """Verify self-service password change revokes existing refresh sessions.
+    """Verify self-service password change revokes existing sessions.
 
     Args:
         client: FastAPI test client.
@@ -292,16 +334,27 @@ def test_change_password_revokes_existing_refresh_session(
 
     _bootstrap_admin(client, bootstrap_payload)
     login_payload = _login_admin(client, bootstrap_payload)
+    old_access_token = login_payload["access_token"]
 
     change_response = client.post(
         "/api/v1/auth/change-password",
-        headers={"Authorization": f"Bearer {login_payload['access_token']}"},
+        headers={"Authorization": f"Bearer {old_access_token}"},
         json={
             "current_password": bootstrap_payload["password"],
             "new_password": "new-bootstrap-password-123",
         },
     )
     assert change_response.status_code == 200
+
+    me_response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {old_access_token}"},
+    )
+    assert me_response.status_code == 401
+    assert me_response.json() == {
+        "detail": "Access token was issued before the current password change",
+        "code": "TOKEN_REVOKED",
+    }
 
     refresh_response = client.post("/api/v1/auth/refresh")
     assert refresh_response.status_code == 401

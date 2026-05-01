@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from pragma.auth.models import UserResponse
 
@@ -131,6 +131,25 @@ class AdminUserResponse(UserResponse):
         )
 
 
+class AdminUserListParams(BaseModel):
+    """Query parameters for administrative user listing.
+
+    Args:
+        BaseModel: Pydantic model base class.
+
+    Returns:
+        None.
+
+    Raises:
+        ValidationError: If query parameter values are invalid.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int = Field(default=50, gt=0, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
 class AdminUserListResponse(BaseModel):
     """List payload for administrative user management.
 
@@ -146,6 +165,8 @@ class AdminUserListResponse(BaseModel):
 
     items: list[AdminUserResponse] = Field(default_factory=list)
     total: int = Field(ge=0)
+    limit: int = Field(gt=0)
+    offset: int = Field(ge=0)
 
 
 class AdminUserCreateRequest(BaseModel):

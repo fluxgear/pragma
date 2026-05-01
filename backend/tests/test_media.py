@@ -234,12 +234,17 @@ def test_media_upload_list_detail_content_and_delete_flow(
     Raises:
         None.
     """
-
     auth_headers = _auth_headers(media_client, bootstrap_payload)
-    upload_headers = {**auth_headers, 'Content-Type': 'image/png'}
+    upload_headers = {
+        **auth_headers,
+        'Content-Type': 'image/png',
+        'X-Pragma-Media-Filename': 'hero-image.png',
+        'X-Pragma-Media-Alt-Text': 'Hero image',
+        'X-Pragma-Media-Caption': 'Homepage',
+    }
 
     upload_response = media_client.post(
-        '/api/v1/media/assets?filename=hero-image.png&alt_text=Hero%20image&caption=Homepage',
+        '/api/v1/media/assets',
         headers=upload_headers,
         content=_PNG_1X1,
     )
@@ -285,6 +290,55 @@ def test_media_upload_list_detail_content_and_delete_flow(
     final_list_response = media_client.get('/api/v1/media/assets', headers=auth_headers)
     assert final_list_response.status_code == 200
     assert final_list_response.json()['total'] == 0
+
+
+def test_media_upload_decodes_encoded_header_metadata(
+    media_client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify upload metadata headers are decoded from ASCII-safe values."""
+
+    headers = {
+        **_auth_headers(media_client, bootstrap_payload),
+        'Content-Type': 'image/png',
+        'X-Pragma-Media-Filename': 'utf8-url:h%C3%A9ro-image.png',
+        'X-Pragma-Media-Alt-Text': 'utf8-url:Hero%20%E2%98%95%0Aimage',
+        'X-Pragma-Media-Caption': 'utf8-url:Homepage%20%E2%80%9Chero%E2%80%9D',
+        'X-Pragma-Media-Description': 'utf8-url:Line%201%0D%0ALine%202',
+    }
+
+    response = media_client.post(
+        '/api/v1/media/assets',
+        headers=headers,
+        content=_PNG_1X1,
+    )
+
+    assert response.status_code == 201
+    uploaded = response.json()
+    assert uploaded['original_filename'] == 'héro-image.png'
+    assert uploaded['alt_text'] == 'Hero ☕\nimage'
+    assert uploaded['caption'] == 'Homepage “hero”'
+    assert uploaded['description'] == 'Line 1\r\nLine 2'
+
+
+def test_media_upload_keeps_legacy_query_metadata_literal(
+    media_client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify legacy query metadata is not decoded as header encoding."""
+
+    headers = {**_auth_headers(media_client, bootstrap_payload), 'Content-Type': 'image/png'}
+
+    response = media_client.post(
+        '/api/v1/media/assets?filename=utf8-url%3Acaf%25C3%25A9.png&alt_text=utf8-url%3AAlt%2520Text',
+        headers=headers,
+        content=_PNG_1X1,
+    )
+
+    assert response.status_code == 201
+    uploaded = response.json()
+    assert uploaded['original_filename'] == 'utf8-url:caf%C3%A9.png'
+    assert uploaded['alt_text'] == 'utf8-url:Alt%20Text'
 
 
 def test_media_upload_rejects_invalid_file(

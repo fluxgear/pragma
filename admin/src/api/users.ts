@@ -10,6 +10,26 @@ import type {
 } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 
+export interface ListUsersParams {
+  limit?: number
+  offset?: number
+}
+
+function buildUsersQuery(params: ListUsersParams = {}): string {
+  const searchParams = new URLSearchParams()
+
+  if (params.limit !== undefined) {
+    searchParams.set('limit', String(params.limit))
+  }
+
+  if (params.offset !== undefined) {
+    searchParams.set('offset', String(params.offset))
+  }
+
+  const query = searchParams.toString()
+  return query.length > 0 ? `/users?${query}` : '/users'
+}
+
 function getAccessToken(): string {
   const authStore = useAuthStore()
   if (authStore.accessToken === null) {
@@ -18,8 +38,8 @@ function getAccessToken(): string {
   return authStore.accessToken
 }
 
-export function listUsers(): Promise<AdminUserListResponse> {
-  return apiRequest<AdminUserListResponse>('/users', {
+export function listUsers(params: ListUsersParams = {}): Promise<AdminUserListResponse> {
+  return apiRequest<AdminUserListResponse>(buildUsersQuery(params), {
     accessToken: getAccessToken(),
   })
 }

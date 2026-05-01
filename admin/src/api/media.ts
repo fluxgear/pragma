@@ -16,6 +16,12 @@ export interface UploadMediaAssetOptions {
   description?: string | null
 }
 
+const UPLOAD_METADATA_HEADER_ENCODING_PREFIX = 'utf8-url:'
+
+function encodeUploadMetadataHeaderValue(value: string): string {
+  return UPLOAD_METADATA_HEADER_ENCODING_PREFIX + encodeURIComponent(value)
+}
+
 function getAccessToken(): string {
   const authStore = useAuthStore()
   if (authStore.accessToken === null) {
@@ -47,22 +53,23 @@ function buildMediaListQuery(params: ListMediaAssetsParams = {}): string {
   return query.length > 0 ? '/media/assets?' + query : '/media/assets'
 }
 
-function buildUploadPath(file: File, options: UploadMediaAssetOptions): string {
-  const searchParams = new URLSearchParams({
-    filename: file.name,
-  })
+function buildUploadHeaders(file: File, options: UploadMediaAssetOptions): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': file.type || 'application/octet-stream',
+    'X-Pragma-Media-Filename': encodeUploadMetadataHeaderValue(file.name),
+  }
 
   if (options.alt_text) {
-    searchParams.set('alt_text', options.alt_text)
+    headers['X-Pragma-Media-Alt-Text'] = encodeUploadMetadataHeaderValue(options.alt_text)
   }
   if (options.caption) {
-    searchParams.set('caption', options.caption)
+    headers['X-Pragma-Media-Caption'] = encodeUploadMetadataHeaderValue(options.caption)
   }
   if (options.description) {
-    searchParams.set('description', options.description)
+    headers['X-Pragma-Media-Description'] = encodeUploadMetadataHeaderValue(options.description)
   }
 
-  return `/media/assets?${searchParams.toString()}`
+  return headers
 }
 
 export function listMediaAssets(
@@ -83,12 +90,10 @@ export function uploadMediaAsset(
   file: File,
   options: UploadMediaAssetOptions = {},
 ): Promise<MediaAssetResponse> {
-  return apiRequest<MediaAssetResponse>(buildUploadPath(file, options), {
+  return apiRequest<MediaAssetResponse>('/media/assets', {
     accessToken: getAccessToken(),
     method: 'POST',
-    headers: {
-      'Content-Type': file.type || 'application/octet-stream',
-    },
+    headers: buildUploadHeaders(file, options),
     body: file,
   })
 }

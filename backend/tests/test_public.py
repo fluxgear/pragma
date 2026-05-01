@@ -676,10 +676,15 @@ def test_archive_pagination_lists_only_published_entries_and_supports_empty_stat
 
     page_one = client.get('/archive', params={'page': 1, 'per_page': 2})
     page_two = client.get('/archive', params={'page': 2, 'per_page': 2})
+    defaults_canonical = client.get(
+        '/archive',
+        params={'page': 1, 'per_page': 12, 'content_type': 'post'},
+    )
     empty_state = client.get('/archive', params={'content_type': 'page'})
 
     assert page_one.status_code == 200
     assert page_two.status_code == 200
+    assert defaults_canonical.status_code == 200
     combined_pages = page_one.text + page_two.text
     assert first_title in combined_pages
     assert second_title in combined_pages
@@ -705,9 +710,20 @@ def test_archive_pagination_lists_only_published_entries_and_supports_empty_stat
     assert disabled_next in page_two.text
     assert 'pagination.prev_url|default' not in combined_pages
     assert 'pagination.next_url|default' not in combined_pages
+    assert '<link rel="canonical" href="' in defaults_canonical.text
+    assert '/archive?page=1' not in defaults_canonical.text
+    assert '/archive?per_page=12' not in defaults_canonical.text
+    assert '/archive?content_type=post' not in defaults_canonical.text
+    assert '<link rel="canonical" href="' in page_one.text
+    assert '/archive?per_page=2"' in page_one.text
+    assert '/archive?page=1&amp;per_page=2"' not in page_one.text
+    assert '/archive?page=2&amp;per_page=2"' in page_two.text
 
     assert empty_state.status_code == 200
     assert 'No archive entries are available.' in empty_state.text
+    assert '/archive?content_type=page"' in empty_state.text
+    assert '/archive?page=1' not in empty_state.text
+    assert 'per_page=12' not in empty_state.text
 
 
 def test_search_without_query_renders_no_query_state_without_invoking_search_service(
@@ -864,8 +880,18 @@ def test_theme_static_route_serves_assets_and_rejects_invalid_or_missing_paths(
 
     assert css_response.status_code == 200
     assert 'text/css' in css_response.headers['content-type']
+    assert (
+        css_response.headers['cache-control']
+        == 'public, max-age=300, must-revalidate'
+    )
+    assert css_response.headers['etag']
     assert js_response.status_code == 200
     assert 'javascript' in js_response.headers['content-type']
+    assert (
+        js_response.headers['cache-control']
+        == 'public, max-age=300, must-revalidate'
+    )
+    assert js_response.headers['etag']
     assert missing_response.status_code == 404
     assert traversal_response.status_code == 404
 

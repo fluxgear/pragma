@@ -53,6 +53,34 @@ def list_roles(connection: Connection) -> list[dict[str, Any]]:
     ).fetchall()
 
 
+def count_active_users_with_permission(connection: Connection, permission_key: str) -> int:
+    """Return active users with an effective permission.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        permission_key: Stable permission identifier.
+
+    Returns:
+        int: Number of active users with the permission.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    row = connection.execute(
+        """
+        SELECT COUNT(DISTINCT u.id) AS total
+        FROM pragma_users AS u
+        LEFT JOIN pragma_user_roles AS ur ON ur.user_id = u.id
+        LEFT JOIN pragma_role_permissions AS rp ON rp.role_key = ur.role_key
+        WHERE u.is_active = TRUE
+          AND (u.is_superuser = TRUE OR rp.permission_key = %s)
+        """,
+        (permission_key,),
+    ).fetchone()
+    return int(row["total"])
+
+
 def replace_user_roles(
     connection: Connection,
     *,

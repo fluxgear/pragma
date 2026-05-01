@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -436,6 +436,134 @@ def test_enabled_module_load_logs_trusted_code_boundary(
     message = record.getMessage()
     assert 'trusted operator-installed module Python code' in message
     assert 'not sandboxed' in message
+
+
+def test_module_entrypoint_loads_are_cached_until_files_change(
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+) -> None:
+    """Verify repeated refreshes reuse unchanged trusted module entrypoints."""
+
+    module_root = tmp_path / 'modules-entrypoint-cache'
+    module_root.mkdir(parents=True, exist_ok=True)
+    counter_path = tmp_path / 'entrypoint-import-count.txt'
+    module_path = module_root / 'cache-module'
+
+    def _write_counting_entrypoint(marker: str) -> None:
+        (module_path / 'hooks.py').write_text(
+            textwrap.dedent(
+                f"""
+                import os
+                from pathlib import Path
+
+                counter_path = Path(os.environ['PRAGMA_MODULE_IMPORT_COUNTER'])
+                current_count = (
+                    int(counter_path.read_text(encoding='utf-8'))
+                    if counter_path.exists()
+                    else 0
+                )
+                counter_path.write_text(str(current_count + 1), encoding='utf-8')
+                MARKER = {marker!r}
+
+
+                def on_created(event):
+                    return None
+                """
+            ).strip()
+            + '\n',
+            encoding='utf-8',
+        )
+
+    _write_module(
+        module_root,
+        'cache-module',
+        """
+        def on_created(event):
+            return None
+        """,
+        hooks={'content.entry.created': 'on_created'},
+    )
+    _write_counting_entrypoint('initial')
+
+    env_values = dict(migrated_database)
+    env_values['PRAGMA_MODULE_ROOT'] = str(module_root)
+    env_values['PRAGMA_MODULE_IMPORT_COUNTER'] = str(counter_path)
+    apply_runtime_env(env_values)
+
+    with TestClient(create_app()) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        _enable_module(client, headers, 'cache-module')
+
+        first_list_response = client.get('/api/v1/modules', headers=headers)
+        second_list_response = client.get('/api/v1/modules', headers=headers)
+        assert first_list_response.status_code == 200
+        assert second_list_response.status_code == 200
+        assert counter_path.read_text(encoding='utf-8') == '1'
+
+        _write_counting_entrypoint('entrypoint-changed')
+        entrypoint_change_response = client.get('/api/v1/modules', headers=headers)
+        assert entrypoint_change_response.status_code == 200
+        assert counter_path.read_text(encoding='utf-8') == '2'
+
+        manifest_path = module_path / 'module.json'
+        manifest_payload = json.loads(manifest_path.read_text(encoding='utf-8'))
+        manifest_payload['version'] = '1.0.1'
+        manifest_path.write_text(
+            json.dumps(manifest_payload, indent=2),
+            encoding='utf-8',
+        )
+
+        manifest_change_response = client.get('/api/v1/modules', headers=headers)
+        assert manifest_change_response.status_code == 200
+        assert counter_path.read_text(encoding='utf-8') == '3'
+
+
+def test_module_dispatch_logs_slow_hook_telemetry(
+    migrated_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Verify slow module hooks log elapsed-time telemetry without cancellation."""
+
+    _ = migrated_database
+    from pragma.config import get_settings
+    from pragma.modules import runtime as module_runtime
+
+    settings = get_settings().model_copy(update={'module_hook_slow_seconds': 0.1})
+    runtime = module_runtime.ModuleRuntime(settings)
+    calls: list[Mapping[str, object]] = []
+
+    def _slow_hook(payload: Mapping[str, object]) -> None:
+        calls.append(payload)
+
+    runtime._bindings['content.entry.created'] = (
+        module_runtime._ModuleHookBinding(
+            module_id='slow-module',
+            hook_name='on_created',
+            handler=_slow_hook,
+        ),
+    )
+    elapsed_values = iter([100.0, 100.25])
+    monkeypatch.setattr(module_runtime, 'perf_counter', lambda: next(elapsed_values))
+    monkeypatch.setattr(module_runtime.logger, 'disabled', False)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger='pragma.modules.runtime'):
+        runtime.dispatch('content.entry.created', {'entry': {'id': 'entry-1'}})
+
+    assert calls == [{'entry': {'id': 'entry-1'}}]
+    slow_records = [
+        record
+        for record in caplog.records
+        if getattr(record, 'module_code', None) == 'MODULE_HOOK_SLOW'
+    ]
+    assert len(slow_records) == 1
+    assert slow_records[0].module_id == 'slow-module'
+    assert slow_records[0].hook_name == 'on_created'
+    assert slow_records[0].threshold_seconds == 0.1
+    assert slow_records[0].elapsed_ms == pytest.approx(250.0)
 
 
 def test_modules_api_requires_superuser(

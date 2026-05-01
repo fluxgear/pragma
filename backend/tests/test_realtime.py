@@ -14,6 +14,7 @@ Raises:
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from threading import Event
 from time import perf_counter
@@ -22,6 +23,7 @@ from uuid import UUID, uuid4
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from psycopg import Notify
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
@@ -384,6 +386,48 @@ def test_realtime_listener_and_publisher_round_trip(migrated_database: dict[str,
     received_envelope = asyncio.run(_exercise())
     assert received_envelope.type == 'realtime.resync_required'
     assert received_envelope.data['reason'] == 'round_trip'
+
+
+def test_realtime_listener_isolates_callback_failures(
+    migrated_database: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify callback exceptions are logged without stopping later dispatch."""
+
+    _ = migrated_database
+    calls: list[str] = []
+
+    async def _flaky_callback(envelope: RealtimeEventEnvelope) -> None:
+        calls.append(str(envelope.data['reason']))
+        if len(calls) == 1:
+            raise RuntimeError('callback failed')
+
+    async def _exercise() -> PostgresRealtimeListener:
+        settings = get_settings()
+        listener = PostgresRealtimeListener(settings, _flaky_callback)
+        first = serialize_envelope(build_resync_required_event(reason='first'))
+        second = serialize_envelope(build_resync_required_event(reason='second'))
+        await listener._handle_notify(Notify(settings.realtime_channel, first, 1))
+        await listener._handle_notify(Notify(settings.realtime_channel, second, 1))
+        return listener
+
+    from pragma.realtime import listener as listener_module
+
+    monkeypatch.setattr(listener_module.logger, 'disabled', False)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger='pragma.realtime.listener'):
+        listener = asyncio.run(_exercise())
+
+    assert calls == ['first', 'second']
+    assert listener.callback_failure_count == 1
+    assert any(
+        record.name == 'pragma.realtime.listener'
+        and record.levelno == logging.WARNING
+        and getattr(record, 'listener_code', None)
+        == 'REALTIME_LISTENER_CALLBACK_FAILED'
+        for record in caplog.records
+    )
 
 
 def test_realtime_publisher_publish_is_bounded_when_connect_is_slow(

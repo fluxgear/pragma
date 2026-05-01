@@ -257,11 +257,35 @@ def count_superusers(connection: Connection) -> int:
     return int(row["total"])
 
 
-def list_users(connection: Connection) -> list[dict[str, Any]]:
-    """Return all users with aggregated roles and permissions.
+def count_users(connection: Connection) -> int:
+    """Return the total number of user accounts.
 
     Args:
         connection: Open PostgreSQL connection.
+
+    Returns:
+        int: Number of stored user accounts.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    row = connection.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM pragma_users
+        """
+    ).fetchone()
+    return int(row["total"])
+
+
+def list_users(connection: Connection, limit: int, offset: int) -> list[dict[str, Any]]:
+    """Return paginated users with aggregated roles and permissions.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        limit: Maximum number of rows to return.
+        offset: Number of rows to skip before returning results.
 
     Returns:
         list[dict[str, Any]]: Ordered user rows with RBAC metadata.
@@ -277,7 +301,6 @@ def list_users(connection: Connection) -> list[dict[str, Any]]:
             u.email,
             u.username,
             u.full_name,
-            u.password_hash,
             u.is_active,
             u.is_superuser,
             u.last_login_at,
@@ -304,7 +327,10 @@ def list_users(connection: Connection) -> list[dict[str, Any]]:
             ) AS permissions
         FROM pragma_users AS u
         ORDER BY u.is_superuser DESC, u.username ASC
-        """
+        LIMIT %s
+        OFFSET %s
+        """,
+        (limit, offset),
     ).fetchall()
 
 

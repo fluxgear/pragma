@@ -13,12 +13,14 @@ Raises:
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
-from pragma.app import create_app
+from pragma.app import _configure_logging, create_app
+from pragma.config import Settings
 from pragma.errors import StorageError
 from tests.helpers import build_runtime_env
 
@@ -97,3 +99,40 @@ def test_readiness_reports_schema_status(client: TestClient) -> None:
         assert capability["installed"] is True
         assert capability["default_version"] is not None
         assert capability["installed_version"] is not None
+
+
+def test_configure_logging_uses_validated_standard_log_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify logging setup uses the validated level without an INFO fallback.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    basic_config_calls: list[dict[str, object]] = []
+
+    def _record_basic_config(**kwargs: object) -> None:
+        basic_config_calls.append(kwargs)
+
+    monkeypatch.setattr('pragma.app.logging.basicConfig', _record_basic_config)
+    settings = Settings(
+        database_host='127.0.0.1',
+        database_port=5432,
+        database_name='pragma_test',
+        database_user='pragma',
+        database_password='password',
+        jwt_secret_key='test-secret-key-123',
+        base_url='http://testserver',
+        log_level='warning',
+    )
+
+    _configure_logging(settings)
+
+    assert basic_config_calls == [{'level': logging.WARNING}]

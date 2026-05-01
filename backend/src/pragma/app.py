@@ -40,10 +40,12 @@ def _configure_logging(settings: Settings) -> None:
         None.
 
     Raises:
-        None.
+        ValueError: If an unexpected logging level bypasses settings validation.
     """
 
-    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    log_level = logging.getLevelName(settings.log_level)
+    if not isinstance(log_level, int):
+        raise ValueError(f'Invalid log level: {settings.log_level}')
     logging.basicConfig(level=log_level)
 
 

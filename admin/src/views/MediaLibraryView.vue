@@ -178,7 +178,7 @@
                 :disabled="!canDeleteMediaAssets"
                 :title="deleteDisabledReason"
                 :loading="deletingAssetId === slotProps.data.id"
-                @click="removeAsset(slotProps.data.id)"
+                @click="openDeleteDialog(slotProps.data)"
               />
             </template>
           </Column>
@@ -217,6 +217,41 @@
         </div>
       </template>
     </Card>
+
+    <Dialog
+      v-model:visible="deleteDialogVisible"
+      modal
+      :draggable="false"
+      :style="{ width: 'min(32rem, 95vw)' }"
+      header="Delete media asset"
+    >
+      <div class="form-stack">
+        <p>
+          Delete <strong>{{ assetPendingDelete?.original_filename }}</strong>?
+        </p>
+        <Message severity="warn" :closable="false">
+          This permanently removes the media asset from the library.
+        </Message>
+        <div class="inline-actions">
+          <Button
+            type="button"
+            label="Cancel"
+            severity="secondary"
+            variant="outlined"
+            @click="closeDeleteDialog"
+          />
+          <Button
+            type="button"
+            label="Delete asset"
+            icon="pi pi-trash"
+            severity="danger"
+            data-testid="media-confirm-delete"
+            :loading="deletingAssetId === assetPendingDelete?.id"
+            @click="confirmDeleteAsset"
+          />
+        </div>
+      </div>
+    </Dialog>
   </div>
 </template>
 
@@ -226,6 +261,7 @@ import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
+import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
@@ -256,6 +292,8 @@ const assetsTotal = ref(0)
 const assetsLimit = ref(MEDIA_PAGE_SIZE)
 const assetsOffset = ref(0)
 const deletingAssetId = ref<string | null>(null)
+const deleteDialogVisible = ref(false)
+const assetPendingDelete = ref<MediaAssetResponse | null>(null)
 const pageErrorMessage = ref<string | null>(null)
 const uploadErrorMessage = ref<string | null>(null)
 const uploadForm = reactive({
@@ -384,6 +422,32 @@ async function handleUpload(): Promise<void> {
   } finally {
     uploading.value = false
   }
+}
+
+function openDeleteDialog(asset: MediaAssetResponse): void {
+  if (!canDeleteMediaAssets.value) {
+    pageErrorMessage.value = 'Deleting media requires the media.assets.delete permission.'
+    return
+  }
+
+  pageErrorMessage.value = null
+  assetPendingDelete.value = asset
+  deleteDialogVisible.value = true
+}
+
+function closeDeleteDialog(): void {
+  deleteDialogVisible.value = false
+  assetPendingDelete.value = null
+}
+
+async function confirmDeleteAsset(): Promise<void> {
+  const asset = assetPendingDelete.value
+  if (asset === null) {
+    return
+  }
+
+  await removeAsset(asset.id)
+  closeDeleteDialog()
 }
 
 async function removeAsset(mediaId: string): Promise<void> {

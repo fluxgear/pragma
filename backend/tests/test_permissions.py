@@ -504,5 +504,20 @@ def test_force_password_change_blocks_protected_routes_until_password_rotates(
     assert change_response.status_code == 200
     assert change_response.json()['force_password_change'] is False
 
-    allowed_response = client.get('/api/v1/content/types', headers=rotate_headers)
+    stale_response = client.get('/api/v1/content/types', headers=rotate_headers)
+    assert stale_response.status_code == 401
+    assert stale_response.json() == {
+        'detail': 'Access token was issued before the current password change',
+        'code': 'TOKEN_REVOKED',
+    }
+
+    rotated_payload = _login_user(
+        client,
+        identity='rotate@example.com',
+        password='rotate-password-456',
+    )
+    allowed_response = client.get(
+        '/api/v1/content/types',
+        headers=_auth_headers(rotated_payload['access_token']),
+    )
     assert allowed_response.status_code == 200

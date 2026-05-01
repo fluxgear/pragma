@@ -16,10 +16,11 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from pragma.auth.admin_models import (
     AdminUserCreateRequest,
+    AdminUserListParams,
     AdminUserListResponse,
     AdminUserResponse,
     AdminUserUpdateRequest,
@@ -93,19 +94,21 @@ _ADMIN_ERROR_RESPONSES = {
 
 @router.get('', response_model=AdminUserListResponse, responses=_ADMIN_ERROR_RESPONSES)
 def list_users(
+    params: Annotated[AdminUserListParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
     current_user: Annotated[
         dict[str, object], Depends(require_permission(PERMISSION_USERS_MANAGE))
     ],
 ) -> AdminUserListResponse:
-    """Return all managed user accounts.
+    """Return managed user accounts.
 
     Args:
+        params: User-list query parameters.
         storage: Initialized database pool manager.
         current_user: Authenticated administrator context.
 
     Returns:
-        AdminUserListResponse: Ordered administrative user payload.
+        AdminUserListResponse: Paginated administrative user payload.
 
     Raises:
         AuthError: If administrative privileges are missing.
@@ -113,7 +116,7 @@ def list_users(
     """
 
     _ = current_user
-    return list_user_records(storage)
+    return list_user_records(storage, params)
 
 
 @router.get('/roles', response_model=RoleListResponse, responses=_ADMIN_ERROR_RESPONSES)

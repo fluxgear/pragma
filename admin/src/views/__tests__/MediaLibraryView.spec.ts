@@ -113,6 +113,7 @@ async function mountView(permissions = [
 
 describe('MediaLibraryView', () => {
   beforeEach(() => {
+    document.body.innerHTML = ''
     vi.clearAllMocks()
     mediaApiMocks.listMediaAssets.mockResolvedValue({
       items: [mediaAsset],
@@ -232,10 +233,22 @@ describe('MediaLibraryView', () => {
     expect(mediaApiMocks.listMediaAssets).toHaveBeenCalledTimes(2)
   })
 
-  it('deletes an asset from the table action', async () => {
+  it('requires confirmation before deleting an asset from the table action', async () => {
     const { wrapper } = await mountView()
 
     await wrapper.get('[data-testid="media-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(mediaApiMocks.deleteMediaAsset).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Delete hero.png?')
+
+    const confirmButton = document.body.querySelector('[data-testid="media-confirm-delete"]')
+    if (!(confirmButton instanceof HTMLButtonElement)) {
+      throw new Error('Delete confirmation button not found')
+    }
+
+    confirmButton.click()
+    await flushPromises()
     await flushPromises()
 
     expect(mediaApiMocks.deleteMediaAsset).toHaveBeenCalledWith('media-1')

@@ -18,10 +18,12 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+_STANDARD_LOG_LEVELS = frozenset({'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'})
 
 
 class Settings(BaseSettings):
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
     database_pool_max_size: int = Field(default=10, ge=1)
     jwt_secret_key: str = Field(min_length=16)
     jwt_algorithm: str = Field(default='HS256', min_length=3)
+    jwt_issuer: str = Field(default='pragma', min_length=1)
+    jwt_audience: str = Field(default='pragma-admin', min_length=1)
     jwt_access_token_ttl_minutes: int = Field(default=15, ge=1)
     jwt_refresh_token_ttl_days: int = Field(default=7, ge=1)
     refresh_cookie_name: str = Field(default='pragma_refresh_token', min_length=1)
@@ -70,6 +74,7 @@ class Settings(BaseSettings):
     base_url: str = Field(min_length=1)
     theme_root: str = Field(default='../themes', min_length=1)
     module_root: str = Field(default='../modules', min_length=1)
+    module_hook_slow_seconds: float = Field(default=0.5, ge=0)
     theme_active_id: str = Field(default='default', min_length=1)
     theme_default_id: str = Field(default='default', min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
@@ -80,6 +85,48 @@ class Settings(BaseSettings):
     realtime_reconnect_min_seconds: float = Field(default=0.5, gt=0)
     realtime_reconnect_max_seconds: float = Field(default=30.0, gt=0)
     realtime_ticket_ttl_seconds: int = Field(default=60, ge=5, le=600)
+
+    @field_validator('log_level')
+    @classmethod
+    def normalize_log_level(cls, value: str) -> str:
+        """Normalize and validate the configured logging level.
+
+        Args:
+            value: Log level name from configuration.
+
+        Returns:
+            str: Uppercase standard logging level name.
+
+        Raises:
+            ValueError: If the configured level is not a standard logging level.
+        """
+
+        normalized = value.strip().upper()
+        if normalized not in _STANDARD_LOG_LEVELS:
+            valid_levels = ', '.join(sorted(_STANDARD_LOG_LEVELS))
+            raise ValueError(f'log_level must be one of: {valid_levels}')
+        return normalized
+
+    @model_validator(mode='after')
+    def validate_database_pool_sizes(self) -> Settings:
+        """Validate database connection-pool size ordering.
+
+        Args:
+            None.
+
+        Returns:
+            Settings: Validated settings object.
+
+        Raises:
+            ValueError: If the minimum pool size exceeds the maximum pool size.
+        """
+
+        if self.database_pool_min_size > self.database_pool_max_size:
+            raise ValueError(
+                'database_pool_min_size must be less than or equal to '
+                'database_pool_max_size'
+            )
+        return self
 
     @staticmethod
     def _normalize_theme_identifier(value: str) -> str:

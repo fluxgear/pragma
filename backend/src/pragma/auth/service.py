@@ -24,6 +24,7 @@ from pragma.auth.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    hash_password,
     hash_refresh_token,
     normalize_identity,
     utc_now,
@@ -36,8 +37,11 @@ from pragma.storage.queries.auth_sessions import (
     create_refresh_session,
     get_active_refresh_session,
     revoke_refresh_session,
+    revoke_refresh_sessions_for_user,
 )
 from pragma.storage.queries.users import get_user_by_id, get_user_by_identity, update_last_login
+
+_DUMMY_PASSWORD_HASH = hash_password('pragma-invalid-login-dummy-password')
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +63,9 @@ def _build_token_response(
         None.
     """
 
-    access_token, access_expires_at = create_access_token(settings, user["id"])
+    access_token, access_expires_at = create_access_token(
+        settings, user["id"], user.get("password_changed_at")
+    )
     refresh_token, refresh_expires_at = create_refresh_token(
         settings,
         user["id"],
@@ -101,7 +107,10 @@ def authenticate_user(
     try:
         with storage.connection() as connection, connection.transaction():
             user = get_user_by_identity(connection, normalized_identity)
-            if user is None or not verify_password(password, str(user["password_hash"])):
+            if user is None:
+                verify_password(password, _DUMMY_PASSWORD_HASH)
+                raise AuthError(detail="Invalid credentials", code="INVALID_CREDENTIALS")
+            if not verify_password(password, str(user["password_hash"])):
                 raise AuthError(detail="Invalid credentials", code="INVALID_CREDENTIALS")
             if not bool(user["is_active"]):
                 raise AuthError(detail="User account is inactive", code="AUTH_INACTIVE")
@@ -164,37 +173,41 @@ def refresh_user_session(
 
     issued_at = utc_now()
     token_hash = hash_refresh_token(refresh_token)
+    replay_detected = False
 
     try:
         with storage.connection() as connection, connection.transaction():
             session = get_active_refresh_session(connection, refresh_session_id, token_hash)
             if session is None:
-                raise AuthError(detail="Refresh token is not active", code="TOKEN_REVOKED")
+                revoke_refresh_sessions_for_user(connection, user_id, issued_at)
+                replay_detected = True
+            else:
+                user = get_user_by_id(connection, user_id)
+                if user is None or not bool(user["is_active"]):
+                    raise AuthError(
+                        detail="Authenticated user is invalid",
+                        code="AUTH_USER_INVALID",
+                    )
 
-            user = get_user_by_id(connection, user_id)
-            if user is None or not bool(user["is_active"]):
-                raise AuthError(
-                    detail="Authenticated user is invalid",
-                    code="AUTH_USER_INVALID",
+                revoke_refresh_session(connection, refresh_session_id, issued_at)
+                token_payload = _build_token_response(settings, user, uuid4())
+                create_refresh_session(
+                    connection=connection,
+                    session_id=token_payload["refresh_session_id"],
+                    user_id=user["id"],
+                    token_hash=hash_refresh_token(token_payload["refresh_token"]),
+                    expires_at=token_payload["refresh_expires_at"],
+                    rotated_from_id=refresh_session_id,
+                    issued_at=issued_at,
                 )
-
-            revoke_refresh_session(connection, refresh_session_id, issued_at)
-            token_payload = _build_token_response(settings, user, uuid4())
-            create_refresh_session(
-                connection=connection,
-                session_id=token_payload["refresh_session_id"],
-                user_id=user["id"],
-                token_hash=hash_refresh_token(token_payload["refresh_token"]),
-                expires_at=token_payload["refresh_expires_at"],
-                rotated_from_id=refresh_session_id,
-                issued_at=issued_at,
-            )
     except PsycopgError as exc:
         raise StorageError(
             detail="Unable to refresh the current session",
             code="AUTH_REFRESH_STORAGE_FAILURE",
         ) from exc
 
+    if replay_detected:
+        raise AuthError(detail="Refresh token is not active", code="TOKEN_REVOKED")
     return token_payload
 
 

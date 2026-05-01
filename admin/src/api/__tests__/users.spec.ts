@@ -29,11 +29,21 @@ describe('users API helpers', () => {
   })
 
   it('passes the bearer token when listing users', async () => {
-    apiClientMocks.apiRequest.mockResolvedValue({ items: [], total: 0 })
+    apiClientMocks.apiRequest.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
 
     await listUsers()
 
     expect(apiClientMocks.apiRequest).toHaveBeenCalledWith('/users', {
+      accessToken,
+    })
+  })
+
+  it('passes pagination parameters when listing users', async () => {
+    apiClientMocks.apiRequest.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 50 })
+
+    await listUsers({ limit: 25, offset: 50 })
+
+    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith('/users?limit=25&offset=50', {
       accessToken,
     })
   })

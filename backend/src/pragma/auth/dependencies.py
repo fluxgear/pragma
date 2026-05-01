@@ -21,7 +21,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from psycopg import Error as PsycopgError
 
 from pragma.auth.permissions import ensure_permission
-from pragma.auth.security import ACCESS_TOKEN_TYPE, decode_token
+from pragma.auth.security import (
+    ACCESS_TOKEN_TYPE,
+    decode_token,
+    password_changed_token_epoch,
+)
 from pragma.config import Settings, get_settings
 from pragma.errors import AuthError, StorageError
 from pragma.storage import get_storage
@@ -94,6 +98,14 @@ def get_current_user(
 
     if user is None or not bool(user["is_active"]):
         raise AuthError(detail="Authenticated user is invalid", code="AUTH_USER_INVALID")
+
+    password_epoch = password_changed_token_epoch(user.get("password_changed_at"))
+    token_password_epoch = payload.get("pwd")
+    if password_epoch is not None and token_password_epoch != password_epoch:
+        raise AuthError(
+            detail="Access token was issued before the current password change",
+            code="TOKEN_REVOKED",
+        )
     return user
 
 

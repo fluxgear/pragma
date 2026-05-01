@@ -332,6 +332,138 @@ def test_ai_migration_creates_provider_settings_and_embedding_metadata(
     assert row[4] is True
 
 
+class _EmbeddingResponse:
+    """Minimal context-manager response for provider HTTP tests."""
+
+    def __init__(self, body: bytes, *, content_length: str | None = None) -> None:
+        self._body = body
+        self._offset = 0
+        self._content_length = content_length
+        self.read_sizes: list[int] = []
+
+    def __enter__(self) -> _EmbeddingResponse:
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        return None
+
+    def getheader(self, name: str) -> str | None:
+        if name.lower() == 'content-length':
+            return self._content_length
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        if size < 0:
+            size = len(self._body) - self._offset
+        chunk = self._body[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+
+def test_request_embedding_reads_successful_response_incrementally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify provider responses are read in bounded chunks before parsing."""
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider
+    from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+
+    response = _EmbeddingResponse(b'{"data":[{"embedding":[0.1,0.2]}]}')
+
+    def _urlopen(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+        return response
+
+    monkeypatch.setattr(ai_providers, '_EMBEDDING_RESPONSE_READ_CHUNK_BYTES', 8)
+    monkeypatch.setattr(ai_providers.request, 'urlopen', _urlopen)
+
+    embedding = request_embedding(
+        EmbeddingProviderConfig(
+            provider=AIProvider.VOYAGE,
+            base_url='https://api.voyageai.com/v1',
+            api_key='test-ai-key',
+            embedding_model='voyage-3.5-lite',
+            request_timeout_seconds=1,
+        ),
+        'bounded query',
+        input_type='query',
+    )
+
+    assert embedding == [0.1, 0.2]
+    assert response.read_sizes[0] == 8
+
+
+def test_request_embedding_rejects_declared_oversized_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify oversized Content-Length is rejected before body reads."""
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider
+    from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+
+    response = _EmbeddingResponse(
+        b'', content_length=str(ai_providers._MAX_EMBEDDING_RESPONSE_BYTES + 1)
+    )
+
+    def _urlopen(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+        return response
+
+    monkeypatch.setattr(ai_providers.request, 'urlopen', _urlopen)
+
+    with pytest.raises(SearchError) as exc_info:
+        request_embedding(
+            EmbeddingProviderConfig(
+                provider=AIProvider.VOYAGE,
+                base_url='https://api.voyageai.com/v1',
+                api_key='test-ai-key',
+                embedding_model='voyage-3.5-lite',
+                request_timeout_seconds=1,
+            ),
+            'oversized query',
+            input_type='query',
+        )
+
+    assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
+    assert response.read_sizes == []
+
+
+def test_request_embedding_rejects_streamed_oversized_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify chunked provider bodies are capped without Content-Length."""
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider
+    from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+
+    response = _EmbeddingResponse(b'012345678')
+
+    def _urlopen(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+        return response
+
+    monkeypatch.setattr(ai_providers, '_MAX_EMBEDDING_RESPONSE_BYTES', 8)
+    monkeypatch.setattr(ai_providers, '_EMBEDDING_RESPONSE_READ_CHUNK_BYTES', 4)
+    monkeypatch.setattr(ai_providers.request, 'urlopen', _urlopen)
+
+    with pytest.raises(SearchError) as exc_info:
+        request_embedding(
+            EmbeddingProviderConfig(
+                provider=AIProvider.VOYAGE,
+                base_url='https://api.voyageai.com/v1',
+                api_key='test-ai-key',
+                embedding_model='voyage-3.5-lite',
+                request_timeout_seconds=1,
+            ),
+            'oversized query',
+            input_type='query',
+        )
+
+    assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
+    assert response.read_sizes == [4, 4, 1]
+
+
 def test_request_embedding_translates_provider_timeouts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

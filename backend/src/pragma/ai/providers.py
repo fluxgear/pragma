@@ -22,6 +22,9 @@ from urllib import error, request
 from pragma.ai.models import AIProvider
 from pragma.errors import SearchError
 
+_MAX_EMBEDDING_RESPONSE_BYTES = 1024 * 1024
+_EMBEDDING_RESPONSE_READ_CHUNK_BYTES = 64 * 1024
+
 
 @dataclass(frozen=True)
 class EmbeddingProviderConfig:
@@ -122,8 +125,58 @@ def _extract_embedding(response_payload: dict[str, object]) -> list[float]:
         first_embedding = embeddings[0]
         if isinstance(first_embedding, list):
             return [float(item) for item in first_embedding]
+        if isinstance(first_embedding, dict) and isinstance(first_embedding.get('embedding'), list):
+            values = first_embedding['embedding']
+            return [float(item) for item in values]
 
     raise ValueError('Provider response is missing embedding data')
+
+
+def _raise_embedding_response_too_large() -> None:
+    """Raise the standard oversized provider-response error."""
+
+    raise SearchError(
+        detail='Embedding provider response exceeded the configured read limit',
+        code='SEARCH_EMBEDDING_PROVIDER_INVALID',
+        status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+    )
+
+
+def _read_limited_response_body(response: object) -> bytes:
+    """Read a provider response body within a fixed memory bound."""
+
+    content_length = None
+    getheader = getattr(response, 'getheader', None)
+    if callable(getheader):
+        content_length = getheader('Content-Length')
+    if content_length is None:
+        headers = getattr(response, 'headers', None)
+        if headers is not None:
+            content_length = headers.get('Content-Length')
+
+    if (
+        isinstance(content_length, str)
+        and content_length.strip().isdecimal()
+        and int(content_length.strip()) > _MAX_EMBEDDING_RESPONSE_BYTES
+    ):
+        _raise_embedding_response_too_large()
+
+    chunks: list[bytes] = []
+    received_size = 0
+    while True:
+        read_size = min(
+            _EMBEDDING_RESPONSE_READ_CHUNK_BYTES,
+            _MAX_EMBEDDING_RESPONSE_BYTES + 1 - received_size,
+        )
+        chunk = response.read(read_size)  # type: ignore[attr-defined]
+        if not chunk:
+            break
+        received_size += len(chunk)
+        if received_size > _MAX_EMBEDDING_RESPONSE_BYTES:
+            _raise_embedding_response_too_large()
+        chunks.append(chunk)
+
+    return b''.join(chunks)
 
 
 def request_embedding(
@@ -132,19 +185,7 @@ def request_embedding(
     *,
     input_type: str,
 ) -> list[float]:
-    """Generate an embedding vector via the configured provider.
-
-    Args:
-        config: Provider runtime configuration.
-        text: Source text to embed.
-        input_type: Provider-side input intent (query or document).
-
-    Returns:
-        list[float]: Embedding vector values.
-
-    Raises:
-        SearchError: If the provider request fails or returns invalid data.
-    """
+    """Generate an embedding vector via the configured provider."""
 
     payload = _embedding_payload(config, text, input_type=input_type)
     body = json.dumps(payload).encode('utf-8')
@@ -163,7 +204,7 @@ def request_embedding(
             http_request,
             timeout=config.request_timeout_seconds,
         ) as response:
-            response_body = response.read()
+            response_body = _read_limited_response_body(response)
     except ValueError as exc:
         raise SearchError(
             detail='Embedding provider URL is invalid',

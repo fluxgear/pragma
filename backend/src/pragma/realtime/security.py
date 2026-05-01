@@ -50,6 +50,8 @@ def create_realtime_ticket(
         'jti': str(uuid4()),
         'iat': int(issued_at.timestamp()),
         'exp': int(expires_at.timestamp()),
+        'iss': settings.jwt_issuer,
+        'aud': settings.jwt_audience,
     }
     ticket = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return ticket, expires_at

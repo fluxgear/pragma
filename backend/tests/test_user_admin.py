@@ -159,9 +159,32 @@ def test_user_admin_lists_roles_and_created_users(
         password='listed-password-123',
         role_keys=['viewer'],
     )
+    _create_managed_user(
+        client,
+        admin_headers,
+        email='listed-two@example.com',
+        username='listedtwo',
+        password='listed-password-456',
+        role_keys=['viewer'],
+    )
+
     users_response = client.get('/api/v1/users', headers=admin_headers)
     assert users_response.status_code == 200
-    assert any(item['id'] == created_user['id'] for item in users_response.json()['items'])
+    users_payload = users_response.json()
+    assert users_payload['total'] == 3
+    assert users_payload['limit'] == 50
+    assert users_payload['offset'] == 0
+    assert any(item['id'] == created_user['id'] for item in users_payload['items'])
+    assert all('password_hash' not in item for item in users_payload['items'])
+
+    paged_response = client.get('/api/v1/users?limit=1&offset=1', headers=admin_headers)
+    assert paged_response.status_code == 200
+    paged_payload = paged_response.json()
+    assert paged_payload['total'] == 3
+    assert paged_payload['limit'] == 1
+    assert paged_payload['offset'] == 1
+    assert len(paged_payload['items']) == 1
+    assert 'password_hash' not in paged_payload['items'][0]
 
 
 def test_role_assignment_update_changes_effective_permissions(
@@ -249,11 +272,62 @@ def test_role_assignment_update_changes_effective_permissions(
     }
 
 
+def test_role_assignment_blocks_self_users_manage_removal(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify role admins cannot remove their own users.manage path.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _bootstrap_admin(client, bootstrap_payload)
+    root_payload = _login_user(
+        client,
+        identity=bootstrap_payload['email'],
+        password=bootstrap_payload['password'],
+    )
+    root_headers = _auth_headers(root_payload['access_token'])
+    role_admin = _create_managed_user(
+        client,
+        root_headers,
+        email='self-admin@example.com',
+        username='selfadmin',
+        password='self-admin-password-123',
+        role_keys=['administrator'],
+    )
+    role_admin_payload = _login_user(
+        client,
+        identity='self-admin@example.com',
+        password='self-admin-password-123',
+    )
+
+    response = client.put(
+        f"/api/v1/users/{role_admin['id']}/roles",
+        headers=_auth_headers(role_admin_payload['access_token']),
+        json={'role_keys': ['viewer']},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'detail': 'You cannot remove your own users.manage access',
+        'code': 'AUTH_SELF_USERS_MANAGE_REQUIRED',
+    }
+
+
 def test_password_reset_revokes_refresh_and_forces_password_change(
     client: TestClient,
     bootstrap_payload: dict[str, str],
 ) -> None:
-    """Verify password reset revokes refresh sessions and forces rotation.
+    """Verify password reset revokes refresh and access sessions.
 
     Args:
         client: FastAPI test client.
@@ -282,7 +356,11 @@ def test_password_reset_revokes_refresh_and_forces_password_change(
         role_keys=['editor'],
     )
 
-    _login_user(client, identity='reset@example.com', password='reset-password-123')
+    reset_login_payload = _login_user(
+        client,
+        identity='reset@example.com',
+        password='reset-password-123',
+    )
     reset_response = client.post(
         f"/api/v1/users/{created_user['id']}/password-reset",
         headers=admin_headers,
@@ -290,6 +368,16 @@ def test_password_reset_revokes_refresh_and_forces_password_change(
     assert reset_response.status_code == 200
     temporary_password = reset_response.json()['temporary_password']
     assert len(temporary_password) >= 8
+
+    stale_access_response = client.get(
+        '/api/v1/auth/me',
+        headers=_auth_headers(reset_login_payload['access_token']),
+    )
+    assert stale_access_response.status_code == 401
+    assert stale_access_response.json() == {
+        'detail': 'Access token was issued before the current password change',
+        'code': 'TOKEN_REVOKED',
+    }
 
     refresh_response = client.post('/api/v1/auth/refresh')
     assert refresh_response.status_code == 401

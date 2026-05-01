@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0-beta.2 — 2026-05-01
+
+### Fixed
+- Prepared the post-beta hardening release metadata after audit-sweep fixes across backend, admin, public rendering, Docker, search, realtime, and modules.
+- Aligned backend, admin, README, and lockfile version references to v1.0.0-beta.2 / 1.0.0b2.
+
 ## v1.0.0-beta.1 — 2026-04-30
 
 ### Changed

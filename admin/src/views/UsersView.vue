@@ -58,8 +58,22 @@
             <template #body="slotProps">
               <div class="inline-actions">
                 <Button label="Roles" size="small" severity="secondary" variant="outlined" @click="openRolesDialog(slotProps.data)" />
-                <Button :label="slotProps.data.is_active ? 'Deactivate' : 'Activate'" size="small" severity="secondary" variant="outlined" @click="toggleActive(slotProps.data)" />
-                <Button label="Reset password" size="small" severity="warn" variant="outlined" @click="resetPassword(slotProps.data.id)" />
+                <Button
+                  :label="slotProps.data.is_active ? 'Deactivate' : 'Activate'"
+                  size="small"
+                  severity="secondary"
+                  variant="outlined"
+                  data-testid="user-toggle-active"
+                  @click="openActiveDialog(slotProps.data)"
+                />
+                <Button
+                  label="Reset password"
+                  size="small"
+                  severity="warn"
+                  variant="outlined"
+                  data-testid="user-reset-password"
+                  @click="openPasswordResetDialog(slotProps.data)"
+                />
               </div>
             </template>
           </Column>
@@ -68,6 +82,16 @@
             <div class="muted">No managed users have been created yet.</div>
           </template>
         </DataTable>
+
+        <div class="inline-actions" style="justify-content: space-between; margin-top: 1rem;">
+          <span class="muted">
+            Showing {{ pageStart }}-{{ pageEnd }} of {{ usersTotal }} users
+          </span>
+          <div class="inline-actions">
+            <Button label="Previous" severity="secondary" variant="outlined" :disabled="!canGoPrevious || loading" @click="loadPreviousUsers" />
+            <Button label="Next" severity="secondary" variant="outlined" :disabled="!canGoNext || loading" @click="loadNextUsers" />
+          </div>
+        </div>
       </template>
     </Card>
 
@@ -120,6 +144,36 @@
         </div>
       </form>
     </Dialog>
+
+    <Dialog
+      v-model:visible="userActionDialogVisible"
+      modal
+      :draggable="false"
+      :style="{ width: 'min(34rem, 95vw)' }"
+      :header="userActionDialogTitle"
+    >
+      <div class="form-stack">
+        <p>{{ userActionDialogMessage }}</p>
+        <Message severity="warn" :closable="false">
+          {{ userActionWarning }}
+        </Message>
+        <div class="inline-actions">
+          <Button
+            label="Cancel"
+            severity="secondary"
+            variant="outlined"
+            @click="closeUserActionDialog"
+          />
+          <Button
+            :label="userActionConfirmLabel"
+            :severity="userActionConfirmSeverity"
+            data-testid="user-confirm-action"
+            :loading="dialogSubmitting"
+            @click="confirmUserAction"
+          />
+        </div>
+      </div>
+    </Dialog>
   </div>
 </template>
 
@@ -141,7 +195,12 @@ import { asUserMessage } from '@/api/errors'
 import { createUser, listRoles, listUsers, replaceUserRoles, resetUserPassword, updateUser } from '@/api/users'
 import type { AdminUserResponse, RoleResponse } from '@/api/types'
 
+const USERS_PAGE_SIZE = 50
+
 const users = ref<AdminUserResponse[]>([])
+const usersTotal = ref(0)
+const usersLimit = ref(USERS_PAGE_SIZE)
+const usersOffset = ref(0)
 const roles = ref<RoleResponse[]>([])
 const loading = ref(false)
 const pageErrorMessage = ref<string | null>(null)
@@ -150,7 +209,10 @@ const dialogErrorMessage = ref<string | null>(null)
 const dialogSubmitting = ref(false)
 const createDialogVisible = ref(false)
 const rolesDialogVisible = ref(false)
+const userActionDialogVisible = ref(false)
 const selectedUser = ref<AdminUserResponse | null>(null)
+const selectedActionUser = ref<AdminUserResponse | null>(null)
+const pendingUserAction = ref<'toggle-active' | 'reset-password' | null>(null)
 
 const createForm = reactive({
   email: '',
@@ -172,6 +234,47 @@ const roleOptions = computed(() =>
     value: role.role_key,
   })),
 )
+const pageStart = computed(() => (usersTotal.value === 0 ? 0 : usersOffset.value + 1))
+const pageEnd = computed(() => Math.min(usersOffset.value + users.value.length, usersTotal.value))
+const canGoPrevious = computed(() => usersOffset.value > 0)
+const canGoNext = computed(() => usersOffset.value + usersLimit.value < usersTotal.value)
+const selectedActionUserName = computed(() => (
+  selectedActionUser.value?.full_name || selectedActionUser.value?.username || selectedActionUser.value?.email || 'this user'
+))
+const userActionDialogTitle = computed(() => {
+  if (pendingUserAction.value === 'reset-password') {
+    return 'Reset user password'
+  }
+  if (selectedActionUser.value?.is_active) {
+    return 'Deactivate user'
+  }
+  return 'Activate user'
+})
+const userActionDialogMessage = computed(() => {
+  if (pendingUserAction.value === 'reset-password') {
+    return `Reset the password for ${selectedActionUserName.value}?`
+  }
+  const action = selectedActionUser.value?.is_active ? 'Deactivate' : 'Activate'
+  return `${action} ${selectedActionUserName.value}?`
+})
+const userActionWarning = computed(() => {
+  if (pendingUserAction.value === 'reset-password') {
+    return 'A new temporary password will be generated and must be shared securely.'
+  }
+  if (selectedActionUser.value?.is_active) {
+    return 'The user will no longer be able to sign in while inactive.'
+  }
+  return 'The user will regain access according to their assigned roles.'
+})
+const userActionConfirmLabel = computed(() => {
+  if (pendingUserAction.value === 'reset-password') {
+    return 'Reset password'
+  }
+  return selectedActionUser.value?.is_active ? 'Deactivate user' : 'Activate user'
+})
+const userActionConfirmSeverity = computed(() => (
+  pendingUserAction.value === 'toggle-active' && selectedActionUser.value?.is_active ? 'danger' : 'warn'
+))
 
 function resetDialogState(): void {
   dialogErrorMessage.value = null
@@ -184,14 +287,30 @@ async function loadData(): Promise<void> {
   temporaryPasswordMessage.value = null
 
   try {
-    const [usersResponse, rolesResponse] = await Promise.all([listUsers(), listRoles()])
+    const [usersResponse, rolesResponse] = await Promise.all([
+      listUsers({ limit: usersLimit.value, offset: usersOffset.value }),
+      listRoles(),
+    ])
     users.value = usersResponse.items
+    usersTotal.value = usersResponse.total
+    usersLimit.value = usersResponse.limit
+    usersOffset.value = usersResponse.offset
     roles.value = rolesResponse.items
   } catch (error) {
     pageErrorMessage.value = asUserMessage(error)
   } finally {
     loading.value = false
   }
+}
+
+async function loadPreviousUsers(): Promise<void> {
+  usersOffset.value = Math.max(0, usersOffset.value - usersLimit.value)
+  await loadData()
+}
+
+async function loadNextUsers(): Promise<void> {
+  usersOffset.value += usersLimit.value
+  await loadData()
 }
 
 function openCreateDialog(): void {
@@ -211,6 +330,47 @@ function openRolesDialog(user: AdminUserResponse): void {
   selectedUser.value = user
   rolesForm.roleKeys = [...user.roles]
   rolesDialogVisible.value = true
+}
+
+function openActiveDialog(user: AdminUserResponse): void {
+  resetDialogState()
+  pageErrorMessage.value = null
+  temporaryPasswordMessage.value = null
+  selectedActionUser.value = user
+  pendingUserAction.value = 'toggle-active'
+  userActionDialogVisible.value = true
+}
+
+function openPasswordResetDialog(user: AdminUserResponse): void {
+  resetDialogState()
+  pageErrorMessage.value = null
+  temporaryPasswordMessage.value = null
+  selectedActionUser.value = user
+  pendingUserAction.value = 'reset-password'
+  userActionDialogVisible.value = true
+}
+
+function closeUserActionDialog(): void {
+  userActionDialogVisible.value = false
+  selectedActionUser.value = null
+  pendingUserAction.value = null
+}
+
+async function confirmUserAction(): Promise<void> {
+  const user = selectedActionUser.value
+  const action = pendingUserAction.value
+  if (user === null || action === null) {
+    return
+  }
+
+  dialogSubmitting.value = true
+  if (action === 'reset-password') {
+    await resetPassword(user.id)
+  } else {
+    await toggleActive(user)
+  }
+  dialogSubmitting.value = false
+  closeUserActionDialog()
 }
 
 async function submitCreateUser(): Promise<void> {

@@ -88,6 +88,8 @@ export interface AdminUserResponse extends UserResponse {
 export interface AdminUserListResponse {
   items: AdminUserResponse[]
   total: number
+  limit: number
+  offset: number
 }
 
 export interface AdminUserCreateRequest {

@@ -65,33 +65,36 @@ describe('media API helpers', () => {
     })
   })
 
-  it('uploads raw file bodies with metadata in the query string', async () => {
+  it('uploads raw file bodies with ASCII-safe encoded metadata headers', async () => {
     apiClientMocks.apiRequest.mockResolvedValue({ id: 'media-1' })
-    const file = new File(['png'], 'hero.png', { type: 'image/png' })
+    const file = new File(['png'], 'héro\nimage.png', { type: 'image/png' })
 
     await uploadMediaAsset(file, {
-      alt_text: 'Hero image',
-      caption: 'Homepage hero',
+      alt_text: 'Hero ☕\nimage',
+      caption: 'Homepage “hero”',
+      description: 'Line 1\r\nLine 2',
     })
 
-    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith(
-      '/media/assets?filename=hero.png&alt_text=Hero+image&caption=Homepage+hero',
-      {
-        accessToken,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'image/png',
-        },
-        body: file,
+    const requestOptions = apiClientMocks.apiRequest.mock.calls[0]?.[1]
+    expect(apiClientMocks.apiRequest).toHaveBeenCalledWith('/media/assets', {
+      accessToken,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'image/png',
+        'X-Pragma-Media-Filename': 'utf8-url:h%C3%A9ro%0Aimage.png',
+        'X-Pragma-Media-Alt-Text': 'utf8-url:Hero%20%E2%98%95%0Aimage',
+        'X-Pragma-Media-Caption': 'utf8-url:Homepage%20%E2%80%9Chero%E2%80%9D',
+        'X-Pragma-Media-Description': 'utf8-url:Line%201%0D%0ALine%202',
       },
-    )
+      body: file,
+    })
+    expect(() => new Headers(requestOptions.headers)).not.toThrow()
   })
 
   it('passes the bearer token when deleting media assets', async () => {
     apiClientMocks.apiRequest.mockResolvedValue(undefined)
 
     await deleteMediaAsset('media-1')
-
     expect(apiClientMocks.apiRequest).toHaveBeenCalledWith('/media/assets/media-1', {
       accessToken,
       method: 'DELETE',

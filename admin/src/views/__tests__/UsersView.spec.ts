@@ -37,6 +37,8 @@ const usersPayload = {
     },
   ],
   total: 1,
+  limit: 50,
+  offset: 0,
 }
 
 const rolesPayload = {
@@ -92,6 +94,7 @@ async function mountView() {
 
 describe('UsersView', () => {
   beforeEach(() => {
+    document.body.innerHTML = ''
     vi.clearAllMocks()
     userApiMocks.listUsers.mockResolvedValue(usersPayload)
     userApiMocks.listRoles.mockResolvedValue(rolesPayload)
@@ -106,11 +109,11 @@ describe('UsersView', () => {
       is_active: false,
     })
   })
-
   it('loads users and roles on mount', async () => {
     const { wrapper } = await mountView()
 
     expect(userApiMocks.listUsers).toHaveBeenCalledTimes(1)
+    expect(userApiMocks.listUsers).toHaveBeenCalledWith({ limit: 50, offset: 0 })
     expect(userApiMocks.listRoles).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('Editor User')
     expect(wrapper.text()).toContain('editor@example.com')
@@ -164,7 +167,7 @@ describe('UsersView', () => {
     expect(userApiMocks.createUser).toHaveBeenCalled()
   })
 
-  it('resets a password and shows the temporary credential', async () => {
+  it('requires confirmation before resetting a password and shows the temporary credential', async () => {
     const { wrapper } = await mountView()
 
     const resetButton = wrapper.findAll('button').find((button) => button.text().includes('Reset password'))
@@ -174,9 +177,70 @@ describe('UsersView', () => {
 
     await resetButton.trigger('click')
     await flushPromises()
+
+    expect(userApiMocks.resetUserPassword).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Reset the password for Editor User?')
+
+    const confirmButton = document.body.querySelector('[data-testid="user-confirm-action"]')
+    if (!(confirmButton instanceof HTMLButtonElement)) {
+      throw new Error('User action confirmation button not found')
+    }
+
+    confirmButton.click()
+    await flushPromises()
     await flushPromises()
 
     expect(userApiMocks.resetUserPassword).toHaveBeenCalledWith('user-1')
     expect(wrapper.text()).toContain('Temporary password: temp-pass-123')
+  })
+
+  it('requires confirmation before deactivating a user', async () => {
+    const { wrapper } = await mountView()
+
+    await wrapper.get('[data-testid="user-toggle-active"]').trigger('click')
+    await flushPromises()
+
+    expect(userApiMocks.updateUser).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Deactivate Editor User?')
+
+    const confirmButton = document.body.querySelector('[data-testid="user-confirm-action"]')
+    if (!(confirmButton instanceof HTMLButtonElement)) {
+      throw new Error('User action confirmation button not found')
+    }
+
+    confirmButton.click()
+    await flushPromises()
+    await flushPromises()
+
+    expect(userApiMocks.updateUser).toHaveBeenCalledWith('user-1', { is_active: false })
+  })
+
+  it('requires confirmation before reactivating a user', async () => {
+    userApiMocks.listUsers.mockResolvedValueOnce({
+      ...usersPayload,
+      items: [{ ...usersPayload.items[0], is_active: false }],
+    })
+    userApiMocks.updateUser.mockResolvedValueOnce({
+      ...usersPayload.items[0],
+      is_active: true,
+    })
+    const { wrapper } = await mountView()
+
+    await wrapper.get('[data-testid="user-toggle-active"]').trigger('click')
+    await flushPromises()
+
+    expect(userApiMocks.updateUser).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Activate Editor User?')
+
+    const confirmButton = document.body.querySelector('[data-testid="user-confirm-action"]')
+    if (!(confirmButton instanceof HTMLButtonElement)) {
+      throw new Error('User action confirmation button not found')
+    }
+
+    confirmButton.click()
+    await flushPromises()
+    await flushPromises()
+
+    expect(userApiMocks.updateUser).toHaveBeenCalledWith('user-1', { is_active: true })
   })
 })

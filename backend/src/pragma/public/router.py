@@ -449,6 +449,13 @@ def render_archive(
 
     items = [to_post_card(build_public_entry_view(entry_row)) for entry_row in entry_rows]
 
+    canonical_path = build_archive_url(
+        page=normalized_page if normalized_page != 1 else None,
+        per_page=normalized_per_page if normalized_per_page != 12 else None,
+        content_type=(
+            normalized_content_type if normalized_content_type != 'post' else None
+        ),
+    )
     query_params = (
         {'content_type': normalized_content_type}
         if normalized_content_type != 'post'
@@ -466,7 +473,7 @@ def render_archive(
         site=site_context,
         page_title='Archive',
         page_description='Browse published entries from the archive.',
-        route_path=_request_path_with_query(request),
+        route_path=canonical_path,
         robots='index,follow',
     )
 
@@ -480,7 +487,11 @@ def render_archive(
             'items': items,
             'filters': [{'label': normalized_content_type.title()}],
             'pagination': asdict(pagination),
-            'archive_url': build_archive_url(content_type=normalized_content_type),
+            'archive_url': build_archive_url(
+                content_type=(
+                    normalized_content_type if normalized_content_type != 'post' else None
+                ),
+            ),
         }
     )
     return render_public_template(
@@ -618,7 +629,10 @@ def render_theme_asset(
     if not resolved_asset.filesystem_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Not Found')
 
-    return FileResponse(path=resolved_asset.filesystem_path)
+    return FileResponse(
+        path=resolved_asset.filesystem_path,
+        headers={'Cache-Control': 'public, max-age=300, must-revalidate'},
+    )
 
 
 @router.get('/{path:path}', response_class=HTMLResponse)

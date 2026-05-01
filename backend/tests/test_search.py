@@ -325,6 +325,42 @@ def test_search_migration_creates_schema(migrated_database: dict[str, str]) -> N
     assert row[5] is True
 
 
+def test_search_repair_migration_restores_late_extension_artifacts(
+    runtime_database: dict[str, str]
+) -> None:
+    '''Verify head migration repairs optional search artifacts idempotently.'''
+
+    _run_migrations_to('20260427_0007')
+    database_dsn = build_database_dsn(
+        runtime_database, runtime_database['PRAGMA_DATABASE_NAME']
+    )
+    with psycopg.connect(database_dsn) as connection, connection.transaction():
+        connection.execute('DROP INDEX IF EXISTS ix_pragma_search_documents_search_text_trgm')
+        connection.execute('ALTER TABLE pragma_search_documents DROP COLUMN IF EXISTS embedding')
+
+    _run_migrations_to('head')
+    _run_migrations_to('head')
+
+    with psycopg.connect(database_dsn) as connection:
+        row = connection.execute(
+            '''
+            SELECT
+                to_regclass('public.ix_pragma_search_documents_search_text_trgm')
+                    AS search_trgm_index,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_search_documents'
+                      AND column_name = 'embedding'
+                ) AS has_embedding
+            '''
+        ).fetchone()
+
+    assert row[0] == 'ix_pragma_search_documents_search_text_trgm'
+    assert row[1] is True
+
+
 def test_search_migration_backfill_matches_runtime_field_order(
     runtime_database: dict[str, str]
 ) -> None:

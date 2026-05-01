@@ -23,6 +23,7 @@ from psycopg import IntegrityError
 
 from pragma.auth.admin_models import (
     AdminUserCreateRequest,
+    AdminUserListParams,
     AdminUserListResponse,
     AdminUserResponse,
     AdminUserUpdateRequest,
@@ -31,14 +32,23 @@ from pragma.auth.admin_models import (
     RoleResponse,
     UserRoleAssignmentRequest,
 )
-from pragma.auth.permissions import ROLE_ADMINISTRATOR, normalize_role_keys
+from pragma.auth.permissions import (
+    PERMISSION_USERS_MANAGE,
+    ROLE_ADMINISTRATOR,
+    normalize_role_keys,
+)
 from pragma.auth.security import hash_password, normalize_identity, utc_now, verify_password
 from pragma.errors import AuthError, ConfigError, StorageError
 from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.auth_sessions import revoke_refresh_sessions_for_user
-from pragma.storage.queries.roles import list_roles, replace_user_roles
+from pragma.storage.queries.roles import (
+    count_active_users_with_permission,
+    list_roles,
+    replace_user_roles,
+)
 from pragma.storage.queries.users import (
     count_superusers,
+    count_users,
     create_user,
     get_user_by_id,
     list_users,
@@ -71,14 +81,17 @@ def _require_user_id(current_user: dict[str, object]) -> UUID:
     return candidate
 
 
-def list_user_records(storage: DatabasePool) -> AdminUserListResponse:
-    """Return all managed user accounts for administrative review.
+def list_user_records(
+    storage: DatabasePool, params: AdminUserListParams
+) -> AdminUserListResponse:
+    """Return managed user accounts for administrative review.
 
     Args:
         storage: Initialized database pool manager.
+        params: User-list query parameters.
 
     Returns:
-        AdminUserListResponse: Ordered administrative user payload.
+        AdminUserListResponse: Paginated administrative user payload.
 
     Raises:
         StorageError: If PostgreSQL access fails.
@@ -86,7 +99,8 @@ def list_user_records(storage: DatabasePool) -> AdminUserListResponse:
 
     try:
         with storage.connection() as connection:
-            rows = list_users(connection)
+            rows = list_users(connection, limit=params.limit, offset=params.offset)
+            total = count_users(connection)
     except PsycopgError as exc:
         raise StorageError(
             detail='Unable to load user accounts',
@@ -94,7 +108,12 @@ def list_user_records(storage: DatabasePool) -> AdminUserListResponse:
         ) from exc
 
     items = [AdminUserResponse.from_record(row) for row in rows]
-    return AdminUserListResponse(items=items, total=len(items))
+    return AdminUserListResponse(
+        items=items,
+        total=total,
+        limit=params.limit,
+        offset=params.offset,
+    )
 
 
 def list_role_catalog(storage: DatabasePool) -> RoleListResponse:
@@ -310,6 +329,7 @@ def replace_user_role_assignments(
         AdminUserResponse: Updated administrative user payload.
 
     Raises:
+        AuthError: If the assignment would remove required users.manage access.
         ConfigError: If the target user or role assignment is invalid.
         StorageError: If PostgreSQL access fails.
     """
@@ -334,6 +354,42 @@ def replace_user_role_assignments(
                     detail='User account not found',
                     code='USER_NOT_FOUND',
                     status_code=HTTPStatus.NOT_FOUND,
+                )
+
+            next_has_users_manage = ROLE_ADMINISTRATOR in normalized_roles
+            current_permissions = existing_user.get('permissions')
+            current_has_users_manage = (
+                bool(existing_user['is_superuser'])
+                or (
+                    isinstance(current_permissions, list)
+                    and PERMISSION_USERS_MANAGE in current_permissions
+                )
+            )
+            if (
+                user_id == actor_user_id
+                and not bool(current_user.get('is_superuser'))
+                and not next_has_users_manage
+            ):
+                raise AuthError(
+                    detail='You cannot remove your own users.manage access',
+                    code='AUTH_SELF_USERS_MANAGE_REQUIRED',
+                    status_code=HTTPStatus.BAD_REQUEST,
+                )
+            if (
+                bool(existing_user['is_active'])
+                and not bool(existing_user['is_superuser'])
+                and current_has_users_manage
+                and not next_has_users_manage
+                and count_active_users_with_permission(
+                    connection,
+                    PERMISSION_USERS_MANAGE,
+                )
+                <= 1
+            ):
+                raise AuthError(
+                    detail='At least one active users.manage administrator is required',
+                    code='AUTH_LAST_USERS_MANAGER_REQUIRED',
+                    status_code=HTTPStatus.BAD_REQUEST,
                 )
 
             replace_user_roles(

@@ -9,6 +9,9 @@ ENV_FILE="${1:-${REPO_ROOT}/docker/prod.env.example}"
 PROJECT_NAME="${PRAGMA_VALIDATE_PROJECT_NAME:-pragma-m14-validate}"
 SMOKE="${PRAGMA_VALIDATE_SMOKE:-0}"
 USE_SECRETS_COMPOSE=0
+MIN_RAW_SECRET_LENGTH=32
+DATABASE_PASSWORD_SECRET_DEFAULT_SOURCE="./secrets/pragma_database_password"
+JWT_SECRET_KEY_SECRET_DEFAULT_SOURCE="./secrets/pragma_jwt_secret_key"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Environment file not found: $ENV_FILE" >&2
@@ -42,6 +45,23 @@ load_env_for_smoke() {
   load_env_file
 }
 
+validate_raw_secret_value() {
+  value_var="$1"
+  secret_value="$2"
+
+  case "$secret_value" in
+    replace-with-*|REPLACE-WITH-*|change-me|CHANGE-ME|changeme|CHANGEME)
+      echo "${value_var} must not use a placeholder value" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ "${#secret_value}" -lt "$MIN_RAW_SECRET_LENGTH" ]; then
+    echo "${value_var} must be at least ${MIN_RAW_SECRET_LENGTH} characters for production" >&2
+    exit 1
+  fi
+}
+
 require_secret_value_or_file() {
   value_var="$1"
   file_var="$2"
@@ -56,15 +76,62 @@ require_secret_value_or_file() {
     echo "Set either ${value_var} or ${file_var}" >&2
     exit 1
   fi
+  if [ -n "$secret_value" ]; then
+    validate_raw_secret_value "$value_var" "$secret_value"
+  fi
+}
+
+resolve_host_secret_path() {
+  source_file="$1"
+
+  case "$source_file" in
+    /*) printf '%s\n' "$source_file" ;;
+    ./*) printf '%s/%s\n' "$SCRIPT_DIR" "${source_file#./}" ;;
+    *) printf '%s/%s\n' "$SCRIPT_DIR" "$source_file" ;;
+  esac
+}
+
+validate_host_secret_source_file() {
+  source_label="$1"
+  source_file="$2"
+  resolved_source_file="$(resolve_host_secret_path "$source_file")"
+
+  if [ ! -f "$resolved_source_file" ]; then
+    echo "Secret source file not found for ${source_label}: ${source_file} (${resolved_source_file})" >&2
+    exit 1
+  fi
+  if [ ! -r "$resolved_source_file" ]; then
+    echo "Secret source file is not readable for ${source_label}: ${source_file} (${resolved_source_file})" >&2
+    exit 1
+  fi
+
+  secret_file_value="$(sed -e '1s/^[[:space:]]*//' -e '$s/[[:space:]]*$//' "$resolved_source_file")"
+  validate_raw_secret_value "$source_label" "$secret_file_value"
 }
 
 validate_secret_source_file() {
   source_var="$1"
   eval "source_file=\${${source_var}:-}"
 
-  if [ -n "$source_file" ] && [ ! -f "$source_file" ]; then
-    echo "Secret source file not found for ${source_var}: ${source_file}" >&2
-    exit 1
+  if [ -n "$source_file" ]; then
+    validate_host_secret_source_file "$source_var" "$source_file"
+  fi
+}
+
+validate_effective_secret_source_file() {
+  file_var="$1"
+  source_var="$2"
+  default_source_file="$3"
+  eval "secret_file=\${${file_var}:-}"
+  eval "source_file=\${${source_var}:-}"
+
+  if [ -z "$secret_file" ]; then
+    return 0
+  fi
+  if [ -n "$source_file" ]; then
+    validate_host_secret_source_file "$source_var" "$source_file"
+  else
+    validate_host_secret_source_file "${source_var} default" "$default_source_file"
   fi
 }
 
@@ -104,6 +171,8 @@ validate_secret_configuration() {
   require_secret_value_or_file PRAGMA_JWT_SECRET_KEY PRAGMA_JWT_SECRET_KEY_FILE
   validate_secret_source_file PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE
   validate_secret_source_file PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE
+  validate_effective_secret_source_file PRAGMA_DATABASE_PASSWORD_FILE PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE "$DATABASE_PASSWORD_SECRET_DEFAULT_SOURCE"
+  validate_effective_secret_source_file PRAGMA_JWT_SECRET_KEY_FILE PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE "$JWT_SECRET_KEY_SECRET_DEFAULT_SOURCE"
   configure_compose_override
 }
 

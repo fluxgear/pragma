@@ -110,12 +110,33 @@ def hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_access_token(settings: Settings, user_id: UUID) -> tuple[str, datetime]:
+def password_changed_token_epoch(password_changed_at: object) -> int | None:
+    """Return a stable token epoch for a password-change timestamp.
+
+    Args:
+        password_changed_at: Stored password-change timestamp, when available.
+
+    Returns:
+        int | None: Microsecond epoch value for token comparison.
+
+    Raises:
+        None.
+    """
+
+    if not isinstance(password_changed_at, datetime):
+        return None
+    return int(password_changed_at.timestamp() * 1_000_000)
+
+
+def create_access_token(
+    settings: Settings, user_id: UUID, password_changed_at: object = None
+) -> tuple[str, datetime]:
     """Create a signed short-lived access token.
 
     Args:
         settings: Application settings.
         user_id: Authenticated user identifier.
+        password_changed_at: User password-change timestamp for revocation checks.
 
     Returns:
         tuple[str, datetime]: Encoded token and its expiry timestamp.
@@ -132,7 +153,12 @@ def create_access_token(settings: Settings, user_id: UUID) -> tuple[str, datetim
         "jti": str(uuid4()),
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
     }
+    password_epoch = password_changed_token_epoch(password_changed_at)
+    if password_epoch is not None:
+        payload["pwd"] = password_epoch
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return token, expires_at
 
@@ -162,6 +188,8 @@ def create_refresh_token(
         "jti": str(session_id),
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
     }
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return token, expires_at
@@ -189,6 +217,8 @@ def decode_token(
             token,
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
         )
     except ExpiredSignatureError as exc:
         raise AuthError(detail="Token has expired", code="TOKEN_EXPIRED") from exc

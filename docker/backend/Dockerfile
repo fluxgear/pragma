@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS runtime
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS runtime
 
 ENV PATH="/app/backend/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \

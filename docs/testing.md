@@ -8,7 +8,7 @@ Use the repository wrapper from the repo root:
 scripts/run-backend-tests.sh
 ```
 
-The wrapper changes into `backend/`, adds `--dist loadscope` when not supplied, adds `-n 32` when not supplied, and runs `uv run pytest`. Run one pytest process at a time.
+The wrapper changes into `backend/`, acquires the shared backend pytest lock, adds `--dist loadscope` when not supplied, adds `-n 32` when not supplied, and runs `uv run pytest`. By default, a simultaneous backend pytest run fails fast; set `PRAGMA_BACKEND_TEST_LOCK_WAIT=1` to wait indefinitely or `PRAGMA_BACKEND_TEST_LOCK_WAIT=<seconds>` to wait with a timeout.
 
 ## Admin test and build commands
 
@@ -26,7 +26,7 @@ npm run build
 scripts/pre-commit-checks.sh
 ```
 
-This runs backend Ruff (`uv run ruff check .`) and, when `admin/` exists, the admin production build. It does not run the backend pytest suite.
+This runs backend Ruff (`uv run ruff check .`), a fast backend pytest gate through `scripts/run-backend-tests.sh` (default target `tests/test_conftest.py`, override with `PRAGMA_PRE_COMMIT_BACKEND_TEST_TARGET`), and, when `admin/` exists, the admin Vitest suite plus production build.
 
 ## Docker config validation
 
@@ -44,17 +44,15 @@ docker compose -f docker/docker-compose.yml --env-file docker/prod.env.example c
 
 ## Production validation
 
-For static production validation without booting the stack:
+For static production validation without booting the stack, copy the template, replace placeholder secrets with real raw secrets or file-secret settings, then validate the real env file:
 
 ```bash
-./docker/validate-production.sh docker/prod.env.example
-```
-
-For a real production env file:
-
-```bash
+cp docker/prod.env.example docker/prod.env
+# edit docker/prod.env before running validation
 ./docker/validate-production.sh docker/prod.env
 ```
+
+`docker/prod.env.example` intentionally contains placeholder secrets and is rejected by the hardened production validator.
 
 Optional smoke validation builds and boots the compose stack, checks PostgreSQL 18/extension state and application endpoints, then cleans up the smoke stack:
 

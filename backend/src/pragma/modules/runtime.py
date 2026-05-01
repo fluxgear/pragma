@@ -13,11 +13,14 @@ Raises:
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock, RLock
+from time import perf_counter
 from types import ModuleType
 from typing import cast
 
@@ -86,6 +89,25 @@ class _ModuleHookBinding:
     handler: Callable[[Mapping[str, object]], None]
 
 
+@dataclass(frozen=True, slots=True)
+class _ModuleFileFingerprint:
+    """Content metadata for a module-controlled file used by the load cache."""
+
+    path: str
+    mtime_ns: int
+    size: int
+    digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ModuleEntrypointCacheKey:
+    """Stable cache key for a trusted module entrypoint import."""
+
+    module_id: str
+    manifest: _ModuleFileFingerprint
+    entrypoint: _ModuleFileFingerprint
+
+
 class ModuleRuntime:
     """Manage module discovery, loading, and deterministic event dispatch.
 
@@ -106,6 +128,7 @@ class ModuleRuntime:
         self._bindings: dict[str, tuple[_ModuleHookBinding, ...]] = {
             event.value: tuple() for event in ModuleHookEvent
         }
+        self._entrypoint_cache: dict[_ModuleEntrypointCacheKey, ModuleType] = {}
 
     def refresh(self, storage: DatabasePool) -> None:
         """Rebuild runtime module state from manifests and persisted flags.
@@ -127,6 +150,7 @@ class ModuleRuntime:
         bindings: dict[str, list[_ModuleHookBinding]] = {
             event.value: [] for event in ModuleHookEvent
         }
+        current_cache_keys: set[_ModuleEntrypointCacheKey] = set()
 
         ordered = sorted(
             discovered.values(),
@@ -138,10 +162,28 @@ class ModuleRuntime:
             loaded = False
             hooks: tuple[str, ...] = tuple()
             error_code: str | None = None
+            entrypoint_cache_key: _ModuleEntrypointCacheKey | None = None
 
-            if enabled:
+            try:
+                entrypoint_cache_key = self._build_entrypoint_cache_key(discovered_module)
+                current_cache_keys.add(entrypoint_cache_key)
+            except ModuleError as exc:
+                if enabled:
+                    error_code = exc.code
+                    logger.warning(
+                        'Module load failed',
+                        extra={
+                            'module_id': module_id,
+                            'module_code': exc.code,
+                        },
+                    )
+
+            if enabled and error_code is None and entrypoint_cache_key is not None:
                 try:
-                    resolved_bindings = self._load_module_hooks(discovered_module)
+                    resolved_bindings = self._load_module_hooks(
+                        discovered_module,
+                        entrypoint_cache_key,
+                    )
                     loaded = True
                     hooks = tuple(sorted(resolved_bindings.keys()))
                     for event_name, binding in resolved_bindings.items():
@@ -184,6 +226,7 @@ class ModuleRuntime:
         with self._lock:
             self._snapshots = snapshots
             self._bindings = frozen_bindings
+            self._prune_entrypoint_cache_locked(current_cache_keys)
 
     def list_snapshots(self) -> list[ModuleSnapshot]:
         """Return discovered module states in deterministic runtime order.
@@ -235,18 +278,7 @@ class ModuleRuntime:
             return module_id in self._snapshots
 
     def dispatch(self, event: str, payload: Mapping[str, object]) -> None:
-        """Dispatch a stable module event to enabled hooks in deterministic order.
-
-        Args:
-            event: Stable event identifier.
-            payload: Event payload dispatched to each module hook.
-
-        Returns:
-            None.
-
-        Raises:
-            ModuleError: If an unsupported hook event is requested.
-        """
+        """Dispatch a stable module event to enabled hooks in deterministic order."""
 
         allowed_events = {hook_event.value for hook_event in ModuleHookEvent}
         if event not in allowed_events:
@@ -260,6 +292,7 @@ class ModuleRuntime:
             bindings = self._bindings.get(event, tuple())
 
         for binding in bindings:
+            started_at = perf_counter()
             try:
                 binding.handler(payload)
             except ModuleError as exc:
@@ -283,6 +316,25 @@ class ModuleRuntime:
                     },
                     exc_info=True,
                 )
+            finally:
+                elapsed_seconds = perf_counter() - started_at
+                elapsed_ms = elapsed_seconds * 1000
+                log_extra = {
+                    'event': event,
+                    'module_id': binding.module_id,
+                    'hook_name': binding.hook_name,
+                    'elapsed_ms': elapsed_ms,
+                }
+                logger.debug('Module hook completed', extra=log_extra)
+                if elapsed_seconds >= self._settings.module_hook_slow_seconds:
+                    logger.warning(
+                        'Module hook exceeded latency warning threshold',
+                        extra={
+                            **log_extra,
+                            'module_code': 'MODULE_HOOK_SLOW',
+                            'threshold_seconds': self._settings.module_hook_slow_seconds,
+                        },
+                    )
 
     def _load_persisted_state(self, storage: DatabasePool) -> dict[str, bool]:
         """Load persisted module enable/disable state from storage.
@@ -316,12 +368,15 @@ class ModuleRuntime:
         return {str(row['module_id']): bool(row['enabled']) for row in rows}
 
     def _load_module_hooks(
-        self, discovered_module: DiscoveredModule
+        self,
+        discovered_module: DiscoveredModule,
+        entrypoint_cache_key: _ModuleEntrypointCacheKey,
     ) -> dict[str, _ModuleHookBinding]:
         """Load declared module hooks from an entrypoint module.
 
         Args:
             discovered_module: Module manifest and filesystem metadata.
+            entrypoint_cache_key: Current content cache key for the entrypoint.
 
         Returns:
             dict[str, _ModuleHookBinding]: Bound hook handlers keyed by event name.
@@ -330,7 +385,10 @@ class ModuleRuntime:
             ModuleError: If module entrypoint loading or hook binding fails.
         """
 
-        entrypoint_module = self._load_module_entrypoint(discovered_module)
+        entrypoint_module = self._load_module_entrypoint(
+            discovered_module,
+            entrypoint_cache_key,
+        )
         bindings: dict[str, _ModuleHookBinding] = {}
         for event_name, hook_name in discovered_module.manifest.hooks.items():
             attribute = getattr(entrypoint_module, hook_name, None)
@@ -357,11 +415,16 @@ class ModuleRuntime:
             )
         return bindings
 
-    def _load_module_entrypoint(self, discovered_module: DiscoveredModule) -> ModuleType:
+    def _load_module_entrypoint(
+        self,
+        discovered_module: DiscoveredModule,
+        cache_key: _ModuleEntrypointCacheKey,
+    ) -> ModuleType:
         """Load the Python entrypoint module for a discovered backend module.
 
         Args:
             discovered_module: Module manifest and filesystem metadata.
+            cache_key: Current manifest/entrypoint content cache key.
 
         Returns:
             ModuleType: Loaded Python module object.
@@ -370,8 +433,14 @@ class ModuleRuntime:
             ModuleError: If the module entrypoint cannot be imported.
         """
 
+        with self._lock:
+            cached_module = self._entrypoint_cache.get(cache_key)
+        if cached_module is not None:
+            return cached_module
+
         module_token = discovered_module.manifest.id.replace('-', '_')
-        module_name = f'pragma.modules.runtime_{module_token}'
+        module_digest = cache_key.entrypoint.digest[:12]
+        module_name = f'pragma.modules.runtime_{module_token}_{module_digest}'
         spec = importlib.util.spec_from_file_location(
             module_name,
             discovered_module.entrypoint_path,
@@ -410,7 +479,73 @@ class ModuleRuntime:
                 status_code=500,
             ) from exc
 
+        with self._lock:
+            self._entrypoint_cache = {
+                stored_key: stored_module
+                for stored_key, stored_module in self._entrypoint_cache.items()
+                if stored_key.module_id != discovered_module.manifest.id
+            }
+            self._entrypoint_cache[cache_key] = module
+
         return module
+
+    def _build_entrypoint_cache_key(
+        self,
+        discovered_module: DiscoveredModule,
+    ) -> _ModuleEntrypointCacheKey:
+        """Return the content-sensitive entrypoint cache key for a module."""
+
+        return _ModuleEntrypointCacheKey(
+            module_id=discovered_module.manifest.id,
+            manifest=self._fingerprint_module_file(
+                discovered_module.manifest_path,
+                discovered_module.manifest.id,
+                'manifest',
+            ),
+            entrypoint=self._fingerprint_module_file(
+                discovered_module.entrypoint_path,
+                discovered_module.manifest.id,
+                'entrypoint',
+            ),
+        )
+
+    def _fingerprint_module_file(
+        self,
+        path: Path,
+        module_id: str,
+        label: str,
+    ) -> _ModuleFileFingerprint:
+        """Hash module-controlled file content and stat metadata for cache invalidation."""
+
+        try:
+            resolved_path = path.resolve()
+            content = resolved_path.read_bytes()
+            stat = resolved_path.stat()
+        except OSError as exc:
+            raise ModuleError(
+                detail=f'Unable to read module {label} for {module_id}',
+                code='MODULE_ENTRYPOINT_LOAD_FAILED',
+                status_code=500,
+            ) from exc
+
+        return _ModuleFileFingerprint(
+            path=str(resolved_path),
+            mtime_ns=stat.st_mtime_ns,
+            size=stat.st_size,
+            digest=hashlib.sha256(content).hexdigest(),
+        )
+
+    def _prune_entrypoint_cache_locked(
+        self,
+        current_cache_keys: set[_ModuleEntrypointCacheKey],
+    ) -> None:
+        """Drop cached entrypoints that no longer match discovered module files."""
+
+        self._entrypoint_cache = {
+            cache_key: cached_module
+            for cache_key, cached_module in self._entrypoint_cache.items()
+            if cache_key in current_cache_keys
+        }
 
 
 def build_module_runtime(settings: Settings) -> ModuleRuntime:

@@ -21,6 +21,18 @@ The Docker PostgreSQL image is built from `docker/postgres/Dockerfile`, using `p
 
 Non-Docker deployments must provide the same PostgreSQL 18 and extension availability. Stock PostgreSQL without pgvector is not enough for the supported contract.
 
+## Docker base image pinning
+
+Production Dockerfiles keep the human-readable upstream tag and pin each build-time image to an immutable digest (`name:tag@sha256:...`). This covers the backend uv/Python runtime, admin Node build image, Nginx runtime image, Dockerfile frontend, and PostgreSQL 18 pgvector image.
+
+Refresh these pins on a monthly maintenance cadence, and sooner for relevant upstream CVEs. Resolve replacement digests without pulling layers, for example:
+
+```bash
+docker buildx imagetools inspect node:24-alpine --format '{{json .Manifest}}'
+```
+
+When updating the pgvector base, preserve the PostgreSQL 18-compatible `pgvector/pgvector:pg18` tag plus the new digest, then run compose configuration validation and the production validator before release.
+
 ## Environment preparation
 
 Copy the production template and replace placeholders:
@@ -44,18 +56,21 @@ File-secret deployments use the supported bind-mount override file so the same p
 
 ```bash
 mkdir -p docker/secrets
-printf '%s' 'replace-with-a-random-database-password' > docker/secrets/pragma_database_password
-printf '%s' 'replace-with-at-least-32-random-characters' > docker/secrets/pragma_jwt_secret_key
+(
+  umask 077
+  openssl rand -base64 48 > docker/secrets/pragma_database_password
+  openssl rand -base64 48 > docker/secrets/pragma_jwt_secret_key
+)
 chmod 600 docker/secrets/pragma_database_password docker/secrets/pragma_jwt_secret_key
 ```
 
-Then leave `PRAGMA_DATABASE_PASSWORD` and `PRAGMA_JWT_SECRET_KEY` empty in `docker/prod.env` and set:
+Then leave `PRAGMA_DATABASE_PASSWORD` and `PRAGMA_JWT_SECRET_KEY` empty in `docker/prod.env` and set the host source paths relative to the compose file directory (`docker/`):
 
 ```env
 PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
 PRAGMA_JWT_SECRET_KEY_FILE=/run/secrets/pragma_jwt_secret_key
-PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./docker/secrets/pragma_database_password
-PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./docker/secrets/pragma_jwt_secret_key
+PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./secrets/pragma_database_password
+PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./secrets/pragma_jwt_secret_key
 ```
 
 Start or validate with both compose files:
