@@ -51,7 +51,7 @@ export function evaluateNavigation(
   const routeName = typeof route.name === 'string' ? route.name : null
 
   if (!state.isInstalled) {
-    return routeName === 'setup' ? true : { name: 'setup' }
+    return routeName === 'setup' || routeName === 'not-found' ? true : { name: 'setup' }
   }
 
   if (routeName === 'home') {

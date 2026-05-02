@@ -255,6 +255,7 @@ def render_home(
 
     context = build_common_context(site_context, seo_context)
     context['featured_posts'] = featured_posts
+    context['archive_url'] = build_archive_url()
     return render_public_template(
         theme_runtime=theme_runtime,
         template_name='home.html',

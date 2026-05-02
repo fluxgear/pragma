@@ -133,7 +133,8 @@ describe('UsersView', () => {
     const createEmail = document.body.querySelector('#create-email')
     const createUsername = document.body.querySelector('#create-username')
     const createFullName = document.body.querySelector('#create-full-name')
-    const createPassword = document.body.querySelector('#create-password input')
+    const createPassword = document.body.querySelector('input#create-password')
+    const createPasswordLabel = document.body.querySelector('label[for="create-password"]')
     const createForm = document.body.querySelector('form')
 
     if (!(createEmail instanceof HTMLInputElement)) {
@@ -148,9 +149,14 @@ describe('UsersView', () => {
     if (!(createPassword instanceof HTMLInputElement)) {
       throw new Error('Create password input not found')
     }
+    if (!(createPasswordLabel instanceof HTMLLabelElement)) {
+      throw new Error('Create password label not found')
+    }
     if (!(createForm instanceof HTMLFormElement)) {
       throw new Error('Create user form not found')
     }
+
+    expect(createPasswordLabel.htmlFor).toBe('create-password')
 
     createEmail.value = 'viewer@example.com'
     createEmail.dispatchEvent(new Event('input'))

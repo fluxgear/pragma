@@ -285,6 +285,12 @@ def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
     assert '/theme/static/css/main.css' in response.text
     assert '<meta name="robots" content="index,follow">' in response.text
     assert '<link rel="canonical" href=' in response.text
+    assert 'href="/archive">Browse archive</a>' in response.text
+    assert 'href="#archive"' not in response.text
+    assert '<form class="contact-form"' not in response.text
+    assert 'method="post"' not in response.text
+    assert 'mailto:hello@example.com' in response.text
+    assert 'Online enquiry submissions are not enabled for this site yet.' in response.text
 
 
 def test_published_page_renders_body_title_and_canonical(
@@ -784,9 +790,16 @@ def test_archive_pagination_lists_only_published_entries_and_supports_empty_stat
 
     assert empty_state.status_code == 200
     assert 'No archive entries are available.' in empty_state.text
+    empty_state_message = (
+        'Published entries will appear here automatically once they are available.'
+    )
+    assert empty_state_message in empty_state.text
     assert '/archive?content_type=page"' in empty_state.text
     assert '/archive?page=1' not in empty_state.text
     assert 'per_page=12' not in empty_state.text
+    assert 'M8' not in empty_state.text
+    assert 'M13' not in empty_state.text
+    assert 'rollout' not in empty_state.text
 
 
 def test_search_without_query_renders_no_query_state_without_invoking_search_service(
@@ -815,6 +828,14 @@ def test_search_without_query_renders_no_query_state_without_invoking_search_ser
 
     assert response.status_code == 200
     assert 'Enter a search term to begin.' in response.text
+    no_query_copy = (
+        'Search published pages and posts, then use the archive when you want to '
+        'browse everything available.'
+    )
+    assert no_query_copy in response.text
+    assert 'M8' not in response.text
+    assert 'M13' not in response.text
+    assert 'rollout' not in response.text
 
 
 def test_search_with_query_maps_results_to_public_urls_and_excludes_unpublished_entries(
@@ -895,11 +916,13 @@ def test_search_overlong_query_returns_visitor_safe_response(client: TestClient)
     """
 
     response = client.get('/search', params={'q': 'x' * 201})
-
     assert response.status_code == 200
     assert response.headers['content-type'].startswith('text/html')
     assert 'Search is temporarily unavailable.' in response.text
     assert 'Search queries must be 200 characters or fewer.' in response.text
+    assert 'Search is not enabled yet.' not in response.text
+    assert 'M8' not in response.text
+    assert 'rollout' not in response.text
 
 
 def test_search_no_results_state(client: TestClient) -> None:

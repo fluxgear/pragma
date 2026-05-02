@@ -44,7 +44,7 @@
       class="field"
       :class="{ 'field--full': isWideField(fieldDefinition.kind) }"
     >
-      <label :for="fieldId(fieldDefinition.name)">
+      <label :id="fieldLabelId(fieldDefinition.name)" :for="fieldId(fieldDefinition.name)">
         {{ fieldDefinition.label }}
         <span v-if="fieldDefinition.required">*</span>
       </label>
@@ -69,6 +69,8 @@
         v-else-if="fieldDefinition.kind === 'rich_text'"
         v-model="formState.fields[fieldDefinition.name]"
         :disabled="formDisabled"
+        :input-id="fieldId(fieldDefinition.name)"
+        :aria-labelledby="fieldLabelId(fieldDefinition.name)"
       />
 
       <InputNumber
@@ -225,6 +227,10 @@ watch(
 
 function fieldId(fieldName: string): string {
   return `entry-field-${fieldName}`
+}
+
+function fieldLabelId(fieldName: string): string {
+  return `${fieldId(fieldName)}-label`
 }
 
 function fieldHint(kind: ContentFieldDefinition['kind']): string | null {

@@ -624,6 +624,10 @@ p, ul, ol {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: end;
   }
+
+  .search-form label {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 47.99rem) {

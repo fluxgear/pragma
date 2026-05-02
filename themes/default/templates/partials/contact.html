@@ -4,22 +4,17 @@
         <div class="contact-copy">
             <p class="eyebrow">Contact</p>
             <h2>{{ contact.title|default('Start a more credible public experience.', true) }}</h2>
-            <p>{{ contact.description|default('This contact block supports a lightweight lead capture pattern today and can be wired to a real workflow later without redesigning the page.', true) }}</p>
+            <p>{{ contact.description|default('This contact block presents direct ways to reach the team while online enquiry submissions are not enabled for this site yet.', true) }}</p>
             <ul class="contact-list">
                 <li><strong>Email</strong><span>{{ contact.email|default('hello@example.com', true) }}</span></li>
                 <li><strong>Phone</strong><span>{{ contact.phone|default('+00 123 456 789', true) }}</span></li>
                 <li><strong>Availability</strong><span>{{ contact.availability|default('Response within one business day', true) }}</span></li>
             </ul>
         </div>
-        <form class="contact-form" action="{{ contact.action|default('#', true) }}" method="post">
-            <label for="contact-name">Name</label>
-            <input class="input" id="contact-name" name="name" type="text" placeholder="Jane Smith">
-            <label for="contact-email">Email</label>
-            <input class="input" id="contact-email" name="email" type="email" placeholder="jane@company.com">
-            <label for="contact-message">Project brief</label>
-            <textarea class="textarea" id="contact-message" name="message" rows="5" placeholder="Tell us what you are building."></textarea>
-            <button class="button button--primary" type="submit">{{ contact.button_label|default('Send enquiry', true) }}</button>
-            <p class="form-note">{{ contact.note|default('Form wiring can be added later without changing the layout contract.', true) }}</p>
-        </form>
+        <div class="contact-form" aria-label="Contact options">
+            <p><strong>{{ contact.panel_title|default('Prefer to start directly?', true) }}</strong></p>
+            <p class="form-note">{{ contact.note|default('Use the contact details listed here to start the conversation. Online enquiry submissions are not enabled for this site yet.', true) }}</p>
+            <a class="button button--primary" href="mailto:{{ contact.email|default('hello@example.com', true) }}">{{ contact.button_label|default('Email us', true) }}</a>
+        </div>
     </div>
 </section>

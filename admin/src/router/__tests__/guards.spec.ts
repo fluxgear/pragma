@@ -45,6 +45,18 @@ describe('evaluateNavigation', () => {
     ).toBe(true)
   })
 
+
+  it('allows the top-level not-found route on uninstalled systems', () => {
+    expect(
+      evaluateNavigation(makeRoute('not-found', {}, '/missing'), {
+        isInstalled: false,
+        isAuthenticated: false,
+        isSuperuser: false,
+        permissions: [],
+        forcePasswordChange: false,
+      }),
+    ).toBe(true)
+  })
   it('routes anonymous users to login for protected routes', () => {
     expect(
       evaluateNavigation(makeRoute('dashboard', { requiresAuth: true }, '/app'), {

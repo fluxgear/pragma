@@ -109,13 +109,6 @@
                 :loading="submitting"
                 :disabled="!canSubmit"
               />
-              <Button
-                type="button"
-                label="Go to login"
-                severity="secondary"
-                variant="outlined"
-                @click="goToLogin"
-              />
             </div>
           </form>
         </template>
@@ -204,9 +197,6 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
-async function goToLogin(): Promise<void> {
-  await router.push({ name: 'login' })
-}
 
 onMounted(async () => {
   await installStore.refreshAll()

@@ -144,6 +144,12 @@ describe('SetupWizardView', () => {
     expect(router.currentRoute.value.name).toBe('dashboard')
   })
 
+  it('does not offer a guard-bounced login shortcut', async () => {
+    const { wrapper } = await mountView()
+
+    expect(wrapper.text()).not.toContain('Go to login')
+  })
+
   it('surfaces bootstrap conflicts without leaving setup', async () => {
     installApiMocks.bootstrapInstall.mockRejectedValue(
       new ApiClientError(409, 'Install bootstrap has already completed', 'INSTALL_ALREADY_COMPLETED'),

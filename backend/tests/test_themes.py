@@ -864,7 +864,7 @@ def test_checked_in_default_theme_templates_render_with_sparse_context(
         'page.html': 'A flexible page layout for polished long-form content.',
         'post.html': 'A refined article template with metadata, media, and related reading.',
         'archive.html': 'Browse the publication archive.',
-        'search.html': 'Search is not enabled yet.',
+        'search.html': 'Search is currently unavailable.',
         '404.html': 'The page you requested has gone missing.',
     }
 

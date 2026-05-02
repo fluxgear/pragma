@@ -3,9 +3,9 @@
     <template #title>Route not found</template>
     <template #content>
       <div class="form-stack">
-        <p class="muted">The requested admin route does not exist in the current milestone shell.</p>
+        <p class="muted">The requested admin route does not exist.</p>
         <div class="inline-actions">
-          <Button label="Back to dashboard" icon="pi pi-home" @click="goToDashboard" />
+          <Button label="Back to start" icon="pi pi-home" @click="goToHome" />
         </div>
       </div>
     </template>
@@ -19,7 +19,7 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
-async function goToDashboard(): Promise<void> {
-  await router.push({ name: 'dashboard' })
+async function goToHome(): Promise<void> {
+  await router.push({ name: 'home' })
 }
 </script>

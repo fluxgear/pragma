@@ -7,6 +7,7 @@
         size="small"
         :disabled="disabled"
         :severity="isParagraphActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isParagraphActive"
         variant="outlined"
         @click="setParagraph"
       />
@@ -16,6 +17,7 @@
         size="small"
         :disabled="disabled"
         :severity="isHeadingTwoActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isHeadingTwoActive"
         variant="outlined"
         @click="toggleHeading(2)"
       />
@@ -25,24 +27,29 @@
         size="small"
         :disabled="disabled"
         :severity="isHeadingThreeActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isHeadingThreeActive"
         variant="outlined"
         @click="toggleHeading(3)"
       />
       <Button
         type="button"
         icon="pi pi-bold"
+        aria-label="Bold"
         size="small"
         :disabled="disabled"
         :severity="isBoldActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isBoldActive"
         variant="outlined"
         @click="toggleBold"
       />
       <Button
         type="button"
         icon="pi pi-italic"
+        aria-label="Italic"
         size="small"
         :disabled="disabled"
         :severity="isItalicActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isItalicActive"
         variant="outlined"
         @click="toggleItalic"
       />
@@ -52,6 +59,7 @@
         size="small"
         :disabled="disabled"
         :severity="isStrikeActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isStrikeActive"
         variant="outlined"
         @click="toggleStrike"
       />
@@ -61,6 +69,7 @@
         size="small"
         :disabled="disabled"
         :severity="isBlockquoteActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isBlockquoteActive"
         variant="outlined"
         @click="toggleBlockquote"
       />
@@ -70,6 +79,7 @@
         size="small"
         :disabled="disabled"
         :severity="isBulletListActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isBulletListActive"
         variant="outlined"
         @click="toggleBulletList"
       />
@@ -79,6 +89,7 @@
         size="small"
         :disabled="disabled"
         :severity="isOrderedListActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isOrderedListActive"
         variant="outlined"
         @click="toggleOrderedList"
       />
@@ -88,6 +99,7 @@
         size="small"
         :disabled="disabled"
         :severity="isCodeBlockActive ? 'contrast' : 'secondary'"
+        :aria-pressed="isCodeBlockActive"
         variant="outlined"
         @click="toggleCodeBlock"
       />
@@ -103,6 +115,7 @@
       <Button
         type="button"
         icon="pi pi-undo"
+        aria-label="Undo"
         size="small"
         :disabled="disabled || !canUndo"
         severity="secondary"
@@ -112,6 +125,7 @@
       <Button
         type="button"
         icon="pi pi-replay"
+        aria-label="Redo"
         size="small"
         :disabled="disabled || !canRedo"
         severity="secondary"
@@ -138,10 +152,14 @@ const props = withDefaults(
   defineProps<{
     modelValue?: string
     disabled?: boolean
+    inputId?: string
+    ariaLabelledby?: string
   }>(),
   {
     modelValue: '',
     disabled: false,
+    inputId: undefined,
+    ariaLabelledby: undefined,
   },
 )
 
@@ -149,16 +167,49 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
+function editorAccessibilityAttributes(): Record<string, string> {
+  const attributes: Record<string, string> = {
+    class: 'tiptap rich-text-editor__input',
+    role: 'textbox',
+    'aria-multiline': 'true',
+    spellcheck: 'true',
+  }
+
+  if (props.inputId) {
+    attributes.id = props.inputId
+  }
+  if (props.ariaLabelledby) {
+    attributes['aria-labelledby'] = props.ariaLabelledby
+  }
+
+  return attributes
+}
+
+function applyEditorAccessibilityAttributes(): void {
+  const element = editor.value?.view.dom
+  if (!element) {
+    return
+  }
+
+  for (const [name, value] of Object.entries(editorAccessibilityAttributes())) {
+    element.setAttribute(name, value)
+  }
+
+  if (!props.inputId) {
+    element.removeAttribute('id')
+  }
+  if (!props.ariaLabelledby) {
+    element.removeAttribute('aria-labelledby')
+  }
+}
+
 const editor = useEditor({
   content: props.modelValue,
   editable: !props.disabled,
   immediatelyRender: false,
   extensions: [StarterKit],
   editorProps: {
-    attributes: {
-      class: 'rich-text-editor__input',
-      spellcheck: 'true',
-    },
+    attributes: editorAccessibilityAttributes(),
   },
   onUpdate: ({ editor: currentEditor }) => {
     emit('update:modelValue', currentEditor.getHTML())
@@ -201,6 +252,10 @@ watch(
     editor.value?.setEditable(!value)
   },
 )
+
+watch([editor, () => props.inputId, () => props.ariaLabelledby], () => {
+  applyEditorAccessibilityAttributes()
+}, { immediate: true })
 
 function setParagraph(): void {
   editor.value?.chain().focus().setParagraph().run()

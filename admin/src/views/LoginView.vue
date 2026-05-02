@@ -1,7 +1,7 @@
 <template>
   <form class="form-stack" @submit.prevent="handleSubmit">
-    <Message v-if="setupCompleteMessage" severity="success" :closable="false">
-      {{ setupCompleteMessage }}
+    <Message v-if="successMessage" severity="success" :closable="false">
+      {{ successMessage }}
     </Message>
     <Message v-if="errorMessage" severity="error" :closable="false">
       {{ errorMessage }}
@@ -26,7 +26,6 @@
 
     <div class="inline-actions">
       <Button type="submit" label="Sign in" icon="pi pi-sign-in" :loading="loading" />
-      <Button type="button" label="Review setup status" severity="secondary" variant="outlined" @click="goToSetup" />
     </div>
   </form>
 </template>
@@ -50,11 +49,17 @@ const router = useRouter()
 const identity = ref('')
 const password = ref('')
 
-const setupCompleteMessage = computed(() =>
-  route.query.setup === 'complete'
-    ? 'Setup is complete. Sign in with the super-admin account you just created.'
-    : null,
-)
+const successMessage = computed(() => {
+  if (route.query.setup === 'complete') {
+    return 'Setup is complete. Sign in with the super-admin account you just created.'
+  }
+
+  if (route.query.passwordChanged === '1') {
+    return 'Password changed successfully. Please sign in again.'
+  }
+
+  return null
+})
 
 function resolveRedirect(): string | null {
   const redirect = route.query.redirect
@@ -79,7 +84,4 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
-async function goToSetup(): Promise<void> {
-  await router.push({ name: 'setup' })
-}
 </script>

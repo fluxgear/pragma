@@ -251,7 +251,11 @@ select {
 .rich-text-editor__content .tiptap {
   min-height: 16rem;
   padding: 1rem;
-  outline: none;
+}
+
+.rich-text-editor__content .tiptap:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.55);
+  outline-offset: 2px;
 }
 
 .rich-text-editor__content .tiptap > *:first-child {

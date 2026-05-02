@@ -21,15 +21,15 @@
         <form class="form-stack" @submit.prevent="submitPasswordChange">
           <div class="field">
             <label for="current-password">Current password</label>
-            <Password id="current-password" v-model="form.currentPassword" toggleMask :feedback="false" />
+            <Password inputId="current-password" v-model="form.currentPassword" toggleMask :feedback="false" />
           </div>
           <div class="field">
             <label for="new-password">New password</label>
-            <Password id="new-password" v-model="form.newPassword" toggleMask :feedback="false" />
+            <Password inputId="new-password" v-model="form.newPassword" toggleMask :feedback="false" />
           </div>
           <div class="field">
             <label for="confirm-password">Confirm new password</label>
-            <Password id="confirm-password" v-model="form.confirmPassword" toggleMask :feedback="false" />
+            <Password inputId="confirm-password" v-model="form.confirmPassword" toggleMask :feedback="false" />
           </div>
 
           <div class="inline-actions">
@@ -85,7 +85,7 @@ async function submitPasswordChange(): Promise<void> {
     form.newPassword = ''
     form.confirmPassword = ''
     successMessage.value = 'Password changed successfully. Please sign in again.'
-    await router.replace({ name: 'login' })
+    await router.replace({ name: 'login', query: { passwordChanged: '1' } })
   } catch (error) {
     errorMessage.value = asUserMessage(error)
   } finally {

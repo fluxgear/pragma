@@ -112,7 +112,9 @@ export const router = createRouter({
     },
     {
       path: '/:pathMatch(.*)*',
-      redirect: { name: 'home' },
+      name: 'not-found',
+      component: NotFoundView,
+      meta: { title: 'Not found' },
     },
   ],
 })

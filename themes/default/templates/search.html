@@ -10,7 +10,7 @@
         <div class="section-intro">
             <p class="eyebrow">Search</p>
             <h1>Find pages, posts, and ideas quickly.</h1>
-            <p>The search template includes intentional empty, unavailable, and no-results states so it remains stable before full search rollout.</p>
+            <p>Search published pages and posts, then use the archive when you want to browse everything available.</p>
         </div>
         <form class="search-form" action="{{ search_url|default('#', true) }}" method="get">
             <label for="site-search">Search query</label>
@@ -24,8 +24,8 @@
         </div>
         {% elif not search_enabled %}
         <div class="empty-panel">
-            <h2>Search is not enabled yet.</h2>
-            <p>M8 owns the real search backend. This template is in place and ready for it.</p>
+            <h2>Search is currently unavailable.</h2>
+            <p>Browse the archive or try again later.</p>
         </div>
         {% elif results %}
         <div class="results-list">

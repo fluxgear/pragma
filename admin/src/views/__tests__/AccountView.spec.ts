@@ -71,9 +71,9 @@ describe('AccountView', () => {
   it('submits a password change through the auth store and requires reauthentication', async () => {
     const { authStore, wrapper } = await mountView(true)
 
-    await wrapper.get('#current-password input').setValue('old-password')
-    await wrapper.get('#new-password input').setValue('new-password')
-    await wrapper.get('#confirm-password input').setValue('new-password')
+    await wrapper.get('input#current-password').setValue('old-password')
+    await wrapper.get('input#new-password').setValue('new-password')
+    await wrapper.get('input#confirm-password').setValue('new-password')
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
@@ -83,15 +83,14 @@ describe('AccountView', () => {
     })
     expect(authStore.accessToken).toBeNull()
     expect(authStore.user).toBeNull()
-    expect(routerReplace).toHaveBeenCalledWith({ name: 'login' })
-    expect(wrapper.text()).toContain('Please sign in again.')
+    expect(routerReplace).toHaveBeenCalledWith({ name: 'login', query: { passwordChanged: '1' } })
   })
 
   it('blocks submission when confirmation does not match', async () => {
     const { wrapper } = await mountView()
 
-    await wrapper.get('#new-password input').setValue('new-password')
-    await wrapper.get('#confirm-password input').setValue('different-password')
+    await wrapper.get('input#new-password').setValue('new-password')
+    await wrapper.get('input#confirm-password').setValue('different-password')
     await wrapper.get('form').trigger('submit.prevent')
 
     expect(wrapper.text()).toContain('The new password confirmation does not match.')

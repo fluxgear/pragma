@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-beta.4 — 2026-05-02
+
+### Fixed
+- Closed Session B web UI bugs B1-B4 by replacing the dead public contact POST with direct-contact UI, wiring the homepage Browse archive CTA to the live archive URL, removing setup/login cross-links that only bounced through guards, and routing top-level admin misses to a real not-found screen.
+- Completed quality tasks #1082-#1086 by improving rich-text editor accessibility and focus visibility, wiring PrimeVue Password labels to real inputs, fixing the desktop public search-form label layout, removing stale rollout and milestone copy from the public search and archive views, and showing a post-password-change login success message.
+- Aligned release metadata for v1.0.0-beta.4 / 1.0.0b4 across the README, backend package/runtime metadata and lockfile, and the admin package and lockfile.
+
 ## v1.0.0-beta.3 — 2026-05-02
 
 ### Fixed

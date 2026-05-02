@@ -111,7 +111,7 @@
         </div>
         <div class="field">
           <label for="create-password">Initial password</label>
-          <Password id="create-password" v-model="createForm.password" toggleMask :feedback="false" />
+          <Password inputId="create-password" v-model="createForm.password" toggleMask :feedback="false" />
         </div>
         <div class="field">
           <label for="create-roles">Roles</label>

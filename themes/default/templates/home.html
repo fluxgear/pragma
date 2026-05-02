@@ -48,7 +48,7 @@
                     <p class="eyebrow">Blog preview</p>
                     <h2>Insight-driven publishing is part of the baseline.</h2>
                 </div>
-                <a class="button button--ghost" href="#archive">Browse archive</a>
+                <a class="button button--ghost" href="{{ archive_url|default('/archive', true) }}">Browse archive</a>
             </div>
             <div class="panel-grid panel-grid--three">
                 {% for item in featured_posts %}
