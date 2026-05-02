@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import PrimeVue from 'primevue/config'
@@ -187,6 +187,10 @@ describe('ContentEntriesView', () => {
     contentApiMocks.updateContentEntry.mockResolvedValue(existingEntry)
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('loads content types and existing entries into the workspace', async () => {
     const { wrapper } = await mountView()
 
@@ -272,8 +276,10 @@ describe('ContentEntriesView', () => {
     })
   })
 
-  it('reloads entries when realtime event matches selected content type', async () => {
+  it('coalesces matching realtime entry event bursts into one delayed reload', async () => {
     await mountView()
+
+    vi.useFakeTimers()
 
     realtimeStoreMocks.emitEvent({
       version: 1,
@@ -288,6 +294,37 @@ describe('ContentEntriesView', () => {
         content_type_id: 'type-1',
       },
     })
+    realtimeStoreMocks.emitEvent({
+      version: 1,
+      id: 'evt-2',
+      type: 'content.entry.created',
+      resource: 'content.entry',
+      action: 'created',
+      resource_id: 'entry-2',
+      occurred_at: '2026-04-21T00:00:01Z',
+      actor_id: 'user-1',
+      data: {
+        content_type_id: 'type-1',
+      },
+    })
+    realtimeStoreMocks.emitEvent({
+      version: 1,
+      id: 'evt-3',
+      type: 'content.entry.deleted',
+      resource: 'content.entry',
+      action: 'deleted',
+      resource_id: 'entry-3',
+      occurred_at: '2026-04-21T00:00:02Z',
+      actor_id: 'user-1',
+      data: {
+        content_type_id: 'type-1',
+      },
+    })
+    await flushPromises()
+
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(100)
     await flushPromises()
 
     expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(2)

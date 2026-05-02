@@ -21,6 +21,7 @@ from uuid import UUID
 from psycopg import Connection
 
 _DEFAULT_TRIGRAM_THRESHOLD = 0.2
+_MAX_RANKING_CANDIDATES = 10_000
 _RRF_K = 60
 
 
@@ -74,6 +75,8 @@ def list_search_documents_for_embedding_rebuild(
     limit: int,
     offset: int = 0,
     stale_only: bool = True,
+    after_updated_at: datetime | None = None,
+    after_entry_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
     """Return search documents eligible for embedding generation.
 
@@ -86,6 +89,8 @@ def list_search_documents_for_embedding_rebuild(
         limit: Maximum number of rows to return.
         offset: Number of rows to skip before returning rows.
         stale_only: Whether to restrict rows to stale or missing embeddings.
+        after_updated_at: Optional keyset cursor timestamp for descending scans.
+        after_entry_id: Optional keyset cursor entry identifier for descending scans.
 
     Returns:
         list[dict[str, Any]]: Search-document rows eligible for embedding generation.
@@ -126,6 +131,12 @@ def list_search_documents_for_embedding_rebuild(
             expected_embedding_dimensions,
             expected_embedding_dimensions,
         ])
+
+    if after_updated_at is not None and after_entry_id is not None:
+        sql += """
+            AND (updated_at, entry_id) < (%s::timestamptz, %s::uuid)
+        """
+        params.extend([after_updated_at, after_entry_id])
 
     sql += """
         ORDER BY updated_at DESC, entry_id DESC
@@ -191,6 +202,32 @@ def count_search_embedding_contract_mismatches(
     return int(row['mismatch_count'])
 
 
+def search_vector_extension_installed(connection: Connection) -> bool:
+    """Return whether pgvector is installed in the current database.
+
+    Args:
+        connection: Open PostgreSQL connection.
+
+    Returns:
+        bool: True when the vector extension is installed.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    row = connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_available_extensions
+            WHERE name = 'vector'
+              AND installed_version IS NOT NULL
+        ) AS installed
+        """
+    ).fetchone()
+    return bool(row['installed'])
+
+
 def search_embedding_column_exists(connection: Connection) -> bool:
     """Return whether the search table exposes an embedding column.
 
@@ -216,6 +253,156 @@ def search_embedding_column_exists(connection: Connection) -> bool:
         """
     ).fetchone()
     return bool(row['exists'])
+
+
+def get_search_embedding_column_dimensions(connection: Connection) -> int | None:
+    """Return fixed vector dimensions for the embedding column, if any.
+
+    Args:
+        connection: Open PostgreSQL connection.
+
+    Returns:
+        int | None: Fixed vector dimensions, or ``None`` for unavailable/unbounded.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    row = connection.execute(
+        """
+        SELECT format_type(a.atttypid, a.atttypmod) AS formatted_type
+        FROM pg_attribute AS a
+        JOIN pg_class AS c ON c.oid = a.attrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname = 'pragma_search_documents'
+          AND a.attname = 'embedding'
+          AND NOT a.attisdropped
+        """
+    ).fetchone()
+    if row is None or row['formatted_type'] is None:
+        return None
+
+    formatted_type = str(row['formatted_type'])
+    if not formatted_type.startswith('vector(') or not formatted_type.endswith(')'):
+        return None
+    dimensions = formatted_type.removeprefix('vector(').removesuffix(')')
+    return int(dimensions) if dimensions.isdecimal() else None
+
+
+def drop_search_embedding_hnsw_index(connection: Connection) -> None:
+    """Drop the optional HNSW embedding index if it exists."""
+
+    connection.execute('DROP INDEX IF EXISTS ix_pragma_search_documents_embedding_hnsw')
+
+
+def ensure_search_embedding_hnsw_index(connection: Connection) -> None:
+    """Create the optional HNSW embedding index when pgvector supports it."""
+
+    connection.execute(
+        """
+        DO $$
+        BEGIN
+            IF to_regclass('pragma_search_documents') IS NOT NULL
+               AND EXISTS (
+                   SELECT 1
+                   FROM pg_available_extensions
+                   WHERE name = 'vector'
+                     AND installed_version IS NOT NULL
+               )
+               AND EXISTS (
+                   SELECT 1
+                   FROM information_schema.columns
+                   WHERE table_schema = current_schema()
+                     AND table_name = 'pragma_search_documents'
+                     AND column_name = 'embedding'
+               )
+               AND EXISTS (
+                   SELECT 1
+                   FROM pg_attribute AS a
+                   JOIN pg_class AS c ON c.oid = a.attrelid
+                   JOIN pg_namespace AS n ON n.oid = c.relnamespace
+                   WHERE n.nspname = current_schema()
+                     AND c.relname = 'pragma_search_documents'
+                     AND a.attname = 'embedding'
+                     AND NOT a.attisdropped
+                     AND a.atttypmod > 0
+               )
+               AND EXISTS (
+                   SELECT 1
+                   FROM pg_am
+                   WHERE amname = 'hnsw'
+               )
+               AND EXISTS (
+                   SELECT 1
+                   FROM pg_opclass
+                   WHERE opcname = 'vector_cosine_ops'
+               )
+               AND to_regclass('ix_pragma_search_documents_embedding_hnsw') IS NULL
+            THEN
+                CREATE INDEX ix_pragma_search_documents_embedding_hnsw
+                ON pragma_search_documents
+                USING hnsw (embedding vector_cosine_ops)
+                WHERE embedding IS NOT NULL;
+            END IF;
+        END
+        $$;
+        """
+    )
+
+
+def ensure_search_embedding_column_dimensions(
+    connection: Connection, *, embedding_dimensions: int
+) -> bool:
+    """Ensure the embedding column uses a fixed ``vector(N)`` shape.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        embedding_dimensions: Required embedding dimensions.
+
+    Returns:
+        bool: True when the column shape changed.
+
+    Raises:
+        ValueError: If the requested dimension is outside the supported range.
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    if embedding_dimensions < 1 or embedding_dimensions > 2000:
+        raise ValueError('embedding_dimensions must be between 1 and 2000')
+    if not search_vector_extension_installed(connection):
+        return False
+    if not search_embedding_column_exists(connection):
+        return False
+
+    current_dimensions = get_search_embedding_column_dimensions(connection)
+    changed = current_dimensions != embedding_dimensions
+    if changed:
+        drop_search_embedding_hnsw_index(connection)
+        connection.execute(
+            """
+            UPDATE pragma_search_documents
+            SET
+                embedding = NULL,
+                embedding_provider = NULL,
+                embedding_model = NULL,
+                embedding_updated_at = NULL
+            WHERE embedding IS NOT NULL
+               OR embedding_provider IS NOT NULL
+               OR embedding_model IS NOT NULL
+               OR embedding_updated_at IS NOT NULL
+            """
+        )
+        connection.execute(
+            f"""
+            ALTER TABLE pragma_search_documents
+            ALTER COLUMN embedding TYPE vector({embedding_dimensions})
+            USING NULL::vector({embedding_dimensions})
+            """
+        )
+
+    ensure_search_embedding_hnsw_index(connection)
+    return changed
 
 
 def upsert_search_document(
@@ -422,86 +609,86 @@ def search_documents(
     embedding_provider: str | None = None,
     embedding_model: str | None = None,
     trigram_threshold: float = _DEFAULT_TRIGRAM_THRESHOLD,
-) -> list[dict[str, Any]]:
-    """Return public search results for the active strategy set.
-
-    Args:
-        connection: Open PostgreSQL connection.
-        query: Search query text.
-        normalized_query: Normalized search query used for fuzzy matching.
-        limit: Maximum number of rows to return.
-        offset: Number of rows to skip before returning results.
-        content_type_slug: Optional content-type slug filter.
-        strategies: Active ranking strategies to execute.
-        query_embedding: Optional pgvector literal for semantic search.
-        embedding_provider: Optional provider key required for vector candidates.
-        embedding_model: Optional model key required for vector candidates.
-        trigram_threshold: Minimum trigram similarity score to keep a row.
-
-    Returns:
-        list[dict[str, Any]]: Search-result rows with repeated ``total_count`` metadata.
-
-    Raises:
-        psycopg.Error: If PostgreSQL query execution fails.
-        ValueError: If vector search is requested without an embedding literal.
-    """
+) -> tuple[list[dict[str, Any]], int]:
+    """Return public search results and the exact match count."""
 
     if not strategies:
-        return []
+        return [], 0
 
+    candidate_limit = min(
+        max(limit + offset, limit * 10, 100),
+        _MAX_RANKING_CANDIDATES,
+    )
     ctes: list[str] = []
     ranked_sources: list[str] = []
+    matched_sources: list[str] = []
     params: list[Any] = []
 
     if 'keyword' in strategies:
         ctes.append(
             """
             keyword_ranked AS (
-                SELECT
-                    entry_id,
-                    ROW_NUMBER() OVER (
-                        ORDER BY
-                            ts_rank_cd(search_tsv, websearch_to_tsquery('simple', %s)) DESC,
-                            published_at DESC,
-                            entry_id DESC
-                    ) AS rank_position
+                SELECT entry_id, ROW_NUMBER() OVER (
+                    ORDER BY rank_score DESC, published_at DESC, entry_id DESC
+                ) AS rank_position
+                FROM (
+                    SELECT entry_id, published_at,
+                        ts_rank_cd(search_tsv, websearch_to_tsquery('simple', %s))
+                            AS rank_score
+                    FROM pragma_search_documents
+                    WHERE search_tsv @@ websearch_to_tsquery('simple', %s)
+                      AND (%s::text IS NULL OR content_type_slug = %s::text)
+                    ORDER BY rank_score DESC, published_at DESC, entry_id DESC
+                    LIMIT %s
+                ) AS keyword_candidates
+            ),
+            keyword_matched AS (
+                SELECT entry_id
                 FROM pragma_search_documents
                 WHERE search_tsv @@ websearch_to_tsquery('simple', %s)
                   AND (%s::text IS NULL OR content_type_slug = %s::text)
             )
             """
         )
-        params.extend([query, query, content_type_slug, content_type_slug])
+        params.extend([
+            query, query, content_type_slug, content_type_slug, candidate_limit,
+            query, content_type_slug, content_type_slug,
+        ])
         ranked_sources.append('SELECT entry_id, rank_position FROM keyword_ranked')
+        matched_sources.append('SELECT entry_id FROM keyword_matched')
 
     if 'fuzzy' in strategies:
         ctes.append(
             """
             fuzzy_ranked AS (
-                SELECT
-                    entry_id,
-                    ROW_NUMBER() OVER (
-                        ORDER BY
-                            similarity(search_text_normalized, %s) DESC,
-                            published_at DESC,
-                            entry_id DESC
-                    ) AS rank_position
+                SELECT entry_id, ROW_NUMBER() OVER (
+                    ORDER BY rank_score DESC, published_at DESC, entry_id DESC
+                ) AS rank_position
+                FROM (
+                    SELECT entry_id, published_at,
+                        similarity(search_text_normalized, %s) AS rank_score
+                    FROM pragma_search_documents
+                    WHERE similarity(search_text_normalized, %s) >= %s
+                      AND (%s::text IS NULL OR content_type_slug = %s::text)
+                    ORDER BY rank_score DESC, published_at DESC, entry_id DESC
+                    LIMIT %s
+                ) AS fuzzy_candidates
+            ),
+            fuzzy_matched AS (
+                SELECT entry_id
                 FROM pragma_search_documents
                 WHERE similarity(search_text_normalized, %s) >= %s
                   AND (%s::text IS NULL OR content_type_slug = %s::text)
             )
             """
         )
-        params.extend(
-            [
-                normalized_query,
-                normalized_query,
-                trigram_threshold,
-                content_type_slug,
-                content_type_slug,
-            ]
-        )
+        params.extend([
+            normalized_query, normalized_query, trigram_threshold,
+            content_type_slug, content_type_slug, candidate_limit,
+            normalized_query, trigram_threshold, content_type_slug, content_type_slug,
+        ])
         ranked_sources.append('SELECT entry_id, rank_position FROM fuzzy_ranked')
+        matched_sources.append('SELECT entry_id FROM fuzzy_matched')
 
     if 'vector' in strategies:
         if query_embedding is None:
@@ -509,14 +696,25 @@ def search_documents(
         ctes.append(
             """
             vector_ranked AS (
-                SELECT
-                    d.entry_id,
-                    ROW_NUMBER() OVER (
-                        ORDER BY
-                            d.embedding <=> q.query_embedding ASC,
-                            d.published_at DESC,
-                            d.entry_id DESC
-                    ) AS rank_position
+                SELECT entry_id, ROW_NUMBER() OVER (
+                    ORDER BY distance_score ASC, published_at DESC, entry_id DESC
+                ) AS rank_position
+                FROM (
+                    SELECT d.entry_id, d.published_at,
+                        d.embedding <=> q.query_embedding AS distance_score
+                    FROM pragma_search_documents AS d
+                    CROSS JOIN (SELECT %s::vector AS query_embedding) AS q
+                    WHERE d.embedding IS NOT NULL
+                      AND vector_dims(d.embedding) = vector_dims(q.query_embedding)
+                      AND (%s::text IS NULL OR d.embedding_provider = %s::text)
+                      AND (%s::text IS NULL OR d.embedding_model = %s::text)
+                      AND (%s::text IS NULL OR d.content_type_slug = %s::text)
+                    ORDER BY distance_score ASC, d.published_at DESC, d.entry_id DESC
+                    LIMIT %s
+                ) AS vector_candidates
+            ),
+            vector_matched AS (
+                SELECT d.entry_id
                 FROM pragma_search_documents AS d
                 CROSS JOIN (SELECT %s::vector AS query_embedding) AS q
                 WHERE d.embedding IS NOT NULL
@@ -528,42 +726,68 @@ def search_documents(
             """
         )
         params.extend([
-            query_embedding,
-            embedding_provider,
-            embedding_provider,
-            embedding_model,
-            embedding_model,
-            content_type_slug,
-            content_type_slug,
+            query_embedding, embedding_provider, embedding_provider,
+            embedding_model, embedding_model, content_type_slug, content_type_slug,
+            candidate_limit, query_embedding, embedding_provider, embedding_provider,
+            embedding_model, embedding_model, content_type_slug, content_type_slug,
         ])
         ranked_sources.append('SELECT entry_id, rank_position FROM vector_ranked')
+        matched_sources.append('SELECT entry_id FROM vector_matched')
 
     union_sql = '\n                    UNION ALL\n                    '.join(ranked_sources)
+    matched_union_sql = (
+        '\n                    UNION ALL\n                    '.join(matched_sources)
+    )
     sql = f"""
         WITH
             {','.join(ctes)},
             fused AS (
-                SELECT
-                    entry_id,
-                    SUM(1.0 / ({_RRF_K} + rank_position)) AS fused_score
+                SELECT entry_id, SUM(1.0 / ({_RRF_K} + rank_position)) AS fused_score
                 FROM (
                     {union_sql}
                 ) AS ranked
                 GROUP BY entry_id
+            ),
+            total_matches AS (
+                SELECT COUNT(DISTINCT entry_id) AS total_count
+                FROM (
+                    {matched_union_sql}
+                ) AS matched
+            ),
+            paged_results AS (
+                SELECT
+                    d.entry_id AS id,
+                    d.content_type_slug,
+                    d.entry_slug AS slug,
+                    d.title_text AS title,
+                    d.body_text,
+                    d.published_at,
+                    fused.fused_score
+                FROM fused
+                JOIN pragma_search_documents AS d ON d.entry_id = fused.entry_id
+                ORDER BY fused.fused_score DESC, d.published_at DESC, d.entry_id DESC
+                LIMIT %s
+                OFFSET %s
             )
         SELECT
-            d.entry_id AS id,
-            d.content_type_slug,
-            d.entry_slug AS slug,
-            d.title_text AS title,
-            d.body_text,
-            d.published_at,
-            COUNT(*) OVER () AS total_count
-        FROM fused
-        JOIN pragma_search_documents AS d ON d.entry_id = fused.entry_id
-        ORDER BY fused.fused_score DESC, d.published_at DESC, d.entry_id DESC
-        LIMIT %s
-        OFFSET %s
+            paged_results.id,
+            paged_results.content_type_slug,
+            paged_results.slug,
+            paged_results.title,
+            paged_results.body_text,
+            paged_results.published_at,
+            total_matches.total_count
+        FROM total_matches
+        LEFT JOIN paged_results ON TRUE
+        ORDER BY
+            paged_results.fused_score DESC NULLS LAST,
+            paged_results.published_at DESC NULLS LAST,
+            paged_results.id DESC NULLS LAST
     """
     params.extend([limit, offset])
-    return connection.execute(sql, tuple(params)).fetchall()
+    raw_rows = connection.execute(sql, tuple(params)).fetchall()
+    if not raw_rows:
+        return [], 0
+    total = int(raw_rows[0]['total_count'])
+    rows = [row for row in raw_rows if row['id'] is not None]
+    return rows, total

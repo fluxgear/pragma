@@ -17,10 +17,12 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from importlib import import_module
 from typing import Any
 from uuid import uuid4
 
 import psycopg
+import pytest
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 
@@ -609,6 +611,70 @@ def test_content_type_update_suppresses_search_domain_errors(
 
     assert response.status_code == 200
     assert response.json()['description'] == 'Updated despite search indexing failure'
+
+
+def test_content_type_update_rebuilds_search_after_commit(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify content-type search rebuilds see committed schema updates.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    observed: dict[str, str | None] = {}
+    search_service_module = import_module('pragma.search.service')
+
+    def _assert_rebuild_sees_committed_update(
+        *args: object,
+        content_type_id: object,
+        **kwargs: object,
+    ) -> None:
+        with psycopg.connect(dsn, row_factory=dict_row) as verification_connection:
+            row = verification_connection.execute(
+                """
+                SELECT description
+                FROM pragma_content_types
+                WHERE id = %s
+                """,
+                (content_type_id,),
+            ).fetchone()
+        assert row is not None
+        observed['description'] = row['description']
+
+    monkeypatch.setattr(
+        search_service_module,
+        'rebuild_search_documents_for_content_type',
+        _assert_rebuild_sees_committed_update,
+    )
+
+    payload = _content_type_payload()
+    payload['description'] = 'Post-commit search rebuild'
+
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json()['description'] == 'Post-commit search rebuild'
+    assert observed == {'description': 'Post-commit search rebuild'}
 
 
 def test_entry_validation_rejects_invalid_payload(

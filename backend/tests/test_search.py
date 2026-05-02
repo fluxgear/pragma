@@ -28,7 +28,7 @@ from alembic import command
 from pragma.app import create_app
 from pragma.config import clear_settings_cache
 from pragma.errors import SearchError
-from pragma.search.models import SearchMode, SearchQueryParams
+from pragma.search.models import MAX_SEARCH_OFFSET, SearchMode, SearchQueryParams
 from pragma.search.service import search_public_entries
 from tests.helpers import BACKEND_ROOT, build_database_dsn
 
@@ -328,7 +328,7 @@ def test_search_migration_creates_schema(migrated_database: dict[str, str]) -> N
 def test_search_repair_migration_restores_late_extension_artifacts(
     runtime_database: dict[str, str]
 ) -> None:
-    '''Verify head migration repairs optional search artifacts idempotently.'''
+    '''Verify head migrations repair optional search artifacts idempotently.'''
 
     _run_migrations_to('20260427_0007')
     database_dsn = build_database_dsn(
@@ -336,6 +336,13 @@ def test_search_repair_migration_restores_late_extension_artifacts(
     )
     with psycopg.connect(database_dsn) as connection, connection.transaction():
         connection.execute('DROP INDEX IF EXISTS ix_pragma_search_documents_search_text_trgm')
+        connection.execute('DROP INDEX IF EXISTS ix_pragma_search_documents_embedding_hnsw')
+        connection.execute('DROP INDEX IF EXISTS ix_pragma_content_entries_updated_at')
+        connection.execute('DROP INDEX IF EXISTS ix_pragma_content_entries_status_updated_at')
+        connection.execute(
+            'DROP INDEX IF EXISTS '
+            'ix_pragma_content_entries_content_type_status_updated_at'
+        )
         connection.execute('ALTER TABLE pragma_search_documents DROP COLUMN IF EXISTS embedding')
 
     _run_migrations_to('head')
@@ -353,12 +360,25 @@ def test_search_repair_migration_restores_late_extension_artifacts(
                     WHERE table_schema = 'public'
                       AND table_name = 'pragma_search_documents'
                       AND column_name = 'embedding'
-                ) AS has_embedding
+                ) AS has_embedding,
+                to_regclass('public.ix_pragma_content_entries_updated_at')
+                    AS entries_updated_at_index,
+                to_regclass('public.ix_pragma_content_entries_status_updated_at')
+                    AS entries_status_updated_at_index,
+                to_regclass(
+                    'public.ix_pragma_content_entries_content_type_status_updated_at'
+                ) AS entries_type_status_updated_at_index,
+                to_regclass('public.ix_pragma_search_documents_embedding_hnsw')
+                    AS embedding_hnsw_index
             '''
         ).fetchone()
 
     assert row[0] == 'ix_pragma_search_documents_search_text_trgm'
     assert row[1] is True
+    assert row[2] == 'ix_pragma_content_entries_updated_at'
+    assert row[3] == 'ix_pragma_content_entries_status_updated_at'
+    assert row[4] == 'ix_pragma_content_entries_content_type_status_updated_at'
+    assert row[5] is None or row[5] == 'ix_pragma_search_documents_embedding_hnsw'
 
 
 def test_search_migration_backfill_matches_runtime_field_order(
@@ -535,10 +555,74 @@ def test_search_returns_only_published_entries(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload['mode_applied'] == 'hybrid'
-    assert payload['applied_strategies'] == ['keyword', 'fuzzy']
+    assert payload['mode_applied'] == 'keyword'
+    assert payload['applied_strategies'] == ['keyword']
     assert payload['total'] == 1
     assert [item['id'] for item in payload['items']] == [published_entry['id']]
+
+
+def test_search_total_counts_matches_beyond_ranking_candidate_cap(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    '''Verify total keeps exact match count when ranking work is capped.'''
+
+    with _search_client(apply_runtime_env, migrated_database) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        content_type = _create_content_type(client, headers)
+        for index in range(101):
+            _create_entry(
+                client,
+                headers,
+                str(content_type['id']),
+                title=f'Capstone Result {index:03d}',
+                body='<p>Shared capstone body</p>',
+            )
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'capstone', 'limit': 1},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['mode_applied'] == 'keyword'
+    assert payload['applied_strategies'] == ['keyword']
+    assert len(payload['items']) == 1
+    assert payload['total'] == 101
+
+
+def test_search_empty_page_preserves_exact_total(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    '''Verify total remains exact when pagination returns no rows.'''
+
+    with _search_client(apply_runtime_env, migrated_database) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        content_type = _create_content_type(client, headers)
+        for index in range(3):
+            _create_entry(
+                client,
+                headers,
+                str(content_type['id']),
+                title=f'Empty Page Horizon {index}',
+                body='<p>Shared empty page horizon body</p>',
+            )
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'horizon', 'limit': 2, 'offset': 3},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['items'] == []
+    assert payload['total'] == 3
+    assert payload['limit'] == 2
+    assert payload['offset'] == 3
 
 
 def test_search_rich_text_excerpt_strips_markup(
@@ -684,7 +768,7 @@ def test_search_vector_mode_surfaces_mismatched_embedding_dimensions(
     migrated_database: dict[str, str],
     bootstrap_payload: dict[str, str],
 ) -> None:
-    '''Verify vector mode diagnoses stored embeddings with incompatible dimensions.
+    '''Verify vector mode excludes stored embeddings with incompatible dimensions.
 
     Args:
         apply_runtime_env: Fixture helper that applies runtime environment values.
@@ -735,9 +819,7 @@ def test_search_vector_mode_surfaces_mismatched_embedding_dimensions(
     assert payload['applied_strategies'] == ['vector']
     assert payload['total'] == 1
     assert [item['id'] for item in payload['items']] == [compatible['id']]
-    assert payload['semantic_diagnostics'] == [
-        '1 search document embedding(s) require rebuild for the active semantic contract'
-    ]
+    assert payload['semantic_diagnostics'] == []
 
 
 def test_search_hybrid_mode_merges_available_strategies(
@@ -819,6 +901,7 @@ def test_search_auto_embedding_does_not_hold_storage_connection(
 
     import pragma.ai.service as ai_service
     import pragma.search.service as search_service
+    import pragma.storage.queries.search as search_queries
 
     result_id = uuid4()
     provider_connection_counts: list[int] = []
@@ -858,6 +941,7 @@ def test_search_auto_embedding_does_not_hold_storage_connection(
             'base_url': 'https://api.voyageai.com/v1',
             'api_key': 'test-ai-key',
             'embedding_model': 'voyage-3.5-lite',
+            'embedding_dimensions': 2,
             'request_timeout_seconds': 5,
         }
 
@@ -884,7 +968,7 @@ def test_search_auto_embedding_does_not_hold_storage_connection(
         query_embedding: str | None = None,
         embedding_provider: str | None = None,
         embedding_model: str | None = None,
-    ) -> list[dict[str, object]]:
+    ) -> tuple[list[dict[str, object]], int]:
         search_connection_counts.append(storage.active_connections)
         assert query == 'semantic guard'
         assert normalized_query == 'semantic guard'
@@ -905,14 +989,19 @@ def test_search_auto_embedding_does_not_hold_storage_connection(
                 'published_at': datetime.now(UTC),
                 'total_count': 1,
             }
-        ]
+        ], 1
+
+    def _unexpected_mismatch_counter(*_args: object, **_kwargs: object) -> int:
+        raise AssertionError('search should not scan mismatch diagnostics during requests')
 
     monkeypatch.setattr(
         search_service, 'get_extension_capabilities', _mock_get_extension_capabilities
     )
     monkeypatch.setattr(search_service, 'search_embedding_column_exists', lambda _: True)
     monkeypatch.setattr(
-        search_service, 'count_search_embedding_contract_mismatches', lambda *_args, **_kwargs: 0
+        search_queries,
+        'count_search_embedding_contract_mismatches',
+        _unexpected_mismatch_counter,
     )
     monkeypatch.setattr(ai_service, 'get_ai_provider_settings', _mock_get_ai_provider_settings)
     monkeypatch.setattr(ai_service, 'request_embedding', _mock_request_embedding)
@@ -935,7 +1024,63 @@ def test_search_auto_embedding_does_not_hold_storage_connection(
     assert storage.active_connections == 0
     assert response.mode_applied == SearchMode.VECTOR
     assert response.applied_strategies == ['vector']
+    assert response.semantic_diagnostics == []
     assert [item.id for item in response.items] == [result_id]
+
+
+def test_public_auto_keyword_search_skips_semantic_catalog_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    '''Verify unauthenticated AUTO keyword-only search skips extension probes.'''
+
+    import pragma.search.service as search_service
+
+    class _Storage:
+        def __init__(self) -> None:
+            self.scope_count = 0
+
+        @contextmanager
+        def connection(self) -> Iterator[object]:
+            self.scope_count += 1
+            yield object()
+
+    class _Settings:
+        search_enable_semantic = True
+
+    def _unexpected_probe(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError('public AUTO keyword-only search should not probe catalogs')
+
+    def _mock_search_documents(
+        _connection: object, **kwargs: object
+    ) -> tuple[list[dict[str, object]], int]:
+        assert kwargs['strategies'] == ['keyword']
+        assert kwargs['query_embedding'] is None
+        return [{
+            'id': uuid4(),
+            'content_type_slug': 'articles',
+            'slug': 'public-keyword',
+            'title': 'Public Keyword',
+            'body_text': 'Public keyword-only result',
+            'published_at': datetime.now(UTC),
+            'total_count': 1,
+        }], 1
+
+    monkeypatch.setattr(search_service, 'get_extension_capabilities', _unexpected_probe)
+    monkeypatch.setattr(search_service, 'search_embedding_column_exists', _unexpected_probe)
+    monkeypatch.setattr(search_service, 'search_documents', _mock_search_documents)
+    storage = _Storage()
+    params = SearchQueryParams.model_construct(
+        query='public keyword', limit=20, offset=0, content_type_slug=None,
+        mode=SearchMode.AUTO, query_embedding=None,
+    )
+
+    response = search_public_entries(
+        storage, _Settings(), params, allow_provider_embeddings=False
+    )
+
+    assert storage.scope_count == 1
+    assert response.mode_applied == SearchMode.KEYWORD
+    assert response.applied_strategies == ['keyword']
 
 
 def test_search_degrades_cleanly_without_pg_trgm(
@@ -1288,16 +1433,23 @@ def test_search_route_returns_validation_error_for_invalid_params(
     '''
 
     with _search_client(apply_runtime_env, migrated_database) as client:
-        response = client.get(
-            '/api/v1/search/entries',
-            params={'query': 'valid', 'limit': 0},
-        )
+        responses = [
+            client.get(
+                '/api/v1/search/entries',
+                params={'query': 'valid', 'limit': 0},
+            ),
+            client.get(
+                '/api/v1/search/entries',
+                params={'query': 'valid', 'offset': MAX_SEARCH_OFFSET + 1},
+            ),
+        ]
 
-    assert response.status_code == 422
-    assert response.json() == {
-        'detail': 'Request validation failed',
-        'code': 'VALIDATION_ERROR',
-    }
+    for response in responses:
+        assert response.status_code == 422
+        assert response.json() == {
+            'detail': 'Request validation failed',
+            'code': 'VALIDATION_ERROR',
+        }
 
 
 def test_search_route_returns_structured_error_for_query_failures(

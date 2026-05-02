@@ -44,9 +44,16 @@ const settingsPayload = {
   provider: 'voyage',
   base_url: 'https://api.voyageai.com/v1',
   embedding_model: 'voyage-3.5-lite',
+  embedding_dimensions: 2,
   request_timeout_seconds: 12,
   api_key_configured: true,
   updated_at: '2026-04-26T12:00:00Z',
+  embeddings_rebuild_required: false,
+}
+
+const rebuildRequiredSettingsPayload = {
+  ...settingsPayload,
+  embeddings_rebuild_required: true,
 }
 
 const disabledSettingsPayload = {
@@ -54,9 +61,11 @@ const disabledSettingsPayload = {
   provider: null,
   base_url: null,
   embedding_model: null,
+  embedding_dimensions: null,
   request_timeout_seconds: null,
   api_key_configured: false,
   updated_at: null,
+  embeddings_rebuild_required: false,
 }
 
 async function mountView(isSuperuser = true) {
@@ -95,7 +104,7 @@ describe('AiSettingsView', () => {
     aiApiMocks.testAiProvider.mockResolvedValue({
       provider: 'voyage',
       embedding_model: 'voyage-3.5-lite',
-      embedding_dimensions: 3,
+      embedding_dimensions: 2,
     })
     aiApiMocks.updateAiSettings.mockResolvedValue(settingsPayload)
     aiApiMocks.rebuildAiEmbeddings.mockResolvedValue({
@@ -113,9 +122,12 @@ describe('AiSettingsView', () => {
     expect(wrapper.text()).toContain('AI settings')
     expect(wrapper.text()).toContain('voyage')
     expect(wrapper.text()).toContain('Current provider status')
+    expect(wrapper.text()).toContain('2')
   })
 
-  it('saves updated settings back to the API', async () => {
+  it('saves updated settings and runs a forced rebuild when required', async () => {
+    aiApiMocks.updateAiSettings.mockResolvedValue(rebuildRequiredSettingsPayload)
+
     const { wrapper } = await mountView()
 
     await wrapper.get('#ai-base-url').setValue('https://api.custom.example.com/v1')
@@ -128,10 +140,16 @@ describe('AiSettingsView', () => {
       provider: 'voyage',
       base_url: 'https://api.custom.example.com/v1',
       embedding_model: 'voyage-3.5-pro',
+      embedding_dimensions: 2,
       request_timeout_seconds: 12,
       retain_existing_api_key: true,
     })
-    expect(wrapper.text()).toContain('AI settings saved successfully.')
+    expect(aiApiMocks.rebuildAiEmbeddings).toHaveBeenCalledWith({
+      batch_size: 20,
+      max_documents: 200,
+      force: true,
+    })
+    expect(wrapper.text()).toContain('AI settings saved successfully. Rebuild started: 20/20 embedded, 0 failed')
   })
 
   it('allows disabled settings to save without provider metadata', async () => {
@@ -148,6 +166,7 @@ describe('AiSettingsView', () => {
       provider: null,
       base_url: null,
       embedding_model: null,
+      embedding_dimensions: null,
       request_timeout_seconds: 15,
       api_key: null,
       retain_existing_api_key: false,
@@ -173,12 +192,11 @@ describe('AiSettingsView', () => {
     await flushPromises()
 
     expect(aiApiMocks.testAiProvider).toHaveBeenCalledWith()
-    expect(wrapper.text()).toContain('Provider test passed: voyage (voyage-3.5-lite, 3 dimensions)')
+    expect(wrapper.text()).toContain('Provider test passed: voyage (voyage-3.5-lite, 2 dimensions)')
   })
 
   it('runs embedding rebuild and shows rebuild feedback', async () => {
     const { wrapper } = await mountView()
-
 
     await wrapper.get('#ai-rebuild-btn').trigger('click')
     await flushPromises()
@@ -188,7 +206,7 @@ describe('AiSettingsView', () => {
       max_documents: 200,
       force: false,
     })
-    expect(wrapper.text()).toContain('Rebuild complete: 20/20 embedded, 0 failed')
+    expect(wrapper.text()).toContain('Rebuild batch complete: 20/20 embedded, 0 failed')
   })
 
   it('does not load or expose save/test/rebuild actions to non-superusers', async () => {

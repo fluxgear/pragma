@@ -29,7 +29,7 @@ Pragma is a **single-site, multi-user content management system** for operators 
 
 You get a modern administration workspace, a REST API under `/api/v1`, local image media, filesystem themes, trusted backend modules, optional semantic search, and backend-rendered public pages from the same deployment.
 
-Pragma release copy is currently aligned to **v1.0.0-beta.2**. The backend Python package uses the PEP 440-compatible version **1.0.0b2**, and the admin package uses the semver prerelease **1.0.0-beta.2**.
+Pragma release copy is currently aligned to **v1.0.0-beta.3**. The backend Python package uses the PEP 440-compatible version **1.0.0b3**, and the admin package uses the semver prerelease **1.0.0-beta.3**.
 
 ---
 

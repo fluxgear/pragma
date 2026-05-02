@@ -10,12 +10,12 @@ Returns:
 Raises:
     None.
 """
-
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from html.parser import HTMLParser
 from http import HTTPStatus
 from typing import Any
@@ -41,7 +41,6 @@ from pragma.search.models import (
 from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.capabilities import get_extension_capabilities
 from pragma.storage.queries.search import (
-    count_search_embedding_contract_mismatches,
     delete_search_document,
     delete_search_documents_for_content_type,
     list_search_source_entries_for_content_type,
@@ -54,6 +53,38 @@ _MAX_EXCERPT_LENGTH = 240
 _MULTI_HYPHEN_PATTERN = re.compile(r'-{2,}')
 _PREFERRED_TITLE_FIELDS = ('title', 'name')
 _TEXT_FIELD_KINDS = {'text', 'long_text', 'rich_text'}
+_EMBEDDING_COLUMN_CACHE_SECONDS = 30.0
+_embedding_column_cache: dict[Hashable, tuple[bool, float]] = {}
+
+
+def _embedding_column_cache_key(connection: Connection) -> Hashable:
+    """Return a stable best-effort cache key for a database connection."""
+
+    connection_info = getattr(connection, 'info', None)
+    if connection_info is None:
+        return None
+    return (
+        getattr(connection_info, 'host', None),
+        getattr(connection_info, 'port', None),
+        getattr(connection_info, 'dbname', None),
+        getattr(connection_info, 'user', None),
+    )
+
+
+def _cached_search_embedding_column_exists(connection: Connection) -> bool:
+    """Return cached search embedding-column capability for write paths."""
+
+    cache_key = _embedding_column_cache_key(connection)
+    now = time.monotonic()
+    cached = _embedding_column_cache.get(cache_key)
+    if cached is not None:
+        exists, expires_at = cached
+        if expires_at > now:
+            return exists
+
+    exists = search_embedding_column_exists(connection)
+    _embedding_column_cache[cache_key] = (exists, now + _EMBEDDING_COLUMN_CACHE_SECONDS)
+    return exists
 
 
 class _SearchHTMLStripper(HTMLParser):
@@ -413,21 +444,13 @@ def _resolve_active_strategies(
 
 
 def search_public_entries(
-    storage: DatabasePool, settings: Settings, params: SearchQueryParams
+    storage: DatabasePool,
+    settings: Settings,
+    params: SearchQueryParams,
+    *,
+    allow_provider_embeddings: bool = True,
 ) -> SearchQueryResponse:
-    """Search published content entries for the public API.
-
-    Args:
-        storage: Initialized database pool manager.
-        settings: Application settings.
-        params: Search query parameters.
-
-    Returns:
-        SearchQueryResponse: Paginated public-search response.
-
-    Raises:
-        SearchError: If the supplied search request is invalid or search fails.
-    """
+    """Search published content entries for the public API."""
 
     query = _collapse_whitespace(params.query)
     if not query:
@@ -439,56 +462,63 @@ def search_public_entries(
         else None
     )
     query_embedding_values = params.query_embedding
-    vector_mode_requested = params.mode in {
-        SearchMode.AUTO,
-        SearchMode.HYBRID,
-        SearchMode.VECTOR,
-    }
+    vector_mode_requested = params.mode in {SearchMode.AUTO, SearchMode.HYBRID, SearchMode.VECTOR}
+    public_auto_keyword_only = (
+        params.mode is SearchMode.AUTO
+        and query_embedding_values is None
+        and not allow_provider_embeddings
+    )
     query_embedding_provider_config = None
     semantic_diagnostics: list[str] = []
+    capabilities = {'pgvector': {'installed': False}, 'pg_trgm': {'installed': False}}
+    embedding_column_exists = False
 
-    try:
-        with storage.connection() as connection:
-            capabilities = get_extension_capabilities(connection)
-            embedding_column_exists = search_embedding_column_exists(connection)
+    if not public_auto_keyword_only:
+        try:
+            with storage.connection() as connection:
+                capabilities = get_extension_capabilities(connection)
+                embedding_column_exists = search_embedding_column_exists(connection)
 
-            if (
-                query_embedding_values is None
-                and settings.search_enable_semantic
-                and capabilities['pgvector']['installed']
-                and embedding_column_exists
-                and vector_mode_requested
-            ):
-                from pragma.ai.service import get_query_embedding_provider_config
-                from pragma.errors import ConfigError
+                if (
+                    query_embedding_values is None
+                    and allow_provider_embeddings
+                    and settings.search_enable_semantic
+                    and capabilities['pgvector']['installed']
+                    and embedding_column_exists
+                    and vector_mode_requested
+                ):
+                    from pragma.ai.service import get_query_embedding_provider_config
+                    from pragma.errors import ConfigError
 
-                try:
-                    query_embedding_provider_config = get_query_embedding_provider_config(
-                        connection
-                    )
-                except ConfigError as exc:
-                    import logging
+                    try:
+                        query_embedding_provider_config = get_query_embedding_provider_config(
+                            connection,
+                            allow_private_base_urls=getattr(
+                                settings, 'ai_allow_private_base_urls', False
+                            ),
+                        )
+                    except ConfigError as exc:
+                        import logging
 
-                    logging.getLogger(__name__).warning(
-                        'Semantic query embedding configuration failed',
-                        extra={'search_code': exc.code},
-                    )
-    except SearchError:
-        raise
-    except PsycopgError as exc:
-        raise SearchError(
-            detail='Unable to execute search query',
-            code='SEARCH_QUERY_FAILED',
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-        ) from exc
+                        logging.getLogger(__name__).warning(
+                            'Semantic query embedding configuration failed',
+                            extra={'search_code': exc.code},
+                        )
+        except SearchError:
+            raise
+        except PsycopgError as exc:
+            raise SearchError(
+                detail='Unable to execute search query',
+                code='SEARCH_QUERY_FAILED',
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            ) from exc
 
     if query_embedding_provider_config is not None:
         from pragma.ai.service import generate_query_embedding_from_config
 
         try:
             query_embedding_values = generate_query_embedding_from_config(
-                query_embedding_provider_config,
-                query=query,
+                query_embedding_provider_config, query=query
             )
         except SearchError as exc:
             import logging
@@ -503,12 +533,16 @@ def search_public_entries(
         and capabilities['pgvector']['installed']
         and embedding_column_exists
     )
-    strategies, mode_applied = _resolve_active_strategies(
-        params=params,
-        settings=settings,
-        pg_trgm_installed=capabilities['pg_trgm']['installed'],
-        vector_ready=vector_ready,
-    )
+    if public_auto_keyword_only:
+        strategies = ['keyword']
+        mode_applied = SearchMode.KEYWORD
+    else:
+        strategies, mode_applied = _resolve_active_strategies(
+            params=params,
+            settings=settings,
+            pg_trgm_installed=capabilities['pg_trgm']['installed'],
+            vector_ready=vector_ready,
+        )
 
     vector_embedding_provider = (
         query_embedding_provider_config.provider.value
@@ -523,21 +557,7 @@ def search_public_entries(
 
     try:
         with storage.connection() as connection:
-            if 'vector' in strategies and query_embedding_values is not None:
-                mismatch_count = count_search_embedding_contract_mismatches(
-                    connection,
-                    embedding_dimensions=len(query_embedding_values),
-                    embedding_provider=vector_embedding_provider,
-                    embedding_model=vector_embedding_model,
-                    content_type_slug=normalized_content_type_slug,
-                )
-                if mismatch_count > 0:
-                    semantic_diagnostics.append(
-                        f'{mismatch_count} search document embedding(s) require rebuild '
-                        'for the active semantic contract'
-                    )
-
-            rows = search_documents(
+            rows, total = search_documents(
                 connection,
                 query=query,
                 normalized_query=_normalize_search_text(query),
@@ -568,7 +588,6 @@ def search_public_entries(
         )
         for row in rows
     ]
-    total = int(rows[0]['total_count']) if rows else 0
     return SearchQueryResponse(
         items=items,
         total=total,
@@ -601,7 +620,6 @@ def sync_search_document(
         None.
 
     Raises:
-        clear_embedding=search_embedding_column_exists(connection),
         psycopg.Error: If PostgreSQL query execution fails.
     """
 
@@ -631,7 +649,7 @@ def sync_search_document(
         searchable_field_names=document['searchable_field_names'],
         published_at=document['published_at'],
         updated_at=document['updated_at'],
-        clear_embedding=search_embedding_column_exists(connection),
+        clear_embedding=_cached_search_embedding_column_exists(connection),
     )
 
 

@@ -42,6 +42,7 @@ def get_ai_provider_settings(connection: Connection) -> dict[str, Any] | None:
             base_url,
             api_key,
             embedding_model,
+            embedding_dimensions,
             request_timeout_seconds,
             updated_by_user_id,
             created_at,
@@ -60,6 +61,7 @@ def upsert_ai_provider_settings(
     base_url: str | None,
     api_key: str | None,
     embedding_model: str | None,
+    embedding_dimensions: int | None,
     request_timeout_seconds: int,
     updated_by_user_id: UUID,
     updated_at: datetime,
@@ -73,6 +75,7 @@ def upsert_ai_provider_settings(
         base_url: Provider API base URL.
         api_key: Provider API key or ``None`` when disabled.
         embedding_model: Provider model identifier.
+        embedding_dimensions: Expected embedding vector dimensions.
         request_timeout_seconds: Request timeout value in seconds.
         updated_by_user_id: User who performed the update.
         updated_at: Current update timestamp.
@@ -93,6 +96,7 @@ def upsert_ai_provider_settings(
             base_url,
             api_key,
             embedding_model,
+            embedding_dimensions,
             request_timeout_seconds,
             updated_by_user_id,
             created_at,
@@ -100,6 +104,7 @@ def upsert_ai_provider_settings(
         )
         VALUES (
             1,
+            %s,
             %s,
             %s,
             %s,
@@ -117,6 +122,7 @@ def upsert_ai_provider_settings(
             base_url = EXCLUDED.base_url,
             api_key = EXCLUDED.api_key,
             embedding_model = EXCLUDED.embedding_model,
+            embedding_dimensions = EXCLUDED.embedding_dimensions,
             request_timeout_seconds = EXCLUDED.request_timeout_seconds,
             updated_by_user_id = EXCLUDED.updated_by_user_id,
             updated_at = EXCLUDED.updated_at
@@ -127,6 +133,7 @@ def upsert_ai_provider_settings(
             base_url,
             api_key,
             embedding_model,
+            embedding_dimensions,
             request_timeout_seconds,
             updated_by_user_id,
             created_at,
@@ -138,9 +145,39 @@ def upsert_ai_provider_settings(
             base_url,
             api_key,
             embedding_model,
+            embedding_dimensions,
             request_timeout_seconds,
             updated_by_user_id,
             updated_at,
             updated_at,
         ),
     ).fetchone()
+
+
+def clear_search_document_embeddings(connection: Connection) -> None:
+    """Clear stored semantic embeddings after provider settings change.
+
+    Args:
+        connection: Open PostgreSQL connection.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    connection.execute(
+        """
+        UPDATE pragma_search_documents
+        SET
+            embedding = NULL,
+            embedding_provider = NULL,
+            embedding_model = NULL,
+            embedding_updated_at = NULL
+        WHERE embedding IS NOT NULL
+           OR embedding_provider IS NOT NULL
+           OR embedding_model IS NOT NULL
+           OR embedding_updated_at IS NOT NULL
+        """
+    )

@@ -799,6 +799,49 @@ def build_public_entry_view(entry_row: dict[str, Any]) -> PublicEntryView:
     )
 
 
+def build_public_entry_card(entry_row: dict[str, Any]) -> dict[str, str | None]:
+    """Map a storage entry row directly into the public card contract.
+
+    Args:
+        entry_row: Storage-layer entry row.
+
+    Returns:
+        dict[str, str | None]: Card payload consumed by public list templates.
+
+    Raises:
+        None.
+    """
+
+    payload = dict(entry_row.get('payload') or {})
+    slug = str(entry_row['slug'])
+    content_type_slug = str(entry_row.get('content_type_slug') or '')
+
+    title = _extract_text(payload, ('title', 'name')) or _slug_to_title(slug)
+    summary = _extract_text(payload, ('summary', 'excerpt'))
+    body_text = ''
+    if summary is None:
+        body_source = _extract_text(payload, ('body', 'content', 'body_html'))
+        body_text = _strip_html(body_source) if body_source else ''
+        summary = _build_body_summary(body_text, title) if body_text else title
+
+    reading_source = body_text or summary or title
+    word_count = len(_collapse_whitespace(reading_source).split())
+    reading_minutes = max(1, math.ceil(word_count / _WORDS_PER_MINUTE))
+
+    return {
+        'url': build_entry_url(content_type_slug, slug),
+        'title': title,
+        'excerpt': summary,
+        'category': _extract_text(payload, ('category',))
+        or _slug_to_title(content_type_slug or _DEFAULT_CATEGORY),
+        'author': _extract_text(payload, ('author',)) or _DEFAULT_AUTHOR,
+        'published_at': _format_published_at(entry_row.get('published_at')),
+        'reading_time': f'{reading_minutes} min read',
+        'image_url': _extract_text(payload, ('featured_image_url',)),
+        'image_alt': _extract_text(payload, ('featured_image_alt',)),
+    }
+
+
 def to_post_card(entry: PublicEntryView) -> dict[str, str | None]:
     """Convert a public entry view into the default blog-card contract.
 

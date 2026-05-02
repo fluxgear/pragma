@@ -43,6 +43,8 @@ def test_health_endpoint_returns_ok(runtime_database: dict[str, str]) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
 
 def test_startup_fails_with_invalid_database(

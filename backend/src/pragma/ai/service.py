@@ -13,6 +13,7 @@ Raises:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import unicodedata
@@ -35,9 +36,14 @@ from pragma.ai.models import (
     AISearchEmbeddingRebuildResponse,
 )
 from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+from pragma.config import Settings
 from pragma.errors import AuthError, ConfigError, SearchError, StorageError
 from pragma.storage.pool import DatabasePool
-from pragma.storage.queries.ai import get_ai_provider_settings, upsert_ai_provider_settings
+from pragma.storage.queries.ai import (
+    clear_search_document_embeddings,
+    get_ai_provider_settings,
+    upsert_ai_provider_settings,
+)
 from pragma.storage.queries.capabilities import get_extension_capabilities
 from pragma.storage.queries.search import (
     list_search_documents_for_embedding_rebuild,
@@ -101,23 +107,62 @@ def _normalize_content_type_slug(value: str) -> str:
     return slug
 
 
-def _validate_provider_base_url(base_url: str) -> str:
-    """Return a normalized provider base URL with a valid HTTP(S) origin.
+def _validate_provider_base_url(
+    base_url: str,
+    *,
+    allow_private_base_urls: bool = False,
+) -> str:
+    """Return a normalized provider base URL with a safe HTTP(S) origin.
 
     Args:
         base_url: Raw provider base URL value.
+        allow_private_base_urls: Whether operator config explicitly permits
+            non-HTTPS or private/internal provider origins.
 
     Returns:
         str: Normalized provider base URL without a trailing slash.
 
     Raises:
-        ConfigError: If the URL is missing an HTTP(S) scheme or host.
+        ConfigError: If the URL is missing a safe HTTP(S) scheme or host.
     """
 
     parsed = urlparse(base_url)
-    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise ConfigError(
             detail='AI provider base URL must be a valid http or https URL',
+            code='AI_SETTINGS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if parsed.scheme != 'https' and not allow_private_base_urls:
+        raise ConfigError(
+            detail=(
+                'AI provider base URL must use HTTPS unless private AI URLs are '
+                'explicitly allowed'
+            ),
+            code='AI_SETTINGS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+
+    hostname = parsed.hostname.strip().rstrip('.').lower()
+    private_hostname = hostname == 'localhost' or hostname.endswith('.localhost')
+    try:
+        parsed_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        parsed_ip = None
+    private_address = parsed_ip is not None and (
+        parsed_ip.is_private
+        or parsed_ip.is_loopback
+        or parsed_ip.is_link_local
+        or parsed_ip.is_reserved
+        or parsed_ip.is_multicast
+        or parsed_ip.is_unspecified
+    )
+    if (private_hostname or private_address) and not allow_private_base_urls:
+        raise ConfigError(
+            detail=(
+                'AI provider base URL must not target private or local network hosts '
+                'unless explicitly allowed'
+            ),
             code='AI_SETTINGS_INVALID',
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -128,12 +173,15 @@ def _provider_config_from_row(
     settings_row: dict[str, object] | None,
     *,
     require_enabled: bool,
+    allow_private_base_urls: bool = False,
 ) -> EmbeddingProviderConfig | None:
     """Build provider runtime configuration from the persisted settings row.
 
     Args:
         settings_row: Persisted singleton settings row.
         require_enabled: Whether disabled configuration should raise.
+        allow_private_base_urls: Whether operator config explicitly permits
+            non-HTTPS or private/internal provider origins.
 
     Returns:
         EmbeddingProviderConfig | None: Provider config when enabled and valid.
@@ -155,9 +203,16 @@ def _provider_config_from_row(
     base_url = str(settings_row['base_url'] or '').strip()
     api_key = str(settings_row['api_key'] or '').strip()
     embedding_model = str(settings_row['embedding_model'] or '').strip()
+    embedding_dimensions_value = settings_row.get('embedding_dimensions')
     timeout_value = settings_row['request_timeout_seconds']
 
-    if not provider_value or not base_url or not api_key or not embedding_model:
+    if (
+        not provider_value
+        or not base_url
+        or not api_key
+        or not embedding_model
+        or embedding_dimensions_value is None
+    ):
         raise ConfigError(
             detail='AI provider settings are incomplete',
             code='AI_SETTINGS_INVALID',
@@ -173,6 +228,14 @@ def _provider_config_from_row(
             status_code=HTTPStatus.BAD_REQUEST,
         ) from exc
 
+    embedding_dimensions = int(embedding_dimensions_value)
+    if embedding_dimensions < 1 or embedding_dimensions > 2000:
+        raise ConfigError(
+            detail='AI embedding dimensions must be between 1 and 2000',
+            code='AI_SETTINGS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+
     timeout_seconds = int(timeout_value) if timeout_value is not None else 15
     if timeout_seconds < 1:
         raise ConfigError(
@@ -183,9 +246,13 @@ def _provider_config_from_row(
 
     return EmbeddingProviderConfig(
         provider=provider,
-        base_url=_validate_provider_base_url(base_url),
+        base_url=_validate_provider_base_url(
+            base_url,
+            allow_private_base_urls=allow_private_base_urls,
+        ),
         api_key=api_key,
         embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
         request_timeout_seconds=timeout_seconds,
     )
 
@@ -225,11 +292,15 @@ def _embedding_source_text(title_text: str, body_text: str) -> str:
 
 def get_query_embedding_provider_config(
     connection: Connection,
+    *,
+    allow_private_base_urls: bool = False,
 ) -> EmbeddingProviderConfig | None:
-    """Load provider configuration for public query embeddings without I/O.
+    """Load provider configuration for query embeddings without I/O.
 
     Args:
         connection: Open PostgreSQL connection.
+        allow_private_base_urls: Whether operator config explicitly permits
+            non-HTTPS or private/internal provider origins.
 
     Returns:
         EmbeddingProviderConfig | None: Provider config when semantic AI is enabled.
@@ -240,7 +311,11 @@ def get_query_embedding_provider_config(
     """
 
     settings_row = get_ai_provider_settings(connection)
-    return _provider_config_from_row(settings_row, require_enabled=False)
+    return _provider_config_from_row(
+        settings_row,
+        require_enabled=False,
+        allow_private_base_urls=allow_private_base_urls,
+    )
 
 
 def generate_query_embedding_from_config(
@@ -299,6 +374,7 @@ def get_ai_provider_settings_snapshot(storage: DatabasePool) -> AIProviderSettin
 
 def update_ai_provider_settings_snapshot(
     storage: DatabasePool,
+    settings: Settings,
     payload: AIProviderSettingsUpdateRequest,
     current_user: Mapping[str, object],
 ) -> AIProviderSettingsResponse:
@@ -306,6 +382,7 @@ def update_ai_provider_settings_snapshot(
 
     Args:
         storage: Initialized database pool manager.
+        settings: Application settings controlling provider URL hardening.
         payload: Provider settings update payload.
         current_user: Authenticated user context.
 
@@ -320,6 +397,7 @@ def update_ai_provider_settings_snapshot(
 
     timestamp = datetime.now(UTC)
     user_id = _require_user_id(current_user)
+    embeddings_rebuild_required = False
 
     try:
         with storage.connection() as connection, connection.transaction():
@@ -331,6 +409,7 @@ def update_ai_provider_settings_snapshot(
                 if payload.embedding_model is not None
                 else None
             )
+            embedding_dimensions = payload.embedding_dimensions
             api_key = payload.api_key.strip() if payload.api_key is not None else None
             if (
                 api_key is None
@@ -341,10 +420,16 @@ def update_ai_provider_settings_snapshot(
                 api_key = str(existing_row['api_key'])
 
             if base_url is not None:
-                base_url = _validate_provider_base_url(base_url)
+                base_url = _validate_provider_base_url(
+                    base_url,
+                    allow_private_base_urls=settings.ai_allow_private_base_urls,
+                )
 
             if payload.enabled and (
-                provider is None or base_url is None or embedding_model is None
+                provider is None
+                or base_url is None
+                or embedding_model is None
+                or embedding_dimensions is None
             ):
                 raise ConfigError(
                     detail='Enabled AI provider settings are incomplete',
@@ -359,6 +444,22 @@ def update_ai_provider_settings_snapshot(
                     status_code=HTTPStatus.BAD_REQUEST,
                 )
 
+            previous_contract = (
+                bool(existing_row['enabled']) if existing_row is not None else False,
+                existing_row['provider'] if existing_row is not None else None,
+                existing_row['base_url'] if existing_row is not None else None,
+                existing_row['embedding_model'] if existing_row is not None else None,
+                existing_row.get('embedding_dimensions') if existing_row is not None else None,
+            )
+            next_contract = (
+                payload.enabled,
+                provider,
+                base_url,
+                embedding_model,
+                embedding_dimensions,
+            )
+            semantic_contract_changed = previous_contract != next_contract
+
             row = upsert_ai_provider_settings(
                 connection,
                 enabled=payload.enabled,
@@ -366,25 +467,29 @@ def update_ai_provider_settings_snapshot(
                 base_url=base_url,
                 api_key=api_key,
                 embedding_model=embedding_model,
+                embedding_dimensions=embedding_dimensions,
                 request_timeout_seconds=payload.request_timeout_seconds,
                 updated_by_user_id=user_id,
                 updated_at=timestamp,
             )
-            if search_embedding_column_exists(connection):
-                connection.execute(
-                    """
-                    UPDATE pragma_search_documents
-                    SET
-                        embedding = NULL,
-                        embedding_provider = NULL,
-                        embedding_model = NULL,
-                        embedding_updated_at = NULL
-                    WHERE embedding IS NOT NULL
-                       OR embedding_provider IS NOT NULL
-                       OR embedding_model IS NOT NULL
-                       OR embedding_updated_at IS NOT NULL
-                    """
+
+            schema_changed = False
+            if payload.enabled and embedding_dimensions is not None:
+                from pragma.storage.queries.search import (
+                    ensure_search_embedding_column_dimensions,
                 )
+
+                schema_changed = ensure_search_embedding_column_dimensions(
+                    connection,
+                    embedding_dimensions=embedding_dimensions,
+                )
+
+            if semantic_contract_changed and search_embedding_column_exists(connection):
+                clear_search_document_embeddings(connection)
+
+            embeddings_rebuild_required = payload.enabled and (
+                semantic_contract_changed or schema_changed
+            )
     except ConfigError:
         raise
     except PsycopgError as exc:
@@ -393,7 +498,10 @@ def update_ai_provider_settings_snapshot(
             code='AI_SETTINGS_UPDATE_FAILED',
         ) from exc
 
-    return AIProviderSettingsResponse.from_record(row)
+    return AIProviderSettingsResponse.from_record(
+        row,
+        embeddings_rebuild_required=embeddings_rebuild_required,
+    )
 
 
 def generate_query_embedding_for_search(
@@ -422,12 +530,13 @@ def generate_query_embedding_for_search(
 
 
 def test_ai_provider_connection(
-    storage: DatabasePool, payload: AIProviderTestRequest
+    storage: DatabasePool, settings: Settings, payload: AIProviderTestRequest
 ) -> AIProviderTestResponse:
     """Validate provider reachability with the currently persisted settings.
 
     Args:
         storage: Initialized database pool manager.
+        settings: Application settings controlling provider URL hardening.
         payload: Connectivity-test payload.
 
     Returns:
@@ -442,7 +551,11 @@ def test_ai_provider_connection(
     try:
         with storage.connection() as connection:
             settings_row = get_ai_provider_settings(connection)
-            provider_config = _provider_config_from_row(settings_row, require_enabled=True)
+            provider_config = _provider_config_from_row(
+                settings_row,
+                require_enabled=True,
+                allow_private_base_urls=settings.ai_allow_private_base_urls,
+            )
             embedding = request_embedding(
                 provider_config, payload.query_text, input_type='query'
             )
@@ -456,22 +569,34 @@ def test_ai_provider_connection(
             code='AI_SETTINGS_TEST_FAILED',
         ) from exc
 
+    if len(embedding) != provider_config.embedding_dimensions:
+        raise SearchError(
+            detail=(
+                'Embedding provider returned vector dimensions that do not match '
+                'the configured AI settings'
+            ),
+            code='SEARCH_EMBEDDING_DIMENSION_MISMATCH',
+            status_code=HTTPStatus.BAD_GATEWAY,
+        )
+
     return AIProviderTestResponse(
         provider=provider_config.provider,
         embedding_model=provider_config.embedding_model,
-        embedding_dimensions=len(embedding),
+        embedding_dimensions=provider_config.embedding_dimensions,
     )
 
 
 def rebuild_search_embeddings(
     storage: DatabasePool,
     payload: AISearchEmbeddingRebuildRequest,
+    settings: Settings | None = None,
 ) -> AISearchEmbeddingRebuildResponse:
     """Rebuild stored search embeddings using the configured provider.
 
     Args:
         storage: Initialized database pool manager.
         payload: Rebuild request payload.
+        settings: Optional application settings controlling provider URL hardening.
 
     Returns:
         AISearchEmbeddingRebuildResponse: Rebuild result payload.
@@ -486,7 +611,9 @@ def rebuild_search_embeddings(
     embedded = 0
     failed = 0
     failed_entry_ids: list[str] = []
-    expected_embedding_dimensions: int | None = None
+    allow_private_base_urls = (
+        settings.ai_allow_private_base_urls if settings is not None else False
+    )
     content_type_slug = (
         _normalize_content_type_slug(payload.content_type_slug)
         if payload.content_type_slug is not None
@@ -506,10 +633,16 @@ def rebuild_search_embeddings(
                 )
 
             settings_row = get_ai_provider_settings(connection)
-            provider_config = _provider_config_from_row(settings_row, require_enabled=True)
+            provider_config = _provider_config_from_row(
+                settings_row,
+                require_enabled=True,
+                allow_private_base_urls=allow_private_base_urls,
+            )
+            expected_embedding_dimensions = provider_config.embedding_dimensions
 
         remaining = payload.max_documents
-        offset = 0
+        after_updated_at = None
+        after_entry_id = None
 
         while remaining > 0:
             batch_limit = min(payload.batch_size, remaining)
@@ -521,13 +654,16 @@ def rebuild_search_embeddings(
                     expected_embedding_dimensions=expected_embedding_dimensions,
                     content_type_slug=content_type_slug,
                     limit=batch_limit,
-                    offset=offset if payload.force else 0,
                     stale_only=not payload.force,
+                    after_updated_at=after_updated_at if payload.force else None,
+                    after_entry_id=after_entry_id if payload.force else None,
                 )
             if not rows:
                 break
             if payload.force:
-                offset += len(rows)
+                last_row = rows[-1]
+                after_updated_at = last_row['updated_at']
+                after_entry_id = last_row['entry_id']
 
             for row in rows:
                 attempted += 1
@@ -542,12 +678,11 @@ def rebuild_search_embeddings(
                         source_text,
                         input_type='document',
                     )
-                    if expected_embedding_dimensions is None:
-                        expected_embedding_dimensions = len(embedding)
-                    elif len(embedding) != expected_embedding_dimensions:
+                    if len(embedding) != expected_embedding_dimensions:
                         raise SearchError(
                             detail=(
-                                'Embedding provider returned inconsistent vector dimensions'
+                                'Embedding provider returned vector dimensions that do not '
+                                'match the configured AI settings'
                             ),
                             code='SEARCH_EMBEDDING_DIMENSION_MISMATCH',
                             status_code=HTTPStatus.BAD_GATEWAY,

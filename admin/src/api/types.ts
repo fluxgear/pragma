@@ -243,6 +243,7 @@ export interface MediaAssetResponse {
   caption: string | null
   description: string | null
   variants: Record<string, string>
+  metadata: Record<string, unknown>
   uploader_user_id: string | null
   created_at: string
   updated_at: string
@@ -265,9 +266,11 @@ export interface AIProviderSettingsResponse {
   provider: AIProviderKind | null
   base_url: string | null
   embedding_model: string | null
+  embedding_dimensions: number | null
   request_timeout_seconds: number | null
   api_key_configured: boolean
   updated_at: string | null
+  embeddings_rebuild_required: boolean
 }
 
 export interface AIProviderSettingsUpdateRequest {
@@ -275,6 +278,7 @@ export interface AIProviderSettingsUpdateRequest {
   provider: AIProviderKind | null
   base_url: string | null
   embedding_model: string | null
+  embedding_dimensions: number | null
   request_timeout_seconds: number
   api_key?: string | null
   retain_existing_api_key?: boolean

@@ -14,6 +14,11 @@ const authApiMocks = vi.hoisted(() => ({
   logoutUser: vi.fn(),
   refreshSession: vi.fn(),
 }))
+const routerReplace = vi.hoisted(() => vi.fn())
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ replace: routerReplace }),
+}))
 
 vi.mock('@/api/auth', () => authApiMocks)
 
@@ -49,6 +54,7 @@ async function mountView(forcePasswordChange = false) {
 describe('AccountView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    routerReplace.mockResolvedValue(undefined)
     authApiMocks.changePassword.mockResolvedValue({
       id: 'user-1',
       email: 'admin@example.com',
@@ -62,8 +68,8 @@ describe('AccountView', () => {
     })
   })
 
-  it('submits a password change through the auth store', async () => {
-    const { wrapper } = await mountView(true)
+  it('submits a password change through the auth store and requires reauthentication', async () => {
+    const { authStore, wrapper } = await mountView(true)
 
     await wrapper.get('#current-password input').setValue('old-password')
     await wrapper.get('#new-password input').setValue('new-password')
@@ -75,7 +81,10 @@ describe('AccountView', () => {
       current_password: 'old-password',
       new_password: 'new-password',
     })
-    expect(wrapper.text()).toContain('Password changed successfully.')
+    expect(authStore.accessToken).toBeNull()
+    expect(authStore.user).toBeNull()
+    expect(routerReplace).toHaveBeenCalledWith({ name: 'login' })
+    expect(wrapper.text()).toContain('Please sign in again.')
   })
 
   it('blocks submission when confirmation does not match', async () => {

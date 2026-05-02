@@ -237,6 +237,7 @@ import { useRealtimeStore } from '@/stores/realtime'
 const CONTENT_PAGE_SIZE = 50
 const CONTENT_TYPE_ORDER_BY = 'updated_at'
 const CONTENT_ENTRY_ORDER_BY = 'updated_at'
+const REALTIME_ENTRY_REFRESH_DELAY_MS = 100
 
 const authStore = useAuthStore()
 const realtimeStore = useRealtimeStore()
@@ -260,6 +261,9 @@ const submitting = ref(false)
 
 let unsubscribeRealtime: (() => void) | null = null
 let unsubscribeResync: (() => void) | null = null
+let realtimeEntryRefreshTimer: ReturnType<typeof window.setTimeout> | null = null
+let realtimeEntryRefreshInFlight = false
+let realtimeEntryRefreshPending = false
 
 const contentTypeOptions = computed(() =>
   contentTypes.value.map((contentType) => ({
@@ -545,6 +549,48 @@ function eventMatchesSelectedContentType(event: RealtimeEventEnvelope): boolean 
   return typeof selectedSlug === 'string' && typeof contentTypeSlug === 'string' && selectedSlug === contentTypeSlug
 }
 
+function scheduleRealtimeEntriesRefresh(): void {
+  realtimeEntryRefreshPending = true
+
+  if (realtimeEntryRefreshTimer !== null || realtimeEntryRefreshInFlight) {
+    return
+  }
+
+  realtimeEntryRefreshTimer = window.setTimeout(() => {
+    realtimeEntryRefreshTimer = null
+    void flushRealtimeEntriesRefresh()
+  }, REALTIME_ENTRY_REFRESH_DELAY_MS)
+}
+
+async function flushRealtimeEntriesRefresh(): Promise<void> {
+  if (realtimeEntryRefreshInFlight || !realtimeEntryRefreshPending) {
+    return
+  }
+
+  realtimeEntryRefreshPending = false
+  realtimeEntryRefreshInFlight = true
+
+  try {
+    await loadEntries()
+  } finally {
+    realtimeEntryRefreshInFlight = false
+    if (realtimeEntryRefreshPending && realtimeEntryRefreshTimer === null) {
+      realtimeEntryRefreshTimer = window.setTimeout(() => {
+        realtimeEntryRefreshTimer = null
+        void flushRealtimeEntriesRefresh()
+      }, REALTIME_ENTRY_REFRESH_DELAY_MS)
+    }
+  }
+}
+
+function clearRealtimeEntriesRefresh(): void {
+  if (realtimeEntryRefreshTimer !== null) {
+    window.clearTimeout(realtimeEntryRefreshTimer)
+    realtimeEntryRefreshTimer = null
+  }
+  realtimeEntryRefreshPending = false
+}
+
 function handleRealtimeEvent(event: RealtimeEventEnvelope): void {
   if (
     (event.type === 'content.entry.created'
@@ -552,7 +598,7 @@ function handleRealtimeEvent(event: RealtimeEventEnvelope): void {
       || event.type === 'content.entry.deleted')
     && eventMatchesSelectedContentType(event)
   ) {
-    void loadEntries()
+    scheduleRealtimeEntriesRefresh()
   }
 }
 
@@ -574,6 +620,7 @@ onMounted(async () => {
 onUnmounted(() => {
   unsubscribeRealtime?.()
   unsubscribeResync?.()
+  clearRealtimeEntriesRefresh()
   unsubscribeRealtime = null
   unsubscribeResync = null
 })

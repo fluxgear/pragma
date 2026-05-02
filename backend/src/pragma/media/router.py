@@ -13,12 +13,14 @@ Raises:
 
 from __future__ import annotations
 
-from typing import Annotated
+from tempfile import SpooledTemporaryFile
+from typing import Annotated, BinaryIO
 from urllib.parse import unquote_to_bytes
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from pragma.auth.dependencies import get_current_user, require_permission
 from pragma.auth.permissions import (
@@ -100,7 +102,7 @@ _DETAIL_MEDIA_ERROR_RESPONSES = {
 
 
 _UPLOAD_METADATA_HEADER_ENCODING_PREFIX = 'utf8-url:'
-
+_UPLOAD_SPOOL_MAX_MEMORY_BYTES = 1024 * 1024
 
 def _decode_upload_header_value(value: str | None, max_length: int) -> str | None:
     """Decode an upload metadata header value produced by the admin client."""
@@ -148,19 +150,8 @@ def _raise_upload_too_large() -> None:
     )
 
 
-async def _read_limited_upload_body(request: Request, settings: Settings) -> bytes:
-    """Read raw upload bytes while enforcing the configured size limit.
-
-    Args:
-        request: FastAPI request carrying raw upload bytes.
-        settings: Application settings with the media upload limit.
-
-    Returns:
-        bytes: Raw request body bytes capped by the configured limit.
-
-    Raises:
-        MediaError: If Content-Length or streamed bytes exceed the limit.
-    """
+async def _spool_limited_upload_body(request: Request, settings: Settings) -> tuple[BinaryIO, int]:
+    """Spool raw upload bytes while enforcing the configured size limit."""
 
     content_length = request.headers.get('content-length')
     if content_length is not None:
@@ -170,17 +161,22 @@ async def _read_limited_upload_body(request: Request, settings: Settings) -> byt
             if declared_size > settings.media_max_upload_bytes:
                 _raise_upload_too_large()
 
-    body = bytearray()
+    upload_source = SpooledTemporaryFile(  # noqa: SIM115
+        max_size=_UPLOAD_SPOOL_MAX_MEMORY_BYTES,
+        mode='w+b',
+    )
     received_size = 0
     async for chunk in request.stream():
         if not chunk:
             continue
         received_size += len(chunk)
         if received_size > settings.media_max_upload_bytes:
+            upload_source.close()
             _raise_upload_too_large()
-        body.extend(chunk)
+        upload_source.write(chunk)
+    upload_source.seek(0)
 
-    return bytes(body)
+    return upload_source, received_size
 
 
 def _resolve_upload_metadata(
@@ -270,19 +266,24 @@ async def upload_media_asset(
         header_description=header_description,
         query_description=query_description,
     )
-    body = await _read_limited_upload_body(request, settings)
+    upload_source, size_bytes = await _spool_limited_upload_body(request, settings)
     declared_content_type = request.headers.get('content-type')
-    return create_media_asset(
-        storage=storage,
-        settings=settings,
-        data=body,
-        declared_content_type=declared_content_type,
-        filename=filename,
-        alt_text=alt_text,
-        caption=caption,
-        description=description,
-        current_user=dict(current_user),
-    )
+    try:
+        return await run_in_threadpool(
+            create_media_asset,
+            storage=storage,
+            settings=settings,
+            upload_source=upload_source,
+            size_bytes=size_bytes,
+            declared_content_type=declared_content_type,
+            filename=filename,
+            alt_text=alt_text,
+            caption=caption,
+            description=description,
+            current_user=dict(current_user),
+        )
+    finally:
+        upload_source.close()
 
 
 @router.get(
@@ -376,6 +377,39 @@ def get_media_library_content(
 
     _ = current_user
     path, mime_type, filename = resolve_media_content(storage, settings, media_id)
+    return FileResponse(path=path, media_type=mime_type, filename=filename)
+
+@router.get(
+    '/assets/{media_id}/variants/{variant_name}',
+    responses=_DETAIL_MEDIA_ERROR_RESPONSES,
+)
+def get_media_library_variant_content(
+    media_id: UUID,
+    variant_name: str,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_MEDIA_ASSETS_READ))
+    ],
+) -> FileResponse:
+    """Return stored derivative media bytes for authenticated preview.
+
+    Args:
+        media_id: Media asset identifier.
+        variant_name: Derivative variant name.
+        storage: Initialized database pool manager.
+        settings: Application settings.
+        current_user: Authenticated user context.
+
+    Returns:
+        FileResponse: Authenticated variant file response.
+
+    Raises:
+        MediaError: If the media asset or variant does not exist.
+    """
+
+    _ = current_user
+    path, mime_type, filename = resolve_media_content(storage, settings, media_id, variant_name)
     return FileResponse(path=path, media_type=mime_type, filename=filename)
 
 

@@ -100,3 +100,81 @@ def test_settings_rejects_invalid_log_level_names() -> None:
 
     with pytest.raises(ValidationError, match='log_level must be one of'):
         Settings(**_settings_kwargs(log_level='verbose'))
+
+
+def test_settings_rejects_https_base_url_with_insecure_refresh_cookie() -> None:
+    """Verify HTTPS deployments must use Secure refresh cookies.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    with pytest.raises(ValidationError, match='base_url uses HTTPS'):
+        Settings(**_settings_kwargs(base_url='https://example.com'))
+
+
+def test_production_settings_reject_placeholder_and_short_secrets() -> None:
+    """Verify production runtime mode rejects weak non-Docker secrets.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    with pytest.raises(ValidationError, match='placeholder or weak'):
+        Settings(
+            **_settings_kwargs(
+                runtime_environment='production',
+                database_password='replace-with-a-random-database-password',
+                jwt_secret_key='replace-with-at-least-32-random-characters',
+                refresh_cookie_secure=True,
+            )
+        )
+
+    with pytest.raises(ValidationError, match='at least 32'):
+        Settings(
+            **_settings_kwargs(
+                runtime_environment='production',
+                database_password='short-but-not-placeholder',
+                jwt_secret_key='short-but-not-placeholder',
+                refresh_cookie_secure=True,
+            )
+        )
+
+
+def test_production_settings_accept_strong_secrets_and_private_ai_flag() -> None:
+    """Verify strong production secrets and the private-AI opt-in flag load.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    settings = Settings(
+        **_settings_kwargs(
+            runtime_environment='production',
+            database_password='d' * 32,
+            jwt_secret_key='j' * 32,
+            refresh_cookie_secure=True,
+            ai_allow_private_base_urls=True,
+        )
+    )
+
+    assert settings.runtime_environment == 'production'
+    assert settings.ai_allow_private_base_urls is True

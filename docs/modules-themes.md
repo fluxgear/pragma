@@ -38,6 +38,8 @@ The runtime discovers manifests, loads persisted enablement state from PostgreSQ
 
 Modules are trusted operator-installed Python code. When an enabled module is imported, its entrypoint executes inside the backend process with the same application privileges as Pragma code. Hooks also run in-process when dispatched. This is not a sandbox, permission boundary, or isolation mechanism against malicious module code.
 
+Set `PRAGMA_MODULE_TRUST_STRICT=true` to reject enabled module loading when trust diagnostics find unsafe module paths. Strict mode does not sandbox Python code; it only prevents Pragma from importing enabled modules whose module root, manifest, or entrypoint is group/world writable, cannot be inspected, or is not owned by the backend process user on platforms that expose ownership. In advisory mode (`false`, the default), the same diagnostics are logged and module loading continues to preserve Docker named-volume deployments.
+
 Only install modules from trusted sources, and control write access to `PRAGMA_MODULE_ROOT` at the host, volume, or deployment layer. A writable module root is equivalent to the ability to run backend Python code, including reading process-accessible secrets or changing process state. Docker production uses a named `modules` volume for `/app/modules`; keep the deployment process that writes that volume operator-controlled rather than world-writable.
 
 Pragma logs a warning whenever it loads an enabled module entrypoint so operators can diagnose when trusted executable module code enters the process. Filesystem mode checks are advisory rather than enforced because supported Docker named-volume deployments may not expose uniform host permissions.

@@ -67,6 +67,7 @@ class MediaAssetResponse(BaseModel):
     caption: str | None
     description: str | None
     variants: dict[str, str]
+    metadata: dict[str, Any]
     uploader_user_id: UUID | None
     created_at: datetime
     updated_at: datetime
@@ -107,6 +108,7 @@ class MediaAssetResponse(BaseModel):
             caption=record['caption'],
             description=record['description'],
             variants=dict(record['variants'] or {}),
+            metadata=dict(record['metadata'] or {}),
             uploader_user_id=record['uploader_user_id'],
             created_at=record['created_at'],
             updated_at=record['updated_at'],

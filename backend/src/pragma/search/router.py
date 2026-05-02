@@ -17,6 +17,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
+from pragma.auth.dependencies import get_optional_current_user
 from pragma.config import Settings, get_settings
 from pragma.search.models import SearchQueryParams, SearchQueryResponse
 from pragma.search.service import search_public_entries
@@ -61,6 +62,7 @@ def search_entries(
     params: Annotated[SearchQueryParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
     settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[dict[str, object] | None, Depends(get_optional_current_user)],
 ) -> SearchQueryResponse:
     """Search published content entries.
 
@@ -68,6 +70,7 @@ def search_entries(
         params: Search query parameters.
         storage: Initialized database pool manager.
         settings: Application settings.
+        current_user: Optional authenticated user context.
 
     Returns:
         SearchQueryResponse: Paginated public-search response.
@@ -77,4 +80,9 @@ def search_entries(
         StorageError: If PostgreSQL access fails.
     """
 
-    return search_public_entries(storage, settings, params)
+    return search_public_entries(
+        storage,
+        settings,
+        params,
+        allow_provider_embeddings=current_user is not None,
+    )

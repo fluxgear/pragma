@@ -29,6 +29,7 @@ from pragma.public.service import (
     build_common_context,
     build_entry_url,
     build_pagination,
+    build_public_entry_card,
     build_public_entry_view,
     build_search_url,
     build_seo_context,
@@ -37,7 +38,6 @@ from pragma.public.service import (
     list_published_entries,
     normalize_pagination,
     render_public_template,
-    to_post_card,
 )
 from pragma.search.models import SearchQueryParams
 from pragma.search.service import search_public_entries
@@ -251,10 +251,7 @@ def render_home(
             exc,
         )
 
-    featured_posts = [
-        to_post_card(build_public_entry_view(entry_row))
-        for entry_row in entry_rows
-    ]
+    featured_posts = [build_public_entry_card(entry_row) for entry_row in entry_rows]
 
     context = build_common_context(site_context, seo_context)
     context['featured_posts'] = featured_posts
@@ -384,7 +381,7 @@ def render_post(
     for related_row in related_rows:
         if str(related_row['slug']) == post_view.slug:
             continue
-        related_posts.append(to_post_card(build_public_entry_view(related_row)))
+        related_posts.append(build_public_entry_card(related_row))
         if len(related_posts) == 3:
             break
 
@@ -447,7 +444,7 @@ def render_archive(
             exc,
         )
 
-    items = [to_post_card(build_public_entry_view(entry_row)) for entry_row in entry_rows]
+    items = [build_public_entry_card(entry_row) for entry_row in entry_rows]
 
     canonical_path = build_archive_url(
         page=normalized_page if normalized_page != 1 else None,
@@ -552,7 +549,9 @@ def render_search(
             offset=(normalized_page - 1) * normalized_per_page,
         )
         try:
-            response = search_public_entries(storage, settings, params)
+            response = search_public_entries(
+                storage, settings, params, allow_provider_embeddings=False
+            )
             total = response.total
             results = [
                 {

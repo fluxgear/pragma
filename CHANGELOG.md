@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-beta.3 — 2026-05-02
+
+### Fixed
+- Completed remaining audit remediation across performance, AI embeddings, media upload handling, module trust checks, search pagination, realtime safeguards, public routing, and production configuration.
+- Added database migrations for performance indexes, configured embedding dimensions, and media metadata.
+- Expanded media upload support with safe metadata extraction, raster thumbnail variants, admin copy updates, documentation updates, and regression coverage.
+
 ## v1.0.0-beta.2 — 2026-05-01
 
 ### Fixed

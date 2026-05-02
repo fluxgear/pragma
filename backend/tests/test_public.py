@@ -24,6 +24,7 @@ from pragma.errors import StorageError, ThemeError
 from tests.helpers import build_database_dsn
 
 public_router_module = import_module('pragma.public.router')
+public_service_module = import_module('pragma.public.service')
 
 
 def _bootstrap_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> None:
@@ -494,6 +495,68 @@ def test_page_with_plain_text_body_html_field_escapes_untrusted_markup(
     assert '<script>alert(1)</script>' not in response.text
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in response.text
     assert '&lt;p&gt;Injected paragraph&lt;/p&gt;' in response.text
+
+
+def test_public_card_routes_skip_body_html_sanitization_for_card_entries(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify public card routes do not build full sanitized body views.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    post_type = _create_content_type(client, headers, name='Posts', slug='post')
+    primary_post = _create_entry(
+        client,
+        headers,
+        str(post_type['id']),
+        title='Primary Card Route Post',
+        summary='Primary card summary',
+        body='<p>Primary full body</p>',
+    )
+    related_post = _create_entry(
+        client,
+        headers,
+        str(post_type['id']),
+        title='Related Card Route Post',
+        summary='Related card summary',
+        body='<p>Related card body</p>',
+    )
+    original_sanitizer = public_service_module._sanitize_public_body_html
+
+    def _raise_for_related_card_body(value: str) -> str:
+        if 'Related card body' in value:
+            raise AssertionError('card route sanitized related body HTML')
+        return original_sanitizer(value)
+
+    monkeypatch.setattr(
+        public_service_module,
+        '_sanitize_public_body_html',
+        _raise_for_related_card_body,
+    )
+
+    home_response = client.get('/')
+    archive_response = client.get('/archive')
+    post_response = client.get(f"/posts/{primary_post['slug']}")
+
+    assert home_response.status_code == 200
+    assert archive_response.status_code == 200
+    assert post_response.status_code == 200
+    assert 'Related Card Route Post' in home_response.text
+    assert 'Related Card Route Post' in archive_response.text
+    assert f'/posts/{related_post["slug"]}' in post_response.text
 
 
 @pytest.mark.parametrize(

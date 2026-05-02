@@ -16,6 +16,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import logging
+import os
+import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,6 +110,18 @@ class _ModuleEntrypointCacheKey:
     entrypoint: _ModuleFileFingerprint
 
 
+@dataclass(frozen=True, slots=True)
+class _ModuleTrustDiagnostic:
+    """Auditable filesystem diagnostic for a trusted module load boundary."""
+
+    path: str
+    code: str
+    reason: str
+    mode: int | None
+    owner_uid: int | None
+    current_uid: int | None
+
+
 class ModuleRuntime:
     """Manage module discovery, loading, and deterministic event dispatch.
 
@@ -164,19 +178,35 @@ class ModuleRuntime:
             error_code: str | None = None
             entrypoint_cache_key: _ModuleEntrypointCacheKey | None = None
 
-            try:
-                entrypoint_cache_key = self._build_entrypoint_cache_key(discovered_module)
-                current_cache_keys.add(entrypoint_cache_key)
-            except ModuleError as exc:
-                if enabled:
-                    error_code = exc.code
+            if enabled:
+                trust_diagnostics = self._inspect_module_trust_boundary(discovered_module)
+                for trust_diagnostic in trust_diagnostics:
+                    self._log_module_trust_diagnostic(module_id, trust_diagnostic)
+                if trust_diagnostics and self._settings.module_trust_strict:
+                    error_code = 'MODULE_TRUST_VALIDATION_FAILED'
                     logger.warning(
-                        'Module load failed',
+                        'Module load rejected by strict trust boundary validation',
                         extra={
                             'module_id': module_id,
-                            'module_code': exc.code,
+                            'module_code': error_code,
+                            'module_diagnostic_count': len(trust_diagnostics),
                         },
                     )
+
+            if error_code is None:
+                try:
+                    entrypoint_cache_key = self._build_entrypoint_cache_key(discovered_module)
+                    current_cache_keys.add(entrypoint_cache_key)
+                except ModuleError as exc:
+                    if enabled:
+                        error_code = exc.code
+                        logger.warning(
+                            'Module load failed',
+                            extra={
+                                'module_id': module_id,
+                                'module_code': exc.code,
+                            },
+                        )
 
             if enabled and error_code is None and entrypoint_cache_key is not None:
                 try:
@@ -335,6 +365,128 @@ class ModuleRuntime:
                             'threshold_seconds': self._settings.module_hook_slow_seconds,
                         },
                     )
+
+    def _inspect_module_trust_boundary(
+        self,
+        discovered_module: DiscoveredModule,
+    ) -> tuple[_ModuleTrustDiagnostic, ...]:
+        """Return filesystem diagnostics for an enabled trusted module."""
+
+        diagnostics: list[_ModuleTrustDiagnostic] = []
+        audit_paths = (
+            ('module root', discovered_module.root_path),
+            ('module manifest', discovered_module.manifest_path),
+            ('module entrypoint', discovered_module.entrypoint_path),
+        )
+        for label, path in audit_paths:
+            diagnostics.extend(
+                self._inspect_module_trust_path(
+                    path=path,
+                    label=label,
+                )
+            )
+        return tuple(diagnostics)
+
+    def _inspect_module_trust_path(
+        self,
+        *,
+        path: Path,
+        label: str,
+    ) -> tuple[_ModuleTrustDiagnostic, ...]:
+        """Inspect one module-controlled filesystem path for trust-boundary risks."""
+
+        resolved_path = str(path)
+        current_uid = self._current_user_id()
+        try:
+            path_stat = path.stat()
+        except OSError as exc:
+            reason = exc.strerror or str(exc)
+            return (
+                _ModuleTrustDiagnostic(
+                    path=resolved_path,
+                    code='MODULE_TRUST_STAT_FAILED',
+                    reason=f'Unable to inspect {label}: {reason}',
+                    mode=None,
+                    owner_uid=None,
+                    current_uid=current_uid,
+                ),
+            )
+
+        diagnostics: list[_ModuleTrustDiagnostic] = []
+        mode = path_stat.st_mode
+        owner_uid = getattr(path_stat, 'st_uid', None)
+
+        if mode & stat.S_IWOTH:
+            diagnostics.append(
+                _ModuleTrustDiagnostic(
+                    path=resolved_path,
+                    code='MODULE_TRUST_WORLD_WRITABLE',
+                    reason=f'{label} is writable by all users',
+                    mode=mode,
+                    owner_uid=owner_uid,
+                    current_uid=current_uid,
+                )
+            )
+        if mode & stat.S_IWGRP:
+            diagnostics.append(
+                _ModuleTrustDiagnostic(
+                    path=resolved_path,
+                    code='MODULE_TRUST_GROUP_WRITABLE',
+                    reason=f'{label} is writable by its group',
+                    mode=mode,
+                    owner_uid=owner_uid,
+                    current_uid=current_uid,
+                )
+            )
+        if (
+            current_uid is not None
+            and owner_uid is not None
+            and owner_uid != current_uid
+        ):
+            diagnostics.append(
+                _ModuleTrustDiagnostic(
+                    path=resolved_path,
+                    code='MODULE_TRUST_OWNER_MISMATCH',
+                    reason=f'{label} is not owned by the backend process user',
+                    mode=mode,
+                    owner_uid=owner_uid,
+                    current_uid=current_uid,
+                )
+            )
+
+        return tuple(diagnostics)
+
+    @staticmethod
+    def _current_user_id() -> int | None:
+        """Return the effective process user id when the platform exposes one."""
+
+        get_effective_user_id = getattr(os, 'geteuid', None)
+        if get_effective_user_id is None:
+            return None
+        return int(get_effective_user_id())
+
+    def _log_module_trust_diagnostic(
+        self,
+        module_id: str,
+        diagnostic: _ModuleTrustDiagnostic,
+    ) -> None:
+        """Log one auditable module trust-boundary diagnostic."""
+
+        logger.warning(
+            'Module trust boundary diagnostic',
+            extra={
+                'module_id': module_id,
+                'module_code': diagnostic.code,
+                'module_path': diagnostic.path,
+                'module_trust_reason': diagnostic.reason,
+                'module_trust_strict': self._settings.module_trust_strict,
+                'module_path_mode': (
+                    None if diagnostic.mode is None else oct(stat.S_IMODE(diagnostic.mode))
+                ),
+                'module_owner_uid': diagnostic.owner_uid,
+                'module_current_uid': diagnostic.current_uid,
+            },
+        )
 
     def _load_persisted_state(self, storage: DatabasePool) -> dict[str, bool]:
         """Load persisted module enable/disable state from storage.

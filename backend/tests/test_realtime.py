@@ -674,12 +674,14 @@ def test_realtime_ticket_endpoint_requires_content_read_permission(
 def test_realtime_websocket_connect_disconnect_and_reconnect(
     migrated_database: dict[str, str],
     bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify websocket subscription connect/disconnect and reconnect behavior.
 
     Args:
         migrated_database: Runtime environment values for the migrated test database.
-        bootstrap_payload: Bootstrap request payload.
+        bootstrap_payload: Bootstrap payload.
+        monkeypatch: Pytest monkeypatch fixture.
 
     Returns:
         None.
@@ -689,6 +691,17 @@ def test_realtime_websocket_connect_disconnect_and_reconnect(
     """
 
     _ = migrated_database
+    threadpool_calls: list[str] = []
+
+    async def _record_run_in_threadpool(func, *args, **kwargs):
+        threadpool_calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        'pragma.realtime.router.run_in_threadpool',
+        _record_run_in_threadpool,
+    )
+
     with TestClient(create_app()) as client:
         headers = _auth_headers(client, bootstrap_payload)
 
@@ -716,6 +729,11 @@ def test_realtime_websocket_connect_disconnect_and_reconnect(
         ) as websocket:
             event = websocket.receive_json()
             assert event['type'] == 'realtime.resync_required'
+
+    assert threadpool_calls == [
+        '_authenticate_websocket_user',
+        '_authenticate_websocket_user',
+    ]
 
 
 def test_realtime_websocket_rejects_invalid_and_expired_ticket(

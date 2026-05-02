@@ -23,6 +23,7 @@ from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.capabilities import get_extension_capabilities
 from pragma.storage.queries.install import get_schema_status
+from pragma.storage.queries.system import ping_database
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -58,7 +59,7 @@ def _build_ready_payload(storage: DatabasePool) -> dict[str, Any]:
 
     try:
         with storage.connection() as connection:
-            connection.execute("SELECT 1").fetchone()
+            ping_database(connection)
             schema_status = get_schema_status(connection)
             capabilities = get_extension_capabilities(connection)
     except PsycopgError as exc:

@@ -41,7 +41,7 @@
     <input
       ref="fileInput"
       type="file"
-      accept="image/png,image/jpeg,image/gif,image/webp"
+      accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,audio/mpeg,audio/wav,audio/ogg,video/mp4,video/webm"
       class="media-library__file-input"
       :disabled="uploading || !canUploadMediaAssets"
       @change="handleFileSelection"
@@ -68,9 +68,9 @@
               :modelValue="selectedFile?.name ?? ''"
               readonly
               :disabled="!canUploadMediaAssets"
-              placeholder="Choose an image to upload"
+              placeholder="Choose media to upload"
             />
-            <small class="muted">Supported types: PNG, JPEG, GIF, and WebP.</small>
+            <small class="muted">Supported types: PNG, JPEG, GIF, WebP, PDF, MP3, WAV, OGG, MP4, and WebM. SVG is not accepted.</small>
           </div>
 
           <div class="field">
@@ -127,15 +127,15 @@
           <Column header="Preview" style="width: 8rem;">
             <template #body="slotProps">
               <img
-                v-if="slotProps.data.is_image && previewUrl(slotProps.data.id)"
-                :src="previewUrl(slotProps.data.id) ?? undefined"
+                v-if="slotProps.data.is_image && thumbnailUrl(slotProps.data)"
+                :src="thumbnailUrl(slotProps.data) ?? undefined"
                 :alt="slotProps.data.alt_text || slotProps.data.original_filename"
                 class="media-library__thumb"
               >
               <Tag
                 v-else
                 severity="secondary"
-                :value="slotProps.data.mime_type"
+                :value="slotProps.data.is_image ? 'No preview' : slotProps.data.mime_type"
               />
             </template>
           </Column>
@@ -256,7 +256,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Column from 'primevue/column'
@@ -269,7 +269,6 @@ import Textarea from 'primevue/textarea'
 
 import {
   deleteMediaAsset,
-  fetchMediaContentBlob,
   listMediaAssets,
   uploadMediaAsset,
 } from '@/api/media'
@@ -283,7 +282,6 @@ const MEDIA_ORDER_BY = 'updated_at'
 const authStore = useAuthStore()
 
 const assets = ref<MediaAssetResponse[]>([])
-const previewUrls = ref<Record<string, string>>({})
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const loading = ref(false)
@@ -339,28 +337,6 @@ function handleFileSelection(event: Event): void {
   selectedFile.value = canUploadMediaAssets.value ? input.files?.[0] ?? null : null
 }
 
-function clearPreviewUrls(): void {
-  Object.values(previewUrls.value).forEach((url) => URL.revokeObjectURL(url))
-  previewUrls.value = {}
-}
-
-async function loadPreviewUrls(nextAssets: MediaAssetResponse[]): Promise<void> {
-  clearPreviewUrls()
-
-  await Promise.all(
-    nextAssets
-      .filter((asset) => asset.is_image)
-      .map(async (asset) => {
-        try {
-          const blob = await fetchMediaContentBlob(asset.id)
-          previewUrls.value[asset.id] = URL.createObjectURL(blob)
-        } catch {
-          previewUrls.value[asset.id] = ''
-        }
-      }),
-  )
-}
-
 async function loadAssets(): Promise<void> {
   loading.value = true
   pageErrorMessage.value = null
@@ -375,12 +351,10 @@ async function loadAssets(): Promise<void> {
     assetsTotal.value = response.total
     assetsLimit.value = response.limit
     assetsOffset.value = response.offset
-    await loadPreviewUrls(response.items)
   } catch (error) {
     pageErrorMessage.value = asUserMessage(error)
     assets.value = []
     assetsTotal.value = 0
-    clearPreviewUrls()
   } finally {
     loading.value = false
   }
@@ -487,9 +461,23 @@ async function goToNextAssetsPage(): Promise<void> {
   await loadAssets()
 }
 
-function previewUrl(mediaId: string): string | null {
-  const url = previewUrls.value[mediaId] ?? ''
-  return url.length > 0 ? url : null
+function isSafeThumbnailUrl(url: string | undefined): url is string {
+  if (!url) {
+    return false
+  }
+
+  return (
+    url.startsWith('data:image/')
+    || url.startsWith('blob:')
+    || url.startsWith('http://')
+    || url.startsWith('https://')
+    || (url.startsWith('/') && !url.startsWith('/api/'))
+  )
+}
+
+function thumbnailUrl(asset: MediaAssetResponse): string | null {
+  const candidateUrls = [asset.variants.thumbnail, asset.variants.thumb]
+  return candidateUrls.find(isSafeThumbnailUrl) ?? null
 }
 
 function formatSize(sizeBytes: number): string {
@@ -523,9 +511,5 @@ function formatTimestamp(value: string): string {
 
 onMounted(async () => {
   await loadAssets()
-})
-
-onBeforeUnmount(() => {
-  clearPreviewUrls()
 })
 </script>

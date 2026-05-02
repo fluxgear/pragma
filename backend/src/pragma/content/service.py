@@ -1203,16 +1203,6 @@ def update_content_type_record(
                 timestamp,
             )
             field_rows = get_field_definitions(connection, content_type_id)
-            _run_search_indexing_hook(
-                connection,
-                operation="content_type_rebuild",
-                context={"content_type_id": str(content_type_id)},
-                hook=lambda: rebuild_search_documents_for_content_type(
-                    connection,
-                    content_type_id=content_type_id,
-                    field_rows=field_rows,
-                ),
-            )
     except ContentError:
         raise
     except IntegrityError as exc:
@@ -1226,6 +1216,28 @@ def update_content_type_record(
             detail="Unable to update content type",
             code="CONTENT_TYPE_UPDATE_FAILED",
         ) from exc
+
+    try:
+        with storage.connection() as rebuild_connection:
+            _run_search_indexing_hook(
+                rebuild_connection,
+                operation="content_type_rebuild",
+                context={"content_type_id": str(content_type_id)},
+                hook=lambda: rebuild_search_documents_for_content_type(
+                    rebuild_connection,
+                    content_type_id=content_type_id,
+                    field_rows=field_rows,
+                ),
+            )
+    except PsycopgError:
+        logging.getLogger(__name__).warning(
+            "Content search-indexing storage hook failed",
+            extra={
+                "operation": "content_type_rebuild",
+                "content_type_id": str(content_type_id),
+            },
+            exc_info=True,
+        )
 
     return _build_content_type_response(content_type_row, field_rows)
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +24,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 _STANDARD_LOG_LEVELS = frozenset({'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'})
+_PRODUCTION_SECRET_MIN_LENGTH = 32
+_PLACEHOLDER_SECRET_PREFIXES = ('replace-with-', 'REPLACE-WITH-')
+_WEAK_SECRET_VALUES = frozenset(
+    {'change-me', 'CHANGE-ME', 'changeme', 'CHANGEME', 'password', 'secret', 'test'}
+)
 
 
 class Settings(BaseSettings):
@@ -68,13 +73,16 @@ class Settings(BaseSettings):
     media_root: str = Field(default='media', min_length=1)
     media_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
     media_allowed_mime_types: str = Field(
-        default='image/jpeg,image/png,image/gif,image/webp',
+        default='image/jpeg,image/png,image/gif,image/webp,application/pdf,audio/mpeg,audio/wav,audio/ogg,video/mp4,video/webm',
         min_length=1,
     )
     base_url: str = Field(min_length=1)
     theme_root: str = Field(default='../themes', min_length=1)
+    module_trust_strict: bool = False
     module_root: str = Field(default='../modules', min_length=1)
     module_hook_slow_seconds: float = Field(default=0.5, ge=0)
+    runtime_environment: Literal['development', 'test', 'production'] = 'development'
+    ai_allow_private_base_urls: bool = False
     theme_active_id: str = Field(default='default', min_length=1)
     theme_default_id: str = Field(default='default', min_length=1)
     log_level: str = Field(default='INFO', min_length=1)
@@ -208,13 +216,71 @@ class Settings(BaseSettings):
             Settings: Validated settings object.
 
         Raises:
-            ValueError: If SameSite=None is configured without secure cookies.
+            ValueError: If SameSite=None or HTTPS is configured without secure cookies.
         """
 
         if self.refresh_cookie_samesite == 'none' and not self.refresh_cookie_secure:
             raise ValueError(
                 'refresh_cookie_secure must be true when refresh_cookie_samesite is "none"'
             )
+        parsed_base_url = urlparse(self.base_url)
+        if parsed_base_url.scheme == 'https' and not self.refresh_cookie_secure:
+            raise ValueError(
+                'refresh_cookie_secure must be true when base_url uses HTTPS'
+            )
+        return self
+
+    @staticmethod
+    def _is_placeholder_or_weak_secret(value: str) -> bool:
+        """Return whether a production secret is an obvious placeholder.
+
+        Args:
+            value: Secret value after trimming.
+
+        Returns:
+            bool: True when the value is a known placeholder or weak default.
+
+        Raises:
+            None.
+        """
+
+        stripped = value.strip()
+        return (
+            not stripped
+            or stripped in _WEAK_SECRET_VALUES
+            or any(stripped.startswith(prefix) for prefix in _PLACEHOLDER_SECRET_PREFIXES)
+        )
+
+    @model_validator(mode='after')
+    def validate_production_secret_strength(self) -> Settings:
+        """Reject placeholder or weak secrets in production runtime mode.
+
+        Args:
+            None.
+
+        Returns:
+            Settings: Validated settings object.
+
+        Raises:
+            ValueError: If production secrets are placeholders or too short.
+        """
+
+        if self.runtime_environment != 'production':
+            return self
+
+        production_secrets = {
+            'database_password': self.database_password,
+            'jwt_secret_key': self.jwt_secret_key,
+        }
+        for field_name, secret_value in production_secrets.items():
+            stripped_secret = secret_value.strip()
+            if self._is_placeholder_or_weak_secret(stripped_secret):
+                raise ValueError(f'{field_name} must not use a placeholder or weak value')
+            if len(stripped_secret) < _PRODUCTION_SECRET_MIN_LENGTH:
+                raise ValueError(
+                    f'{field_name} must be at least {_PRODUCTION_SECRET_MIN_LENGTH} '
+                    'characters in production'
+                )
         return self
 
     @model_validator(mode='after')

@@ -44,6 +44,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Message from 'primevue/message'
@@ -53,6 +54,7 @@ import { asUserMessage } from '@/api/errors'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
+const router = useRouter()
 const { requiresPasswordChange } = storeToRefs(authStore)
 
 const form = reactive({
@@ -82,7 +84,8 @@ async function submitPasswordChange(): Promise<void> {
     form.currentPassword = ''
     form.newPassword = ''
     form.confirmPassword = ''
-    successMessage.value = 'Password changed successfully.'
+    successMessage.value = 'Password changed successfully. Please sign in again.'
+    await router.replace({ name: 'login' })
   } catch (error) {
     errorMessage.value = asUserMessage(error)
   } finally {

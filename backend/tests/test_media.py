@@ -26,6 +26,7 @@ from pragma.app import create_app
 from pragma.auth.security import utc_now
 from pragma.config import Settings
 from pragma.errors import StorageError
+from pragma.media.storage import LocalFilesystemStorageBackend
 from tests.helpers import build_database_dsn, build_runtime_env
 
 _PNG_1X1 = (
@@ -162,7 +163,7 @@ def small_upload_limit_media_client(
 
 
 def test_migrations_create_media_schema(migrated_database: dict[str, str]) -> None:
-    """Verify the Alembic chain creates the expected M5 media tables and indexes.
+    """Verify the Alembic chain creates the expected media tables and indexes.
 
     Args:
         migrated_database: Environment values for the migrated test database.
@@ -184,7 +185,15 @@ def test_migrations_create_media_schema(migrated_database: dict[str, str]) -> No
                 to_regclass('public.ix_pragma_media_assets_updated_at') AS updated_at_index,
                 to_regclass(
                     'public.ix_pragma_media_assets_mime_type_updated_at'
-                ) AS mime_type_updated_at_index
+                ) AS mime_type_updated_at_index,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_media_assets'
+                      AND column_name = 'metadata'
+                      AND data_type = 'jsonb'
+                ) AS metadata_column
             """
         ).fetchone()
 
@@ -192,6 +201,7 @@ def test_migrations_create_media_schema(migrated_database: dict[str, str]) -> No
     assert row['storage_key_index'] == 'ix_pragma_media_assets_storage_key'
     assert row['updated_at_index'] == 'ix_pragma_media_assets_updated_at'
     assert row['mime_type_updated_at_index'] == 'ix_pragma_media_assets_mime_type_updated_at'
+    assert row['metadata_column'] is True
 
 
 def test_media_routes_require_auth(media_client: TestClient) -> None:
@@ -220,20 +230,51 @@ def test_media_upload_list_detail_content_and_delete_flow(
     media_client: TestClient,
     bootstrap_payload: dict[str, str],
     media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify media uploads work end to end across API and local storage.
+    """Verify media uploads work end to end across API and local storage."""
+    threadpool_calls: list[str] = []
+    service_upload_sources: list[object] = []
+    store_stream_sources: list[object] = []
+    original_create_media_asset = __import__(
+        'pragma.media.service', fromlist=['create_media_asset']
+    ).create_media_asset
+    original_store_from_stream = LocalFilesystemStorageBackend.store_from_stream
 
-    Args:
-        media_client: FastAPI test client configured for media tests.
-        bootstrap_payload: Bootstrap request payload.
-        media_root: Isolated local media root.
+    async def _record_run_in_threadpool(func, *args, **kwargs):
+        threadpool_calls.append(func.__name__)
+        assert 'data' not in kwargs
+        upload_source = kwargs['upload_source']
+        assert not isinstance(upload_source, bytes)
+        assert kwargs['size_bytes'] == len(_PNG_1X1)
+        service_upload_sources.append(upload_source)
+        return func(*args, **kwargs)
 
-    Returns:
-        None.
+    def _fail_store(*args, **kwargs) -> object:
+        _ = args, kwargs
+        raise AssertionError('route upload path must not pass raw bytes to storage')
 
-    Raises:
-        None.
-    """
+    def _record_store_from_stream(self, media_id, original_filename, source, mime_type, created_at):
+        store_stream_sources.append(source)
+        assert not isinstance(source, bytes)
+        return original_store_from_stream(
+            self,
+            media_id,
+            original_filename,
+            source,
+            mime_type,
+            created_at,
+        )
+
+    assert original_create_media_asset.__name__ == 'create_media_asset'
+    monkeypatch.setattr('pragma.media.router.run_in_threadpool', _record_run_in_threadpool)
+    monkeypatch.setattr(LocalFilesystemStorageBackend, 'store', _fail_store)
+    monkeypatch.setattr(
+        LocalFilesystemStorageBackend,
+        'store_from_stream',
+        _record_store_from_stream,
+    )
+
     auth_headers = _auth_headers(media_client, bootstrap_payload)
     upload_headers = {
         **auth_headers,
@@ -250,6 +291,9 @@ def test_media_upload_list_detail_content_and_delete_flow(
     )
 
     assert upload_response.status_code == 201
+    assert threadpool_calls == ['create_media_asset']
+    assert len(service_upload_sources) == 1
+    assert len(store_stream_sources) == 1
     uploaded = upload_response.json()
     assert uploaded['original_filename'] == 'hero-image.png'
     assert uploaded['mime_type'] == 'image/png'
@@ -368,7 +412,7 @@ def test_media_upload_rejects_invalid_file(
 
     assert response.status_code == 415
     assert response.json() == {
-        'detail': 'Uploaded bytes do not match a supported image format for text/plain',
+        'detail': 'Uploaded bytes do not match a supported media format for text/plain',
         'code': 'MEDIA_TYPE_UNSUPPORTED',
     }
 
@@ -515,6 +559,73 @@ def test_media_upload_rejects_disallowed_mime_type(
         'code': 'MEDIA_TYPE_DISALLOWED',
     }
 
+
+
+def test_media_upload_accepts_pdf_audio_and_video(
+    media_client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify expanded non-image media types are accepted and classified."""
+
+    auth_headers = _auth_headers(media_client, bootstrap_payload)
+    samples = [
+        ('document.pdf', 'application/pdf', b'%PDF-1.4\n%pragma\n%%EOF', 'document'),
+        ('audio.mp3', 'audio/mpeg', b'ID3\x04\x00\x00\x00\x00\x00\x00', 'audio'),
+        ('clip.mp4', 'video/mp4', b'\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42', 'video'),
+    ]
+
+    for filename, content_type, body, media_kind in samples:
+        response = media_client.post(
+            f'/api/v1/media/assets?filename={filename}',
+            headers={**auth_headers, 'Content-Type': content_type},
+            content=body,
+        )
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload['mime_type'] == content_type
+        assert payload['width'] is None
+        assert payload['height'] is None
+        assert payload['is_image'] is False
+        assert payload['metadata']['media_kind'] == media_kind
+
+
+def test_media_upload_generates_thumbnail_variant(
+    media_client: TestClient,
+    bootstrap_payload: dict[str, str],
+    media_root: Path,
+) -> None:
+    """Verify raster image uploads create a stored thumbnail derivative."""
+
+    auth_headers = _auth_headers(media_client, bootstrap_payload)
+    response = media_client.post(
+        '/api/v1/media/assets?filename=hero-image.png',
+        headers={**auth_headers, 'Content-Type': 'image/png'},
+        content=_PNG_1X1,
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    thumbnail_url = payload['variants']['thumbnail']
+    assert thumbnail_url.endswith('/variants/thumbnail')
+
+    variant_response = media_client.get(thumbnail_url, headers=auth_headers)
+    assert variant_response.status_code == 200
+    assert variant_response.headers['content-type'].startswith('image/jpeg')
+
+    variant_key = (
+        f"{payload['created_at'][:4]}/{payload['created_at'][5:7]}/"
+        f"{payload['id']}/thumbnail.jpg"
+    )
+    variant_path = media_root / variant_key
+    assert variant_path.exists()
+
+    delete_response = media_client.delete(
+        f'/api/v1/media/assets/{payload["id"]}',
+        headers=auth_headers,
+    )
+    assert delete_response.status_code == 204
+    assert not variant_path.exists()
 
 def test_media_upload_rejects_empty_body(
     media_client: TestClient,
@@ -891,7 +1002,8 @@ def test_media_delete_logs_storage_cleanup_failures_after_metadata_delete(
         )
 
     assert delete_response.status_code == 204
-    assert delete_calls == [uploaded['storage_key']]
+    assert delete_calls[0] == uploaded['storage_key']
+    assert delete_calls[1].endswith('/thumbnail.jpg')
     assert stored_path.exists()
     assert any(
         record.name == 'pragma.media.service'

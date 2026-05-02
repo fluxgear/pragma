@@ -120,14 +120,14 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function rotateOwnPassword(payload: ChangePasswordRequest): Promise<UserResponse> {
+  async function rotateOwnPassword(payload: ChangePasswordRequest): Promise<void> {
     if (accessToken.value === null) {
       throw new Error('Authentication required')
     }
 
-    const updatedUser = await changePassword(accessToken.value, payload)
-    user.value = updatedUser
-    return updatedUser
+    await changePassword(accessToken.value, payload)
+    clearSession()
+    errorMessage.value = null
   }
 
   async function logout(): Promise<void> {

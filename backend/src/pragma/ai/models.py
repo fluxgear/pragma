@@ -56,18 +56,22 @@ class AIProviderSettingsResponse(BaseModel):
     provider: AIProvider | None = None
     base_url: str | None = None
     embedding_model: str | None = None
+    embedding_dimensions: int | None = Field(default=None, ge=1, le=2000)
     request_timeout_seconds: int | None = None
     api_key_configured: bool = False
     updated_at: datetime | None = None
+    embeddings_rebuild_required: bool = False
 
     @classmethod
     def from_record(
-        cls, record: dict[str, Any] | None
+        cls, record: dict[str, Any] | None, *, embeddings_rebuild_required: bool = False
     ) -> AIProviderSettingsResponse:
         """Build response payload from the persisted singleton row.
 
         Args:
             record: Optional settings row from storage.
+            embeddings_rebuild_required: Whether saved semantic contract changes
+                require a rebuild after this response.
 
         Returns:
             AIProviderSettingsResponse: Normalized settings payload.
@@ -77,13 +81,18 @@ class AIProviderSettingsResponse(BaseModel):
         """
 
         if record is None:
-            return cls()
+            return cls(embeddings_rebuild_required=embeddings_rebuild_required)
         return cls(
             enabled=bool(record['enabled']),
             provider=(AIProvider(str(record['provider'])) if record['provider'] else None),
             base_url=(str(record['base_url']) if record['base_url'] else None),
             embedding_model=(
                 str(record['embedding_model']) if record['embedding_model'] else None
+            ),
+            embedding_dimensions=(
+                int(record['embedding_dimensions'])
+                if record.get('embedding_dimensions') is not None
+                else None
             ),
             request_timeout_seconds=(
                 int(record['request_timeout_seconds'])
@@ -92,6 +101,7 @@ class AIProviderSettingsResponse(BaseModel):
             ),
             api_key_configured=bool(record['api_key']),
             updated_at=record['updated_at'],
+            embeddings_rebuild_required=embeddings_rebuild_required,
         )
 
 
@@ -114,6 +124,7 @@ class AIProviderSettingsUpdateRequest(BaseModel):
     provider: AIProvider | None = None
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     embedding_model: str | None = Field(default=None, min_length=1, max_length=200)
+    embedding_dimensions: int | None = Field(default=None, ge=1, le=2000)
     request_timeout_seconds: int = Field(default=15, ge=1, le=120)
     api_key: str | None = Field(default=None, min_length=1, max_length=500)
     retain_existing_api_key: bool = False

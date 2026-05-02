@@ -438,6 +438,139 @@ def test_enabled_module_load_logs_trusted_code_boundary(
     assert 'not sandboxed' in message
 
 
+def test_enabled_module_load_logs_advisory_trust_diagnostics(
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify unsafe trusted-module paths log diagnostics without blocking load."""
+
+    from pragma.modules import runtime as module_runtime
+
+    module_root = tmp_path / 'modules-trust-advisory'
+    module_root.mkdir(parents=True, exist_ok=True)
+    _write_module(
+        module_root,
+        'trust-advisory-module',
+        """
+        def on_created(event):
+            return None
+        """,
+        hooks={'content.entry.created': 'on_created'},
+    )
+    entrypoint_path = module_root / 'trust-advisory-module' / 'hooks.py'
+    entrypoint_path.chmod(0o666)
+    current_uid = module_runtime.os.geteuid()
+    monkeypatch.setattr(module_runtime.os, 'geteuid', lambda: current_uid + 1)
+
+    env_values = dict(migrated_database)
+    env_values['PRAGMA_MODULE_ROOT'] = str(module_root)
+    apply_runtime_env(env_values)
+    monkeypatch.setattr(module_runtime.logger, 'disabled', False)
+
+    with (
+        caplog.at_level(logging.WARNING, logger='pragma.modules.runtime'),
+        TestClient(create_app()) as client,
+    ):
+        headers = _auth_headers(client, bootstrap_payload)
+        _enable_module(client, headers, 'trust-advisory-module')
+
+    diagnostic_records = [
+        record
+        for record in caplog.records
+        if getattr(record, 'module_code', None)
+        in {
+            'MODULE_TRUST_GROUP_WRITABLE',
+            'MODULE_TRUST_WORLD_WRITABLE',
+            'MODULE_TRUST_OWNER_MISMATCH',
+        }
+    ]
+    assert diagnostic_records
+    assert any(
+        record.module_code == 'MODULE_TRUST_WORLD_WRITABLE'
+        and record.module_path == str(entrypoint_path)
+        and record.module_trust_strict is False
+        for record in diagnostic_records
+    )
+    assert any(
+        record.module_code == 'MODULE_TRUST_OWNER_MISMATCH'
+        for record in diagnostic_records
+    )
+
+
+def test_strict_module_trust_rejects_unsafe_enabled_entrypoint(
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify strict module-trust mode rejects unsafe entrypoint loading."""
+
+    from pragma.modules import runtime as module_runtime
+
+    marker_path = tmp_path / 'strict-entrypoint-imported.txt'
+    module_root = tmp_path / 'modules-trust-strict'
+    module_root.mkdir(parents=True, exist_ok=True)
+    _write_module(
+        module_root,
+        'trust-strict-module',
+        """
+        import os
+        from pathlib import Path
+
+        Path(os.environ['PRAGMA_MODULE_STRICT_MARKER']).write_text(
+            'imported',
+            encoding='utf-8',
+        )
+
+
+        def on_created(event):
+            return None
+        """,
+        hooks={'content.entry.created': 'on_created'},
+    )
+    entrypoint_path = module_root / 'trust-strict-module' / 'hooks.py'
+    entrypoint_path.chmod(0o666)
+
+    env_values = dict(migrated_database)
+    env_values['PRAGMA_MODULE_ROOT'] = str(module_root)
+    env_values['PRAGMA_MODULE_TRUST_STRICT'] = 'true'
+    env_values['PRAGMA_MODULE_STRICT_MARKER'] = str(marker_path)
+    apply_runtime_env(env_values)
+    monkeypatch.setattr(module_runtime.logger, 'disabled', False)
+
+    with (
+        caplog.at_level(logging.WARNING, logger='pragma.modules.runtime'),
+        TestClient(create_app()) as client,
+    ):
+        headers = _auth_headers(client, bootstrap_payload)
+        response = client.put(
+            '/api/v1/modules/trust-strict-module/state',
+            headers=headers,
+            json={'enabled': True},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['enabled'] is True
+    assert payload['loaded'] is False
+    assert payload['error_code'] == 'MODULE_TRUST_VALIDATION_FAILED'
+    assert not marker_path.exists()
+
+    strict_records = [
+        record
+        for record in caplog.records
+        if getattr(record, 'module_code', None) == 'MODULE_TRUST_VALIDATION_FAILED'
+    ]
+    assert len(strict_records) == 1
+    assert strict_records[0].module_id == 'trust-strict-module'
+
+
 def test_module_entrypoint_loads_are_cached_until_files_change(
     migrated_database: dict[str, str],
     bootstrap_payload: dict[str, str],

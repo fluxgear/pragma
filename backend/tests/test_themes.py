@@ -221,6 +221,7 @@ def test_theme_runtime_prefers_active_template_when_present(
     example_env_values: dict[str, str],
     apply_runtime_env: Callable[[dict[str, str]], None],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify active-theme templates override the default theme.
 
@@ -228,6 +229,7 @@ def test_theme_runtime_prefers_active_template_when_present(
         example_env_values: Parsed example environment values.
         apply_runtime_env: Helper that applies runtime environment values.
         tmp_path: Temporary filesystem root.
+        monkeypatch: Pytest monkeypatch fixture.
 
     Returns:
         None.
@@ -261,9 +263,25 @@ def test_theme_runtime_prefers_active_template_when_present(
     )
 
     runtime = build_theme_runtime(get_settings())
+    original_compile_template = runtime._compile_template
+    compiled_paths: list[Path] = []
+
+    def _record_compile_template(environment, name, resolved_path, globals=None, **kwargs):
+        compiled_paths.append(resolved_path.filesystem_path)
+        return original_compile_template(
+            environment,
+            name,
+            resolved_path,
+            globals,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(runtime, '_compile_template', _record_compile_template)
 
     assert runtime.resolve_template_path('page.html').theme_id == 'custom'
     assert runtime.render_template('page.html', {'title': 'Hello'}) == 'custom Hello'
+    assert runtime.render_template('page.html', {'title': 'Again'}) == 'custom Again'
+    assert compiled_paths == [theme_root / 'custom' / 'templates' / 'page.html']
 
 
 def test_theme_runtime_falls_back_to_default_template_when_active_missing(

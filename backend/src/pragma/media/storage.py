@@ -13,25 +13,34 @@ Raises:
 
 from __future__ import annotations
 
-import logging
 import re
+import shutil
 import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
+from typing import BinaryIO
 from uuid import UUID
 
 from pragma.config import Settings
 from pragma.errors import ConfigError, StorageError
 
-logger = logging.getLogger(__name__)
 _MULTI_HYPHEN_PATTERN = re.compile(r'-{2,}')
+_STREAM_COPY_CHUNK_SIZE = 1024 * 1024
 _MIME_EXTENSION_MAP = {
+    'application/pdf': '.pdf',
+    'audio/mpeg': '.mp3',
+    'audio/ogg': '.ogg',
+    'audio/wav': '.wav',
     'image/gif': '.gif',
     'image/jpeg': '.jpg',
     'image/png': '.png',
     'image/webp': '.webp',
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
 }
 
 
@@ -55,19 +64,8 @@ class StoredMedia:
 
 
 class StorageBackend(ABC):
-    """Abstract storage backend for media objects.
+    """Abstract storage backend for media objects."""
 
-    Args:
-        ABC: Abstract base class helper.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-    """
-
-    @abstractmethod
     def store(
         self,
         media_id: UUID,
@@ -76,63 +74,49 @@ class StorageBackend(ABC):
         mime_type: str,
         created_at: datetime,
     ) -> StoredMedia:
-        """Persist raw media bytes.
+        """Persist raw media bytes."""
 
-        Args:
-            media_id: Media asset identifier.
-            original_filename: Client-supplied filename.
-            data: Upload bytes to persist.
-            mime_type: Validated MIME type.
-            created_at: Creation timestamp for path partitioning.
+        return self.store_from_stream(
+            media_id=media_id,
+            original_filename=original_filename,
+            source=BytesIO(data),
+            mime_type=mime_type,
+            created_at=created_at,
+        )
 
-        Returns:
-            StoredMedia: Storage details for the saved object.
+    @abstractmethod
+    def store_from_stream(
+        self,
+        media_id: UUID,
+        original_filename: str,
+        source: BinaryIO,
+        mime_type: str,
+        created_at: datetime,
+    ) -> StoredMedia:
+        """Persist media bytes from a readable binary stream."""
 
-        Raises:
-            StorageError: If persistence fails.
-        """
+    @abstractmethod
+    def store_variant_from_stream(
+        self,
+        media_id: UUID,
+        variant_name: str,
+        source: BinaryIO,
+        mime_type: str,
+        created_at: datetime,
+    ) -> StoredMedia:
+        """Persist derivative media bytes from a readable binary stream."""
 
     @abstractmethod
     def delete(self, storage_key: str) -> None:
-        """Delete stored media by its storage key.
-
-        Args:
-            storage_key: Relative storage identifier.
-
-        Returns:
-            None.
-
-        Raises:
-            StorageError: If deletion fails.
-        """
+        """Delete stored media by its storage key."""
 
     @abstractmethod
     def resolve(self, storage_key: str) -> Path:
-        """Resolve a storage key to an absolute filesystem path.
-
-        Args:
-            storage_key: Relative storage identifier.
-
-        Returns:
-            Path: Absolute filesystem path.
-
-        Raises:
-            StorageError: If the path escapes the backend root.
-        """
+        """Resolve a storage key to an absolute filesystem path."""
 
 
 class LocalFilesystemStorageBackend(StorageBackend):
-    """Local filesystem-backed media storage.
-
-    Args:
-        root_path: Absolute root directory for stored media files.
-
-    Returns:
-        None.
-
-    Raises:
-        StorageError: If the root directory cannot be prepared.
-    """
+    """Local filesystem-backed media storage."""
 
     def __init__(self, root_path: Path) -> None:
         self._root_path = root_path.resolve()
@@ -144,70 +128,43 @@ class LocalFilesystemStorageBackend(StorageBackend):
                 code='MEDIA_STORAGE_ROOT_FAILED',
             ) from exc
 
-    def store(
+    def store_from_stream(
         self,
         media_id: UUID,
         original_filename: str,
-        data: bytes,
+        source: BinaryIO,
         mime_type: str,
         created_at: datetime,
     ) -> StoredMedia:
-        """Persist raw media bytes under the configured root directory.
-
-        Args:
-            media_id: Media asset identifier.
-            original_filename: Client-supplied filename.
-            data: Upload bytes to persist.
-            mime_type: Validated MIME type.
-            created_at: Creation timestamp for path partitioning.
-
-        Returns:
-            StoredMedia: Storage details for the saved object.
-
-        Raises:
-            StorageError: If persistence fails.
-        """
+        """Persist streamed media bytes under the configured root directory."""
 
         extension = _MIME_EXTENSION_MAP.get(
             mime_type,
             Path(original_filename).suffix.lower() or '.bin',
         )
         slug = _normalize_filename_stem(Path(original_filename).stem)
-        relative_path = Path(
-            f"{created_at:%Y}",
-            f"{created_at:%m}",
-            f"{media_id}-{slug}{extension}",
-        )
-        storage_key = relative_path.as_posix()
-        absolute_path = self.resolve(storage_key)
+        storage_key = self._build_storage_key(media_id, slug, extension, created_at)
+        return self._write_stream(storage_key, source)
 
-        try:
-            absolute_path.parent.mkdir(parents=True, exist_ok=True)
-            absolute_path = self.resolve(storage_key)
-            absolute_path.write_bytes(data)
-        except OSError as exc:
-            raise StorageError(
-                detail='Unable to write media bytes to local storage',
-                code='MEDIA_STORAGE_WRITE_FAILED',
-            ) from exc
+    def store_variant_from_stream(
+        self,
+        media_id: UUID,
+        variant_name: str,
+        source: BinaryIO,
+        mime_type: str,
+        created_at: datetime,
+    ) -> StoredMedia:
+        """Persist a derivative media stream under the configured root directory."""
 
-        return StoredMedia(
-            storage_key=storage_key,
-            filesystem_path=absolute_path,
+        extension = _MIME_EXTENSION_MAP.get(mime_type, '.bin')
+        slug = _normalize_filename_stem(variant_name)
+        storage_key = self._build_storage_key(
+            media_id, slug, extension, created_at, is_variant=True
         )
+        return self._write_stream(storage_key, source)
 
     def delete(self, storage_key: str) -> None:
-        """Delete stored media bytes from the local filesystem.
-
-        Args:
-            storage_key: Relative storage identifier.
-
-        Returns:
-            None.
-
-        Raises:
-            StorageError: If deletion fails.
-        """
+        """Delete stored media bytes from the local filesystem."""
 
         path = self.resolve(storage_key)
         if not path.exists():
@@ -222,17 +179,7 @@ class LocalFilesystemStorageBackend(StorageBackend):
             ) from exc
 
     def resolve(self, storage_key: str) -> Path:
-        """Resolve a storage key to an absolute path beneath the root.
-
-        Args:
-            storage_key: Relative storage identifier.
-
-        Returns:
-            Path: Absolute filesystem path.
-
-        Raises:
-            StorageError: If the path escapes the configured root.
-        """
+        """Resolve a storage key to an absolute path beneath the root."""
 
         candidate = (self._root_path / storage_key).resolve()
         if self._root_path not in candidate.parents and candidate != self._root_path:
@@ -241,6 +188,42 @@ class LocalFilesystemStorageBackend(StorageBackend):
                 code='MEDIA_STORAGE_PATH_INVALID',
             )
         return candidate
+
+    def _build_storage_key(
+        self,
+        media_id: UUID,
+        slug: str,
+        extension: str,
+        created_at: datetime,
+        *,
+        is_variant: bool = False,
+    ) -> str:
+        """Build a stable relative storage key for original or derivative bytes."""
+
+        directory = Path(f'{created_at:%Y}', f'{created_at:%m}')
+        if is_variant:
+            directory = directory / str(media_id)
+            filename = f'{slug}{extension}'
+        else:
+            filename = f'{media_id}-{slug}{extension}'
+        return (directory / filename).as_posix()
+
+    def _write_stream(self, storage_key: str, source: BinaryIO) -> StoredMedia:
+        """Write a readable stream to a resolved storage key."""
+
+        absolute_path = self.resolve(storage_key)
+        try:
+            absolute_path.parent.mkdir(parents=True, exist_ok=True)
+            absolute_path = self.resolve(storage_key)
+            with absolute_path.open('wb') as destination:
+                shutil.copyfileobj(source, destination, length=_STREAM_COPY_CHUNK_SIZE)
+        except OSError as exc:
+            raise StorageError(
+                detail='Unable to write media bytes to local storage',
+                code='MEDIA_STORAGE_WRITE_FAILED',
+            ) from exc
+
+        return StoredMedia(storage_key=storage_key, filesystem_path=absolute_path)
 
 
 def build_storage_backend(settings: Settings) -> StorageBackend:
@@ -261,7 +244,24 @@ def build_storage_backend(settings: Settings) -> StorageBackend:
             detail='Unsupported media storage backend',
             code='MEDIA_STORAGE_BACKEND_INVALID',
         )
-    return LocalFilesystemStorageBackend(settings.media_root_path)
+    return _build_local_storage_backend(settings.media_root_path)
+
+
+@lru_cache(maxsize=16)
+def _build_local_storage_backend(root_path: Path) -> LocalFilesystemStorageBackend:
+    """Build or reuse a local storage backend for a media root.
+
+    Args:
+        root_path: Configured local media root path.
+
+    Returns:
+        LocalFilesystemStorageBackend: Cached local storage backend.
+
+    Raises:
+        StorageError: If the root directory cannot be prepared.
+    """
+
+    return LocalFilesystemStorageBackend(root_path)
 
 
 def _normalize_filename_stem(value: str) -> str:

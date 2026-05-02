@@ -19,6 +19,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, WebSocket, status
 from psycopg import Error as PsycopgError
+from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocketDisconnect
 
 from pragma.auth.dependencies import require_permission
@@ -117,7 +118,12 @@ async def realtime_stream(
         return
 
     try:
-        user = _authenticate_websocket_user(ticket, settings, storage)
+        user = await run_in_threadpool(
+            _authenticate_websocket_user,
+            ticket,
+            settings,
+            storage,
+        )
     except (AuthError, StorageError):
         await websocket.close(code=1008)
         return

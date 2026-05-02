@@ -62,6 +62,19 @@
             </div>
 
             <div class="field">
+              <label for="ai-embedding-dimensions">Embedding dimensions</label>
+              <InputText
+                id="ai-embedding-dimensions"
+                v-model="form.embedding_dimensions"
+                type="number"
+                min="1"
+                max="2000"
+                :disabled="isActionLocked"
+              />
+              <small class="muted">Required when AI is enabled. Maximum: 2000.</small>
+            </div>
+
+            <div class="field">
               <label for="ai-timeout">Request timeout (seconds)</label>
               <InputText id="ai-timeout" v-model="form.request_timeout_seconds" type="number" :disabled="isActionLocked" />
             </div>
@@ -136,6 +149,10 @@
               <span class="code-chip">{{ settings.provider ?? 'Not configured' }}</span>
             </div>
             <div class="status-row">
+              <span>Embedding dimensions</span>
+              <span class="code-chip">{{ settings.embedding_dimensions ?? 'Not configured' }}</span>
+            </div>
+            <div class="status-row">
               <span>API key</span>
               <Tag :severity="settings.api_key_configured ? 'info' : 'warn'" :value="settings.api_key_configured ? 'Configured' : 'Missing'" />
             </div>
@@ -201,6 +218,7 @@ const form = reactive({
   provider: 'voyage' as AIProviderKind,
   base_url: '',
   embedding_model: '',
+  embedding_dimensions: null as number | null,
   request_timeout_seconds: 15,
   api_key: '',
   retain_existing_api_key: true,
@@ -212,6 +230,7 @@ function applySettings(payload: AIProviderSettingsResponse): void {
   form.provider = payload.provider ?? 'voyage'
   form.base_url = payload.base_url ?? ''
   form.embedding_model = payload.embedding_model ?? ''
+  form.embedding_dimensions = payload.embedding_dimensions
   form.request_timeout_seconds = payload.request_timeout_seconds ?? 15
   form.api_key = ''
   form.retain_existing_api_key = payload.api_key_configured
@@ -233,6 +252,22 @@ function normalizeTimeout(): number {
   }
 
   return Math.trunc(timeout)
+}
+
+function normalizeEmbeddingDimensions(): number | null {
+  if (!form.enabled && form.embedding_dimensions === null) {
+    return null
+  }
+
+  const dimensions = Number(form.embedding_dimensions)
+  if (!Number.isFinite(dimensions) || dimensions < 1 || dimensions > 2000) {
+    if (form.enabled) {
+      throw new Error('Embedding dimensions are required when AI is enabled and must be between 1 and 2000.')
+    }
+    return null
+  }
+
+  return Math.trunc(dimensions)
 }
 
 async function loadSettings(): Promise<void> {
@@ -271,6 +306,7 @@ async function saveSettings(): Promise<void> {
 
     const normalizedBaseUrl = form.base_url.trim()
     const normalizedEmbeddingModel = form.embedding_model.trim()
+    const normalizedEmbeddingDimensions = normalizeEmbeddingDimensions()
 
     const payload: AIProviderSettingsUpdateRequest = {
       enabled: form.enabled,
@@ -278,6 +314,7 @@ async function saveSettings(): Promise<void> {
         form.enabled || normalizedBaseUrl || normalizedEmbeddingModel ? form.provider : null,
       base_url: normalizedBaseUrl || null,
       embedding_model: normalizedEmbeddingModel || null,
+      embedding_dimensions: normalizedEmbeddingDimensions,
       request_timeout_seconds: normalizeTimeout(),
       retain_existing_api_key: form.retain_existing_api_key,
     }
@@ -290,7 +327,22 @@ async function saveSettings(): Promise<void> {
 
     const response = await updateAiSettings(payload)
     applySettings(response)
-    setActionMessage('AI settings saved successfully.')
+
+    let message = 'AI settings saved successfully.'
+    if (response.embeddings_rebuild_required) {
+      try {
+        const rebuildResponse: AISearchEmbeddingRebuildResponse = await rebuildAiEmbeddings({
+          batch_size: 20,
+          max_documents: 200,
+          force: true,
+        })
+        message += ` Rebuild started: ${rebuildResponse.embedded}/${rebuildResponse.attempted} embedded, ${rebuildResponse.failed} failed`
+      } catch (error) {
+        globalError.value = `AI settings saved, but embedding rebuild could not be started: ${asUserMessage(error)}`
+        return
+      }
+    }
+    setActionMessage(message)
   } catch (error) {
     globalError.value = asUserMessage(error)
   } finally {
@@ -331,7 +383,7 @@ async function runRebuild(): Promise<void> {
       force: false,
     })
     setActionMessage(
-      `Rebuild complete: ${response.embedded}/${response.attempted} embedded, ${response.failed} failed`,
+      `Rebuild batch complete: ${response.embedded}/${response.attempted} embedded, ${response.failed} failed`,
     )
   } catch (error) {
     globalError.value = asUserMessage(error)

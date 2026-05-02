@@ -17,9 +17,11 @@ const settingsResponse = {
   provider: 'voyage',
   base_url: 'https://api.voyageai.com/v1',
   embedding_model: 'voyage-3.5-lite',
+  embedding_dimensions: 1024,
   request_timeout_seconds: 8,
   api_key_configured: true,
   updated_at: '2026-04-26T12:00:00Z',
+  embeddings_rebuild_required: false,
 }
 
 const testResponse = {
@@ -62,6 +64,7 @@ describe('AI API helpers', () => {
       provider: 'voyage',
       base_url: 'https://api.voyageai.com/v1',
       embedding_model: 'voyage-3.5-lite',
+      embedding_dimensions: 1024,
       request_timeout_seconds: 10,
       api_key: 'secret',
       retain_existing_api_key: true,

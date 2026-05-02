@@ -10,11 +10,11 @@ Returns:
 Raises:
     None.
 """
-
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import psycopg
@@ -171,12 +171,18 @@ def _create_entry(
     return response.json()
 
 
-def _update_ai_settings(client: TestClient, headers: dict[str, str]) -> dict[str, object]:
+def _update_ai_settings(
+    client: TestClient,
+    headers: dict[str, str],
+    *,
+    embedding_dimensions: int = 2,
+) -> dict[str, object]:
     """Persist a reusable AI provider configuration and return its response payload.
 
     Args:
         client: FastAPI test client.
         headers: Authenticated request headers.
+        embedding_dimensions: Configured provider embedding vector dimensions.
 
     Returns:
         dict[str, object]: Serialized provider-settings response.
@@ -193,6 +199,7 @@ def _update_ai_settings(client: TestClient, headers: dict[str, str]) -> dict[str
             'provider': 'voyage',
             'base_url': 'https://api.voyageai.com/v1',
             'embedding_model': 'voyage-3.5-lite',
+            'embedding_dimensions': embedding_dimensions,
             'request_timeout_seconds': 5,
             'api_key': 'test-ai-key',
         },
@@ -279,7 +286,7 @@ def _ai_client(
 def test_ai_migration_creates_provider_settings_and_embedding_metadata(
     migrated_database: dict[str, str]
 ) -> None:
-    """Verify M9 migration creates provider settings and embedding metadata schema.
+    """Verify M9+ AI migrations create provider settings and embedding schema.
 
     Args:
         migrated_database: Environment values for the migrated test database.
@@ -321,7 +328,19 @@ def test_ai_migration_creates_provider_settings_and_embedding_metadata(
                     WHERE table_schema = 'public'
                       AND table_name = 'pragma_search_documents'
                       AND column_name = 'embedding_updated_at'
-                ) AS has_embedding_updated_at
+                ) AS has_embedding_updated_at,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_ai_provider_settings'
+                      AND column_name = 'embedding_dimensions'
+                ) AS has_embedding_dimensions,
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'ck_pragma_ai_provider_settings_embedding_dimensions'
+                ) AS has_embedding_dimensions_check
             """
         ).fetchone()
 
@@ -330,6 +349,8 @@ def test_ai_migration_creates_provider_settings_and_embedding_metadata(
     assert row[2] is True
     assert row[3] is True
     assert row[4] is True
+    assert row[5] is True
+    assert row[6] is True
 
 
 class _EmbeddingResponse:
@@ -384,6 +405,7 @@ def test_request_embedding_reads_successful_response_incrementally(
             base_url='https://api.voyageai.com/v1',
             api_key='test-ai-key',
             embedding_model='voyage-3.5-lite',
+            embedding_dimensions=2,
             request_timeout_seconds=1,
         ),
         'bounded query',
@@ -419,6 +441,7 @@ def test_request_embedding_rejects_declared_oversized_response(
                 base_url='https://api.voyageai.com/v1',
                 api_key='test-ai-key',
                 embedding_model='voyage-3.5-lite',
+                embedding_dimensions=2,
                 request_timeout_seconds=1,
             ),
             'oversized query',
@@ -454,6 +477,7 @@ def test_request_embedding_rejects_streamed_oversized_response(
                 base_url='https://api.voyageai.com/v1',
                 api_key='test-ai-key',
                 embedding_model='voyage-3.5-lite',
+                embedding_dimensions=2,
                 request_timeout_seconds=1,
             ),
             'oversized query',
@@ -495,6 +519,7 @@ def test_request_embedding_translates_provider_timeouts(
                 base_url='https://api.voyageai.com/v1',
                 api_key='test-ai-key',
                 embedding_model='voyage-3.5-lite',
+                embedding_dimensions=2,
                 request_timeout_seconds=1,
             ),
             'timeout query',
@@ -667,11 +692,113 @@ def test_ai_settings_round_trip_masks_api_key(
     response = client.get('/api/v1/ai/settings', headers=headers)
 
     assert update_payload['enabled'] is True
+    assert update_payload['embedding_dimensions'] == 2
     assert update_payload['api_key_configured'] is True
+    assert update_payload['embeddings_rebuild_required'] is True
     assert response.status_code == 200
     assert response.json()['provider'] == 'voyage'
+    assert response.json()['embedding_dimensions'] == 2
     assert response.json()['api_key_configured'] is True
+    assert response.json()['embeddings_rebuild_required'] is False
     assert 'api_key' not in response.json()
+
+
+def test_ai_settings_reject_private_or_plain_http_base_urls_by_default(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify AI provider settings reject unsafe egress targets by default.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    with _ai_client(apply_runtime_env, migrated_database) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+
+        localhost_response = client.put(
+            '/api/v1/ai/settings',
+            headers=headers,
+            json={
+                'enabled': True,
+                'provider': 'openai_compatible',
+                'base_url': 'https://127.0.0.1:11434/v1',
+                'embedding_model': 'local-embedding',
+                'request_timeout_seconds': 15,
+                'api_key': 'local-key',
+            },
+        )
+        http_response = client.put(
+            '/api/v1/ai/settings',
+            headers=headers,
+            json={
+                'enabled': True,
+                'provider': 'openai_compatible',
+                'base_url': 'http://api.example.com/v1',
+                'embedding_model': 'remote-embedding',
+                'request_timeout_seconds': 15,
+                'api_key': 'remote-key',
+            },
+        )
+
+    assert localhost_response.status_code == 400
+    assert localhost_response.json()['code'] == 'AI_SETTINGS_INVALID'
+    assert http_response.status_code == 400
+    assert http_response.json()['code'] == 'AI_SETTINGS_INVALID'
+
+
+def test_ai_settings_allow_private_base_url_with_explicit_runtime_flag(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify operator opt-in permits private AI provider base URLs.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    runtime_values = dict(migrated_database)
+    runtime_values['PRAGMA_SEARCH_ENABLE_SEMANTIC'] = 'true'
+    runtime_values['PRAGMA_AI_ALLOW_PRIVATE_BASE_URLS'] = 'true'
+    apply_runtime_env(runtime_values)
+
+    with TestClient(create_app()) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        response = client.put(
+            '/api/v1/ai/settings',
+            headers=headers,
+            json={
+                'enabled': True,
+                'provider': 'openai_compatible',
+                'base_url': 'http://127.0.0.1:11434/v1',
+                'embedding_model': 'local-embedding',
+                'embedding_dimensions': 2,
+                'request_timeout_seconds': 15,
+                'api_key': 'local-key',
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()['base_url'] == 'http://127.0.0.1:11434/v1'
+    assert response.json()['embedding_dimensions'] == 2
 
 
 def test_disabled_ai_settings_can_clear_optional_provider_fields(
@@ -701,6 +828,7 @@ def test_disabled_ai_settings_can_clear_optional_provider_fields(
             'provider': None,
             'base_url': None,
             'embedding_model': None,
+            'embedding_dimensions': None,
             'request_timeout_seconds': 15,
             'retain_existing_api_key': False,
         },
@@ -712,9 +840,11 @@ def test_disabled_ai_settings_can_clear_optional_provider_fields(
         'provider': None,
         'base_url': None,
         'embedding_model': None,
+        'embedding_dimensions': None,
         'request_timeout_seconds': 15,
         'api_key_configured': False,
         'updated_at': response.json()['updated_at'],
+        'embeddings_rebuild_required': False,
     }
 
 
@@ -744,7 +874,7 @@ def test_ai_settings_test_uses_mocked_provider(
 
     def _mock_request_embedding(config, text: str, *, input_type: str) -> list[float]:
         calls.append((config.provider.value, input_type))
-        return [0.1, 0.2, 0.3]
+        return [0.1, 0.2]
 
     monkeypatch.setattr(ai_service, 'request_embedding', _mock_request_embedding)
 
@@ -759,7 +889,7 @@ def test_ai_settings_test_uses_mocked_provider(
     assert response.json() == {
         'provider': 'voyage',
         'embedding_model': 'voyage-3.5-lite',
-        'embedding_dimensions': 3,
+        'embedding_dimensions': 2,
     }
     assert calls == [('voyage', 'query')]
 
@@ -770,7 +900,7 @@ def test_search_auto_embedding_uses_provider_when_available(
     bootstrap_payload: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify vector search can auto-generate a query embedding via the provider.
+    """Verify authenticated vector search can auto-generate a query embedding.
 
     Args:
         apply_runtime_env: Fixture helper that applies runtime environment values.
@@ -828,6 +958,7 @@ def test_search_auto_embedding_uses_provider_when_available(
         response = client.get(
             '/api/v1/search/entries',
             params={'query': 'vector', 'mode': 'vector'},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -843,7 +974,7 @@ def test_search_auto_embedding_enforces_provider_model_contract(
     bootstrap_payload: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify semantic search reports same-dimension provider/model drift.
+    """Verify authenticated semantic search filters provider/model drift.
 
     Args:
         apply_runtime_env: Fixture helper that applies runtime environment values.
@@ -901,6 +1032,7 @@ def test_search_auto_embedding_enforces_provider_model_contract(
         response = client.get(
             '/api/v1/search/entries',
             params={'query': 'model contract', 'mode': 'vector'},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -908,9 +1040,7 @@ def test_search_auto_embedding_enforces_provider_model_contract(
     assert payload['mode_applied'] == 'vector'
     assert payload['applied_strategies'] == ['vector']
     assert [item['id'] for item in payload['items']] == [current['id']]
-    assert payload['semantic_diagnostics'] == [
-        '1 search document embedding(s) require rebuild for the active semantic contract'
-    ]
+    assert payload['semantic_diagnostics'] == []
 
 
 def test_search_falls_back_to_keyword_when_auto_embedding_fails(
@@ -960,10 +1090,64 @@ def test_search_falls_back_to_keyword_when_auto_embedding_fails(
         response = client.get(
             '/api/v1/search/entries',
             params={'query': 'fallback search result', 'mode': 'vector'},
+            headers=headers,
         )
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload['mode_applied'] == 'keyword'
+    assert payload['applied_strategies'] == ['keyword']
+    assert payload['items'][0]['id'] == entry['id']
+def test_public_search_auto_mode_does_not_call_provider_without_authentication(
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify unauthenticated public/API auto search never calls the provider.
+
+    Args:
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.service as ai_service
+
+    def _unexpected_request_embedding(config, text: str, *, input_type: str) -> list[float]:
+        raise AssertionError('unauthenticated search must not call embedding provider')
+
+    monkeypatch.setattr(ai_service, 'request_embedding', _unexpected_request_embedding)
+
+    with _ai_client(apply_runtime_env, migrated_database, search_enable_semantic=True) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        _update_ai_settings(client, headers)
+        content_type = _create_content_type(client, headers)
+        entry = _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Public Keyword Result',
+            body='<p>Public search should stay keyword only</p>',
+        )
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'public keyword result', 'mode': 'auto'},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['mode_applied'] in {'keyword', 'hybrid'}
+    assert 'vector' not in payload['applied_strategies']
+    assert payload['items'][0]['id'] == entry['id']
     assert payload['mode_applied'] == 'keyword'
     assert payload['applied_strategies'] == ['keyword']
     assert payload['items'][0]['id'] == entry['id']
@@ -1144,6 +1328,7 @@ def test_rebuild_embeddings_does_not_hold_storage_connection_during_provider_io(
                 'entry_id': entry_id,
                 'title_text': 'Rebuild Guard',
                 'body_text': 'Provider calls happen without a DB connection',
+                'updated_at': datetime.now(UTC),
             }
         ],
         [],
@@ -1164,6 +1349,7 @@ def test_rebuild_embeddings_does_not_hold_storage_connection_during_provider_io(
             'base_url': 'https://api.voyageai.com/v1',
             'api_key': 'test-ai-key',
             'embedding_model': 'voyage-3.5-lite',
+            'embedding_dimensions': 2,
             'request_timeout_seconds': 5,
         }
 
@@ -1215,6 +1401,114 @@ def test_rebuild_embeddings_does_not_hold_storage_connection_during_provider_io(
     assert response.embedded == 1
     assert response.failed == 0
     assert response.failed_entry_ids == []
+
+
+def test_force_rebuild_embeddings_uses_keyset_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify forced embedding rebuild advances with a keyset cursor."""
+
+    import pragma.ai.service as ai_service
+
+    first_id = uuid4()
+    second_id = uuid4()
+    first_updated_at = datetime(2026, 1, 2, tzinfo=UTC)
+    second_updated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    calls: list[dict[str, object]] = []
+
+    class _FakeConnection:
+        @contextmanager
+        def transaction(self) -> Iterator[None]:
+            yield
+
+    class _Storage:
+        @contextmanager
+        def connection(self) -> Iterator[_FakeConnection]:
+            yield _FakeConnection()
+
+    batches = [
+        [
+            {
+                'entry_id': first_id,
+                'title_text': 'First',
+                'body_text': 'Batch',
+                'updated_at': first_updated_at,
+            }
+        ],
+        [
+            {
+                'entry_id': second_id,
+                'title_text': 'Second',
+                'body_text': 'Batch',
+                'updated_at': second_updated_at,
+            }
+        ],
+    ]
+
+    def _mock_get_extension_capabilities(
+        _connection: object,
+    ) -> dict[str, dict[str, bool]]:
+        return {'pgvector': {'installed': True}, 'pg_trgm': {'installed': True}}
+
+    def _mock_get_ai_provider_settings(_connection: object) -> dict[str, object]:
+        return {
+            'enabled': True,
+            'provider': 'voyage',
+            'base_url': 'https://api.voyageai.com/v1',
+            'api_key': 'test-ai-key',
+            'embedding_model': 'voyage-3.5-lite',
+            'embedding_dimensions': 2,
+            'request_timeout_seconds': 5,
+        }
+
+    def _mock_list_search_documents_for_embedding_rebuild(
+        _connection: object,
+        **kwargs: object,
+    ) -> list[dict[str, object]]:
+        calls.append(kwargs)
+        return batches.pop(0) if batches else []
+
+    monkeypatch.setattr(
+        ai_service, 'get_extension_capabilities', _mock_get_extension_capabilities
+    )
+    monkeypatch.setattr(ai_service, 'search_embedding_column_exists', lambda _: True)
+    monkeypatch.setattr(ai_service, 'get_ai_provider_settings', _mock_get_ai_provider_settings)
+    monkeypatch.setattr(
+        ai_service,
+        'list_search_documents_for_embedding_rebuild',
+        _mock_list_search_documents_for_embedding_rebuild,
+    )
+    monkeypatch.setattr(
+        ai_service,
+        'request_embedding',
+        lambda *_args, **_kwargs: [0.25, 0.75],
+    )
+    monkeypatch.setattr(
+        ai_service,
+        'update_search_document_embedding',
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = ai_service.rebuild_search_embeddings(
+        _Storage(),
+        ai_service.AISearchEmbeddingRebuildRequest(
+            batch_size=1,
+            force=True,
+            max_documents=2,
+        ),
+    )
+
+    assert response.attempted == 2
+    assert response.embedded == 2
+    assert [call['limit'] for call in calls] == [1, 1]
+    assert [call['stale_only'] for call in calls] == [False, False]
+    assert calls[0]['expected_embedding_dimensions'] == 2
+    assert calls[1]['expected_embedding_dimensions'] == 2
+    assert calls[0]['after_updated_at'] is None
+    assert calls[0]['after_entry_id'] is None
+    assert calls[1]['after_updated_at'] == first_updated_at
+    assert calls[1]['after_entry_id'] == first_id
+    assert all('offset' not in call for call in calls)
 
 
 def test_content_save_paths_never_call_provider(

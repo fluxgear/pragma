@@ -5,16 +5,16 @@ import AuthLayout from '@/layouts/AuthLayout.vue'
 import { resolveNavigation } from '@/router/guards'
 import { useAuthStore } from '@/stores/auth'
 import { useInstallStore } from '@/stores/install'
-import AccountView from '@/views/AccountView.vue'
-import BootView from '@/views/BootView.vue'
-import ContentEntriesView from '@/views/ContentEntriesView.vue'
-import DashboardView from '@/views/DashboardView.vue'
-import LoginView from '@/views/LoginView.vue'
-import AiSettingsView from '@/views/AiSettingsView.vue'
-import MediaLibraryView from '@/views/MediaLibraryView.vue'
-import NotFoundView from '@/views/NotFoundView.vue'
-import SetupWizardView from '@/views/SetupWizardView.vue'
-import UsersView from '@/views/UsersView.vue'
+const AccountView = () => import('@/views/AccountView.vue')
+const AiSettingsView = () => import('@/views/AiSettingsView.vue')
+const BootView = () => import('@/views/BootView.vue')
+const ContentEntriesView = () => import('@/views/ContentEntriesView.vue')
+const DashboardView = () => import('@/views/DashboardView.vue')
+const LoginView = () => import('@/views/LoginView.vue')
+const MediaLibraryView = () => import('@/views/MediaLibraryView.vue')
+const NotFoundView = () => import('@/views/NotFoundView.vue')
+const SetupWizardView = () => import('@/views/SetupWizardView.vue')
+const UsersView = () => import('@/views/UsersView.vue')
 
 export const router = createRouter({
   history: createWebHistory(),

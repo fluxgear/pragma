@@ -13,6 +13,10 @@ db -> migrate -> backend -> proxy
 - `backend`: runs Uvicorn with `pragma.app:create_app --factory`.
 - `proxy`: builds/serves the admin SPA and proxies API, WebSocket, health, readiness, and public routes.
 
+### Module trusted-code boundary
+
+Enabled modules are unrestricted in-process Python code. Treat write access to the `modules` named volume or non-Docker `PRAGMA_MODULE_ROOT` as backend code-execution authority. The backend logs advisory diagnostics when enabled module roots, manifests, or entrypoints are group/world writable, fail filesystem inspection, or are not owned by the backend process user where ownership is meaningful. Advisory mode is the default so Docker named-volume deployments continue to work across host filesystems. Operators who can guarantee tighter ownership and mode semantics can set `PRAGMA_MODULE_TRUST_STRICT=true`; strict mode rejects unsafe enabled module loading instead of importing the entrypoint.
+
 Named volumes are `db-data`, `media`, and `modules`. The `modules` volume contains trusted executable Python module code when modules are installed; keep writes to it under operator control.
 
 ## PostgreSQL requirement
@@ -52,7 +56,7 @@ For production Docker, configure exactly one source for each secret:
 
 Raw-secret deployments use only `docker/docker-compose.yml` and set the raw variables in `docker/prod.env`.
 
-File-secret deployments use the supported bind-mount override file so the same paths exist in `db`, `migrate`, and `backend`:
+File-secret deployments use the supported bind-mount override file so the same paths exist in `db`, `migrate`, and `backend`. The default host-side directory is `docker/secrets/`, which is ignored by Git; keep it local-only and never commit secret source files:
 
 ```bash
 mkdir -p docker/secrets

@@ -14,10 +14,10 @@ Raises:
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 
 from pragma import __version__
 from pragma.auth.router import router as auth_router
@@ -118,6 +118,49 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
     return lifespan
 
 
+_SECURITY_HEADER_DEFAULTS = {
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+}
+
+
+def _add_browser_hardening_headers(app: FastAPI) -> None:
+    """Install centralized browser hardening headers.
+
+    Args:
+        app: FastAPI application instance.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    @app.middleware('http')
+    async def browser_hardening_headers(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        """Add safe default browser security headers to HTTP responses.
+
+        Args:
+            request: Incoming request.
+            call_next: Next middleware/application callable.
+
+        Returns:
+            Response: Response with hardening headers when not already set.
+
+        Raises:
+            None.
+        """
+
+        response = await call_next(request)
+        for header_name, header_value in _SECURITY_HEADER_DEFAULTS.items():
+            response.headers.setdefault(header_name, header_value)
+        return response
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application instance.
 
@@ -146,6 +189,7 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=build_lifespan(settings),
     )
+    _add_browser_hardening_headers(app)
     register_exception_handlers(app)
     app.include_router(system_router, prefix='/api/v1')
     app.include_router(install_router, prefix='/api/v1')

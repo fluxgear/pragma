@@ -81,8 +81,9 @@ class ThemeRuntime:
             loader=_ThemeTemplateLoader(self),
             autoescape=select_autoescape(enabled_extensions=('html', 'xml')),
             auto_reload=True,
-            cache_size=0,
+            cache_size=400,
         )
+        self._environment_overlays: dict[tuple[str, ...], Environment] = {}
 
     @property
     def environment(self) -> Environment:
@@ -263,10 +264,14 @@ class ThemeRuntime:
         for resolved_path, candidate_themes in attempts:
             environment = self._build_environment(candidate_themes)
             try:
-                return self._compile_template(
-                    environment,
-                    normalized.as_posix(),
-                    resolved_path,
+                return environment.get_template(normalized.as_posix())
+            except TemplateNotFound as exc:
+                last_error = self._template_not_found_error(normalized)
+                logger.warning(
+                    'Skipping missing theme template %s from theme %s: %s',
+                    resolved_path.relative_path,
+                    resolved_path.theme_id,
+                    exc,
                 )
             except ThemeError as exc:
                 logger.warning(
@@ -309,12 +314,16 @@ class ThemeRuntime:
         for resolved_path, candidate_themes in attempts:
             environment = self._build_environment(candidate_themes)
             try:
-                template = self._compile_template(
-                    environment,
-                    normalized.as_posix(),
-                    resolved_path,
-                )
+                template = environment.get_template(normalized.as_posix())
                 return template.render(render_context)
+            except TemplateNotFound as exc:
+                last_error = self._template_not_found_error(normalized)
+                logger.warning(
+                    'Skipping missing theme template %s from theme %s: %s',
+                    resolved_path.relative_path,
+                    resolved_path.theme_id,
+                    exc,
+                )
             except ThemeError as exc:
                 logger.warning(
                     'Skipping unusable theme template %s from theme %s: %s',
@@ -360,7 +369,15 @@ class ThemeRuntime:
 
         if candidate_themes is None:
             return self._environment
-        return self._environment.overlay(loader=_ThemeTemplateLoader(self, candidate_themes))
+
+        cache_key = tuple(theme.manifest.id for theme in candidate_themes)
+        environment = self._environment_overlays.get(cache_key)
+        if environment is None:
+            environment = self._environment.overlay(
+                loader=_ThemeTemplateLoader(self, candidate_themes)
+            )
+            self._environment_overlays[cache_key] = environment
+        return environment
 
     def _iter_template_attempts(
         self,
@@ -400,6 +417,8 @@ class ThemeRuntime:
         name: str,
         resolved_path: ResolvedThemePath,
         globals: dict[str, Any] | None = None,
+        *,
+        force_reload: bool = False,
     ) -> Template:
         """Compile a resolved template path inside the provided environment.
 
@@ -408,6 +427,7 @@ class ThemeRuntime:
             name: Normalized template lookup path.
             resolved_path: Resolved template metadata.
             globals: Optional template globals.
+            force_reload: Whether the returned template should be reloaded on next use.
 
         Returns:
             Template: Compiled template bound to the provided environment.
@@ -418,6 +438,7 @@ class ThemeRuntime:
 
         try:
             source = resolved_path.filesystem_path.read_text(encoding='utf-8')
+            source_stat = resolved_path.filesystem_path.stat()
         except OSError as exc:
             raise ThemeError(
                 detail=(
@@ -442,11 +463,17 @@ class ThemeRuntime:
                 code='THEME_TEMPLATE_INVALID',
             ) from exc
 
-        def uptodate(path: Path = resolved_path.filesystem_path) -> bool:
+        def uptodate(
+            path: Path = resolved_path.filesystem_path,
+            expected_mtime_ns: int = source_stat.st_mtime_ns,
+            expected_size: int = source_stat.st_size,
+        ) -> bool:
             """Report whether the compiled template source is unchanged.
 
             Args:
                 path: Filesystem path for the compiled template.
+                expected_mtime_ns: Source mtime captured at compile time.
+                expected_size: Source size captured at compile time.
 
             Returns:
                 bool: True when the template source is unchanged.
@@ -455,7 +482,16 @@ class ThemeRuntime:
                 None.
             """
 
-            return path.is_file()
+            if force_reload:
+                return False
+            try:
+                current_stat = path.stat()
+            except OSError:
+                return False
+            return (
+                current_stat.st_mtime_ns == expected_mtime_ns
+                and current_stat.st_size == expected_size
+            )
 
         return environment.template_class.from_code(
             environment,
@@ -653,6 +689,7 @@ class _ThemeTemplateLoader(BaseLoader):
                     normalized.as_posix(),
                     candidate,
                     globals,
+                    force_reload=last_error is not None,
                 )
             except ThemeError as exc:
                 logger.warning(

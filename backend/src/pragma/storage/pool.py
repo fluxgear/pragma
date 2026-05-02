@@ -23,6 +23,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from pragma.config import Settings
 from pragma.errors import StorageError
+from pragma.storage.queries.system import ping_database
 
 
 class DatabasePool:
@@ -137,7 +138,7 @@ class DatabasePool:
 
         try:
             with self.connection() as connection:
-                connection.execute("SELECT 1").fetchone()
+                ping_database(connection)
         except (PsycopgError, PoolTimeout) as exc:
             raise StorageError(
                 detail="Database connectivity check failed",

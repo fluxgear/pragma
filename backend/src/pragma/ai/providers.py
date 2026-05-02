@@ -35,6 +35,7 @@ class EmbeddingProviderConfig:
         base_url: Provider API base URL.
         api_key: Bearer API key.
         embedding_model: Provider model identifier.
+        embedding_dimensions: Expected embedding vector dimensions.
         request_timeout_seconds: Network timeout for provider calls.
 
     Returns:
@@ -48,6 +49,7 @@ class EmbeddingProviderConfig:
     base_url: str
     api_key: str
     embedding_model: str
+    embedding_dimensions: int
     request_timeout_seconds: int
 
 
@@ -258,5 +260,17 @@ def request_embedding(
             detail='Embedding provider response contained invalid vector values',
             code='SEARCH_EMBEDDING_PROVIDER_INVALID',
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    if (
+        config.embedding_dimensions is not None
+        and len(embedding) != config.embedding_dimensions
+    ):
+        raise SearchError(
+            detail=(
+                'Embedding provider returned vector dimensions that do not match '
+                'the configured AI settings'
+            ),
+            code='SEARCH_EMBEDDING_DIMENSION_MISMATCH',
+            status_code=HTTPStatus.BAD_GATEWAY,
         )
     return embedding

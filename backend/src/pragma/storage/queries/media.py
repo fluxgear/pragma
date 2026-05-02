@@ -41,6 +41,7 @@ def create_media(
     caption: str | None,
     description: str | None,
     variants: dict[str, str],
+    metadata: dict[str, Any],
     uploader_user_id: UUID,
     created_at: datetime,
 ) -> dict[str, Any]:
@@ -59,6 +60,7 @@ def create_media(
         caption: Optional caption.
         description: Optional description.
         variants: Stored derivative metadata.
+        metadata: Safe extracted media metadata.
         uploader_user_id: Authenticated uploader identifier.
         created_at: Timestamp for creation and update columns.
 
@@ -83,11 +85,12 @@ def create_media(
             caption,
             description,
             variants,
+            metadata,
             uploader_user_id,
             created_at,
             updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING
             id,
             original_filename,
@@ -100,6 +103,7 @@ def create_media(
             caption,
             description,
             variants,
+            metadata,
             uploader_user_id,
             created_at,
             updated_at
@@ -116,6 +120,7 @@ def create_media(
             caption,
             description,
             Jsonb(variants),
+            Jsonb(metadata),
             uploader_user_id,
             created_at,
             created_at,
@@ -199,6 +204,7 @@ def list_media(
             caption,
             description,
             variants,
+            metadata,
             uploader_user_id,
             created_at,
             updated_at
@@ -240,6 +246,7 @@ def get_media_by_id(connection: Connection, media_id: UUID) -> dict[str, Any] | 
             caption,
             description,
             variants,
+            metadata,
             uploader_user_id,
             created_at,
             updated_at

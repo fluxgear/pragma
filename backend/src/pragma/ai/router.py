@@ -33,6 +33,7 @@ from pragma.ai.service import (
 )
 from pragma.auth.dependencies import get_current_user, require_permission
 from pragma.auth.permissions import PERMISSION_AI_SETTINGS_MANAGE
+from pragma.config import Settings, get_settings
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 
@@ -112,6 +113,7 @@ def get_ai_settings(
 def update_ai_settings(
     payload: AIProviderSettingsUpdateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
     current_user: Annotated[
         dict[str, object], Depends(require_permission(PERMISSION_AI_SETTINGS_MANAGE))
     ],
@@ -121,6 +123,7 @@ def update_ai_settings(
     Args:
         payload: Provider settings update payload.
         storage: Initialized database pool manager.
+        settings: Application settings controlling provider URL hardening.
         current_user: Authenticated user context with AI-settings permission.
 
     Returns:
@@ -131,7 +134,7 @@ def update_ai_settings(
         StorageError: If PostgreSQL access fails.
     """
 
-    return update_ai_provider_settings_snapshot(storage, payload, current_user)
+    return update_ai_provider_settings_snapshot(storage, settings, payload, current_user)
 
 
 @router.post(
@@ -142,6 +145,7 @@ def update_ai_settings(
 def test_ai_settings(
     payload: AIProviderTestRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
     current_user: Annotated[
         dict[str, object], Depends(require_permission(PERMISSION_AI_SETTINGS_MANAGE))
     ],
@@ -151,6 +155,7 @@ def test_ai_settings(
     Args:
         payload: Provider connectivity test payload.
         storage: Initialized database pool manager.
+        settings: Application settings controlling provider URL hardening.
         current_user: Authenticated user context with AI-settings permission.
 
     Returns:
@@ -163,7 +168,7 @@ def test_ai_settings(
     """
 
     _ = current_user
-    return test_ai_provider_connection(storage, payload)
+    return test_ai_provider_connection(storage, settings, payload)
 
 
 @router.post(
@@ -174,6 +179,7 @@ def test_ai_settings(
 def rebuild_ai_embeddings(
     payload: AISearchEmbeddingRebuildRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
     current_user: Annotated[
         dict[str, object], Depends(require_permission(PERMISSION_AI_SETTINGS_MANAGE))
     ],
@@ -183,6 +189,7 @@ def rebuild_ai_embeddings(
     Args:
         payload: Search-embedding rebuild payload.
         storage: Initialized database pool manager.
+        settings: Application settings controlling provider URL hardening.
         current_user: Authenticated user context with AI-settings permission.
 
     Returns:
@@ -195,4 +202,4 @@ def rebuild_ai_embeddings(
     """
 
     _ = current_user
-    return rebuild_search_embeddings(storage, payload)
+    return rebuild_search_embeddings(storage, payload, settings)

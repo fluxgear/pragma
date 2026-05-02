@@ -135,7 +135,7 @@ describe('MediaLibraryView', () => {
     })
   })
 
-  it('loads media assets and image previews on mount', async () => {
+  it('loads media assets without preview blob requests on mount', async () => {
     const { wrapper } = await mountView()
 
     expect(mediaApiMocks.listMediaAssets).toHaveBeenCalledTimes(1)
@@ -144,7 +144,10 @@ describe('MediaLibraryView', () => {
       offset: 0,
       order_by: 'updated_at',
     })
-    expect(mediaApiMocks.fetchMediaContentBlob).toHaveBeenCalledWith('media-1')
+    expect(mediaApiMocks.fetchMediaContentBlob).not.toHaveBeenCalled()
+    expect(wrapper.find('img.media-library__thumb').exists()).toBe(false)
+    expect(wrapper.text()).toContain('No preview')
+    expect(wrapper.html()).not.toContain(`src=\"${mediaAsset.content_url}\"`)
     expect(wrapper.text()).toContain('Media library')
     expect(wrapper.text()).toContain('hero.png')
     expect(wrapper.text()).toContain('Hero image')
@@ -203,6 +206,7 @@ describe('MediaLibraryView', () => {
     })
     expect(wrapper.get('[data-testid="media-pagination-summary"]').text()).toContain('51-51 of 75')
     expect(wrapper.text()).toContain('gallery.png')
+    expect(mediaApiMocks.fetchMediaContentBlob).not.toHaveBeenCalled()
   })
 
   it('uploads the selected file with metadata and reloads the list', async () => {

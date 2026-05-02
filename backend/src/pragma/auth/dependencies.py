@@ -109,6 +109,32 @@ def get_current_user(
     return user
 
 
+def get_optional_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, Any] | None:
+    """Resolve an authenticated user when a bearer token is supplied.
+
+    Args:
+        credentials: Parsed Authorization header credentials.
+        storage: Initialized database pool manager.
+        settings: Application settings.
+
+    Returns:
+        dict[str, Any] | None: Authenticated user record, or ``None`` for
+        unauthenticated requests without credentials.
+
+    Raises:
+        AuthError: If a supplied bearer token is invalid.
+        StorageError: If the user lookup fails due to a database problem.
+    """
+
+    if credentials is None:
+        return None
+    return get_current_user(credentials, storage, settings)
+
+
 def get_current_superuser(
     current_user: Annotated[dict[str, Any], Depends(get_current_user)],
 ) -> dict[str, Any]:

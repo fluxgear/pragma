@@ -45,7 +45,7 @@ Check `PRAGMA_JWT_SECRET_KEY`, `PRAGMA_REFRESH_COOKIE_NAME`, `PRAGMA_REFRESH_COO
 
 Uploads require the backend to write to `PRAGMA_MEDIA_ROOT`. Production Docker mounts the `media` volume at `/var/lib/pragma/media`. For local runs, relative `media` resolves under `backend/`.
 
-If uploads fail, inspect backend logs and verify the directory exists and is writable by the backend process. Only JPEG, PNG, GIF, and WebP image uploads are currently supported by default.
+If uploads fail, inspect backend logs and verify the directory exists and is writable by the backend process. Supported uploads are PNG, JPEG, GIF, WebP, PDF, MP3, WAV, OGG, MP4, and WebM by default. SVG remains unsupported because raw SVG can carry active content. Raster images generate thumbnail derivatives; if derivative generation fails, Pragma preserves the original upload and logs a warning.
 
 ## Theme fallback errors
 

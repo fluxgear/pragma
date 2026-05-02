@@ -43,7 +43,7 @@ PostgreSQL 18 with `pg_trgm` and `vector`/pgvector is the supported target. Read
 | `PRAGMA_MEDIA_STORAGE_BACKEND` | `local` | Local filesystem is the only implemented backend. |
 | `PRAGMA_MEDIA_ROOT` | `media` | Relative paths resolve under `backend/`; production Docker uses `/var/lib/pragma/media`. |
 | `PRAGMA_MEDIA_MAX_UPLOAD_BYTES` | `10485760` | 1 byte to 100 MiB. |
-| `PRAGMA_MEDIA_ALLOWED_MIME_TYPES` | `image/jpeg,image/png,image/gif,image/webp` | Upload sniffing is implemented for these image types. |
+| `PRAGMA_MEDIA_ALLOWED_MIME_TYPES` | `image/jpeg,image/png,image/gif,image/webp,application/pdf,audio/mpeg,audio/wav,audio/ogg,video/mp4,video/webm` | Upload sniffing supports PNG, JPEG, GIF, WebP, PDF, MP3, WAV, OGG, MP4, and WebM. SVG remains unsupported because raw SVG can carry active content. |
 
 There is no object storage/S3 backend, non-image upload support, or generated thumbnail/derivative pipeline in the current repo.
 
@@ -53,6 +53,7 @@ There is no object storage/S3 backend, non-image upload support, or generated th
 | --- | --- | --- |
 | `PRAGMA_THEME_ROOT` | `../themes` | Filesystem theme root; production Docker uses `/app/themes`. |
 | `PRAGMA_MODULE_ROOT` | `../modules` | Filesystem module root for trusted operator-installed Python modules; production Docker uses `/app/modules`. Control write access to this root. |
+| `PRAGMA_MODULE_TRUST_STRICT` | `false` | Optional strict trusted-code boundary mode. `false` logs advisory diagnostics for unsafe module paths and still loads enabled modules; `true` rejects loading enabled modules with unsafe permissions, ownership mismatches, or stat failures. |
 | `PRAGMA_THEME_ACTIVE_ID` | `default` | Lowercase letters, numbers, hyphens, underscores; must start/end alphanumeric. |
 | `PRAGMA_THEME_DEFAULT_ID` | `default` | Fallback theme id; same validation as active id. |
 
@@ -103,7 +104,7 @@ PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
 PRAGMA_JWT_SECRET_KEY_FILE=/run/secrets/pragma_jwt_secret_key
 ```
 
-Then provide host-side source files for the override mounts. These source paths are relative to the compose file directory (`docker/`), so the following values point to `docker/secrets/...` from the repo root:
+Then provide host-side source files for the override mounts. These source paths are relative to the compose file directory (`docker/`), so the following values point to `docker/secrets/...` from the repo root. `docker/secrets/` is ignored by Git and should remain local-only:
 
 ```env
 PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./secrets/pragma_database_password
