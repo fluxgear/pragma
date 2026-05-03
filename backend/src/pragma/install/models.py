@@ -13,9 +13,16 @@ Raises:
 
 from __future__ import annotations
 
+import typing
+
 from pydantic import BaseModel, Field, field_validator
 
 from pragma.auth.models import UserResponse
+
+EmailField = typing.Annotated[
+    str,
+    Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+]
 
 
 class CapabilityStatus(BaseModel):
@@ -69,7 +76,7 @@ class BootstrapRequest(BaseModel):
         ValidationError: If payload fields are invalid.
     """
 
-    email: str = Field(min_length=3, max_length=320)
+    email: EmailField
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=12, max_length=512)
     full_name: str | None = Field(default=None, max_length=255)
@@ -77,7 +84,7 @@ class BootstrapRequest(BaseModel):
     @field_validator("email", "username", mode="before")
     @classmethod
     def strip_identity_fields(cls, value: object) -> object:
-        """Strip bootstrap identity fields before length validation.
+        """Strip bootstrap identity fields before validation.
 
         Args:
             value: Raw email or username input.

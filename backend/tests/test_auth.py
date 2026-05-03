@@ -181,6 +181,47 @@ def test_login_failure_returns_structured_error(
     assert len(verify_calls) == 1
     assert verify_calls[0][0] == "missing-password"
 
+    logged_validation_errors: list[dict[str, object]] = []
+
+    def fake_validation_warning(
+        message: str,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        _ = args
+        if message != "Request validation failed":
+            return
+        extra = kwargs.get("extra")
+        if not isinstance(extra, dict):
+            return
+        errors = extra.get("errors")
+        if isinstance(errors, list):
+            logged_validation_errors.extend(
+                error for error in errors if isinstance(error, dict)
+            )
+
+    monkeypatch.setattr("pragma.errors.logger.warning", fake_validation_warning)
+    validation_response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "identity": "invalid@example.com",
+            "password": {
+                "raw": "super-secret-password",
+                "api_key": "sk-test-secret-key",
+            },
+        },
+    )
+
+    assert validation_response.status_code == 422
+    assert validation_response.json() == {
+        "detail": "Request validation failed",
+        "code": "VALIDATION_ERROR",
+    }
+    assert logged_validation_errors
+    assert all("input" not in error for error in logged_validation_errors)
+    assert all("super-secret-password" not in str(error) for error in logged_validation_errors)
+    assert all("sk-test-secret-key" not in str(error) for error in logged_validation_errors)
+
 
 def test_refresh_success_rotates_session(
     client: TestClient,

@@ -23,6 +23,7 @@ from uuid import UUID
 
 from psycopg import Connection
 from psycopg import Error as PsycopgError
+from psycopg_pool import PoolTimeout
 
 from pragma.config import Settings
 from pragma.content.models import (
@@ -31,7 +32,7 @@ from pragma.content.models import (
     TextFieldDefinition,
     parse_field_definition,
 )
-from pragma.errors import SearchError
+from pragma.errors import SearchError, StorageError
 from pragma.search.models import (
     SearchEntryResponse,
     SearchMode,
@@ -506,7 +507,7 @@ def search_public_entries(
                         )
         except SearchError:
             raise
-        except PsycopgError as exc:
+        except (StorageError, PsycopgError, PoolTimeout) as exc:
             raise SearchError(
                 detail='Unable to execute search query',
                 code='SEARCH_QUERY_FAILED',
@@ -575,7 +576,7 @@ def search_public_entries(
             )
     except SearchError:
         raise
-    except PsycopgError as exc:
+    except (StorageError, PsycopgError, PoolTimeout) as exc:
         raise SearchError(
             detail='Unable to execute search query',
             code='SEARCH_QUERY_FAILED',

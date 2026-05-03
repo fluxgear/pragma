@@ -12,6 +12,7 @@ Raises:
 """
 from __future__ import annotations
 
+import socket
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -382,6 +383,31 @@ class _EmbeddingResponse:
         return chunk
 
 
+def _public_getaddrinfo(
+    _host: str,
+    port: int,
+    *args: object,
+    **kwargs: object,
+) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+    """Return a deterministic public TCP resolution for provider tests.
+
+    Args:
+        _host: Ignored hostname under test.
+        port: Destination port under test.
+        *args: Ignored positional resolution arguments.
+        **kwargs: Ignored keyword resolution arguments.
+
+    Returns:
+        list[tuple[int, int, int, str, tuple[str, int]]]: Public TCP socket targets.
+
+    Raises:
+        None.
+    """
+
+    del args, kwargs
+    return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('8.8.8.8', port))]
+
+
 def test_request_embedding_reads_successful_response_incrementally(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -393,11 +419,12 @@ def test_request_embedding_reads_successful_response_incrementally(
 
     response = _EmbeddingResponse(b'{"data":[{"embedding":[0.1,0.2]}]}')
 
-    def _urlopen(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+    def _open_embedding_request(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
         return response
 
     monkeypatch.setattr(ai_providers, '_EMBEDDING_RESPONSE_READ_CHUNK_BYTES', 8)
-    monkeypatch.setattr(ai_providers.request, 'urlopen', _urlopen)
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _public_getaddrinfo)
+    monkeypatch.setattr(ai_providers, '_open_embedding_request', _open_embedding_request)
 
     embedding = request_embedding(
         EmbeddingProviderConfig(
@@ -429,10 +456,11 @@ def test_request_embedding_rejects_declared_oversized_response(
         b'', content_length=str(ai_providers._MAX_EMBEDDING_RESPONSE_BYTES + 1)
     )
 
-    def _urlopen(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+    def _open_embedding_request(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
         return response
 
-    monkeypatch.setattr(ai_providers.request, 'urlopen', _urlopen)
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _public_getaddrinfo)
+    monkeypatch.setattr(ai_providers, '_open_embedding_request', _open_embedding_request)
 
     with pytest.raises(SearchError) as exc_info:
         request_embedding(
@@ -463,12 +491,13 @@ def test_request_embedding_rejects_streamed_oversized_response(
 
     response = _EmbeddingResponse(b'012345678')
 
-    def _urlopen(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+    def _open_embedding_request(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
         return response
 
     monkeypatch.setattr(ai_providers, '_MAX_EMBEDDING_RESPONSE_BYTES', 8)
     monkeypatch.setattr(ai_providers, '_EMBEDDING_RESPONSE_READ_CHUNK_BYTES', 4)
-    monkeypatch.setattr(ai_providers.request, 'urlopen', _urlopen)
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _public_getaddrinfo)
+    monkeypatch.setattr(ai_providers, '_open_embedding_request', _open_embedding_request)
 
     with pytest.raises(SearchError) as exc_info:
         request_embedding(
@@ -510,7 +539,8 @@ def test_request_embedding_translates_provider_timeouts(
     def _raise_timeout(*_args: object, **_kwargs: object) -> None:
         raise TimeoutError('provider timed out')
 
-    monkeypatch.setattr(ai_providers.request, 'urlopen', _raise_timeout)
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _public_getaddrinfo)
+    monkeypatch.setattr(ai_providers, '_open_embedding_request', _raise_timeout)
 
     with pytest.raises(SearchError) as exc_info:
         request_embedding(
@@ -528,6 +558,278 @@ def test_request_embedding_translates_provider_timeouts(
 
     assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_UNAVAILABLE'
     assert exc_info.value.status_code == 503
+
+
+def test_request_embedding_rejects_hostnames_resolving_to_private_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify runtime DNS resolution rejects private or local provider targets.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider
+    from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+
+    def _private_getaddrinfo(
+        _host: str,
+        port: int,
+        *args: object,
+        **kwargs: object,
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        del args, kwargs
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port))
+        ]
+
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _private_getaddrinfo)
+
+    with pytest.raises(SearchError) as exc_info:
+        request_embedding(
+            EmbeddingProviderConfig(
+                provider=AIProvider.VOYAGE,
+                base_url='https://api.example.com/v1',
+                api_key='test-ai-key',
+                embedding_model='voyage-3.5-lite',
+                embedding_dimensions=2,
+                request_timeout_seconds=1,
+            ),
+            'private target query',
+            input_type='query',
+        )
+
+    assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
+
+
+def test_request_embedding_rejects_provider_redirects() -> None:
+    """Verify redirect-based provider pivots are rejected.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.providers as ai_providers
+
+    handler = ai_providers._RejectRedirectHandler()
+
+    with pytest.raises(SearchError) as exc_info:
+        handler.redirect_request(
+            ai_providers.request.Request('https://api.example.com/v1/embeddings'),
+            object(),
+            302,
+            'Found',
+            {},
+            'https://internal.example/embeddings',
+        )
+
+    assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
+
+
+def test_request_embedding_allows_private_resolution_with_explicit_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify runtime private-target checks honor the explicit operator opt-in.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider
+    from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+
+    response = _EmbeddingResponse(b'{"data":[{"embedding":[0.1,0.2]}]}')
+
+    def _private_getaddrinfo(
+        _host: str,
+        port: int,
+        *args: object,
+        **kwargs: object,
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        del args, kwargs
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port))
+        ]
+
+    def _open_embedding_request(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+        return response
+
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _private_getaddrinfo)
+    monkeypatch.setattr(ai_providers, '_open_embedding_request', _open_embedding_request)
+
+    embedding = request_embedding(
+        EmbeddingProviderConfig(
+            provider=AIProvider.VOYAGE,
+            base_url='http://127.0.0.1:11434/v1',
+            api_key='test-ai-key',
+            embedding_model='voyage-3.5-lite',
+            embedding_dimensions=2,
+            request_timeout_seconds=1,
+            allow_private_base_urls=True,
+        ),
+        'private opt-in query',
+        input_type='query',
+    )
+
+    assert embedding == [0.1, 0.2]
+
+
+def test_open_embedding_request_uses_prevalidated_socket_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify provider requests connect only to prevalidated socket targets.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.providers as ai_providers
+
+    captured: dict[str, object] = {}
+
+    class _FakeConnection:
+        def __init__(
+            self,
+            host: str,
+            *,
+            family: int,
+            sockaddr: tuple[object, ...],
+            timeout: int,
+        ) -> None:
+            captured['host'] = host
+            captured['family'] = family
+            captured['sockaddr'] = sockaddr
+            captured['timeout'] = timeout
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            body: object,
+            headers: dict[str, str],
+        ) -> None:
+            captured['method'] = method
+            captured['path'] = path
+            captured['body'] = body
+            captured['headers'] = headers
+
+        def getresponse(self) -> _EmbeddingResponse:
+            response = _EmbeddingResponse(b'{"data":[{"embedding":[0.1,0.2]}]}')
+            response.status = 200
+            return response
+
+        def close(self) -> None:
+            captured['closed'] = True
+
+    monkeypatch.setattr(ai_providers, '_DirectHTTPSConnection', _FakeConnection)
+
+    http_request = ai_providers.request.Request(
+        'https://api.example.com/v1/embeddings?foo=bar',
+        data=b'{"input":"x"}',
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+
+    with ai_providers._open_embedding_request(
+        http_request,
+        timeout=7,
+        parsed_url=ai_providers.parse.urlsplit(http_request.full_url),
+        resolved_targets=((socket.AF_INET, ('93.184.216.34', 443)),),
+    ) as response:
+        body = ai_providers._read_limited_response_body(response)
+
+    assert body == b'{"data":[{"embedding":[0.1,0.2]}]}'
+    assert captured['host'] == 'api.example.com'
+    assert captured['family'] == socket.AF_INET
+    assert captured['sockaddr'] == ('93.184.216.34', 443)
+    assert captured['timeout'] == 7
+    assert captured['method'] == 'POST'
+    assert captured['path'] == '/v1/embeddings?foo=bar'
+    assert captured['closed'] is True
+
+
+def test_open_embedding_request_rejects_redirect_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify provider requests reject redirect responses without following them.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.providers as ai_providers
+
+    class _FakeConnection:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+        def request(
+            self,
+            method: str,
+            path: str,
+            body: object,
+            headers: dict[str, str],
+        ) -> None:
+            del method, path, body, headers
+
+        def getresponse(self) -> _EmbeddingResponse:
+            response = _EmbeddingResponse(b'')
+            response.status = 302
+            return response
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(ai_providers, '_DirectHTTPSConnection', _FakeConnection)
+
+    http_request = ai_providers.request.Request(
+        'https://api.example.com/v1/embeddings',
+        data=b'{}',
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+
+    with pytest.raises(SearchError) as exc_info:
+        ai_providers._open_embedding_request(
+            http_request,
+            timeout=7,
+            parsed_url=ai_providers.parse.urlsplit(http_request.full_url),
+            resolved_targets=((socket.AF_INET, ('93.184.216.34', 443)),),
+        )
+
+    assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
 
 
 def test_ai_routes_require_authentication(client: TestClient) -> None:
@@ -1199,6 +1501,66 @@ def test_search_falls_back_to_keyword_when_stored_provider_url_is_invalid(
         response = client.get(
             '/api/v1/search/entries',
             params={'query': 'stored invalid url fallback', 'mode': 'vector'},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['mode_applied'] == 'keyword'
+    assert payload['applied_strategies'] == ['keyword']
+    assert payload['items'][0]['id'] == entry['id']
+
+
+def test_search_falls_back_to_keyword_when_provider_hostname_resolves_private(
+    monkeypatch: pytest.MonkeyPatch,
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify vector search falls back cleanly when runtime DNS resolves private.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+        apply_runtime_env: Fixture helper that applies runtime environment values.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.providers as ai_providers
+
+    def _private_getaddrinfo(
+        _host: str,
+        port: int,
+        *args: object,
+        **kwargs: object,
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        del args, kwargs
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port))
+        ]
+
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _private_getaddrinfo)
+
+    with _ai_client(apply_runtime_env, migrated_database, search_enable_semantic=True) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        _update_ai_settings(client, headers)
+        content_type = _create_content_type(client, headers)
+        entry = _create_entry(
+            client,
+            headers,
+            str(content_type['id']),
+            title='Stored Private Resolution Fallback',
+            body='<p>Keyword fallback should survive runtime private DNS resolution</p>',
+        )
+
+        response = client.get(
+            '/api/v1/search/entries',
+            params={'query': 'stored private resolution fallback', 'mode': 'vector'},
         )
 
     assert response.status_code == 200

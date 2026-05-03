@@ -5,7 +5,7 @@
 {% set archive_url = archive_url|default(home_url ~ '#archive', true) %}
 {% set search_url = search_url|default(home_url ~ '#search', true) %}
 {% set footer_links = footer_links|default(site.footer_links|default([{'label': 'Home', 'href': home_url}, {'label': 'Services', 'href': home_url ~ '#services'}, {'label': 'Archive', 'href': archive_url}, {'label': 'Search', 'href': search_url}], true), true) %}
-{% set social_links = social_links|default(site.social_links|default([{'label': 'LinkedIn', 'href': '#'}, {'label': 'GitHub', 'href': '#'}, {'label': 'Email', 'href': 'mailto:hello@example.com'}], true), true) %}
+{% set social_links = social_links|default(site.social_links|default([], true), true) %}
 <footer class="site-footer">
     <div class="shell-container footer-grid">
         <div class="footer-brand">
@@ -25,14 +25,18 @@
                 {% endfor %}
             </ul>
         </div>
+        {% if social_links %}
         <div>
             <p class="footer-heading">Connect</p>
             <ul class="footer-list">
                 {% for item in social_links %}
-                <li><a href="{{ item.href|default('#', true) }}">{{ item.label|default('Social', true) }}</a></li>
+                {% if item.href %}
+                <li><a href="{{ item.href }}">{{ item.label|default('Social', true) }}</a></li>
+                {% endif %}
                 {% endfor %}
             </ul>
         </div>
+        {% endif %}
     </div>
     <div class="shell-container footer-meta">
         <p>© {{ year|default('2026', true) }} {{ site_name }}. Built for commercial-grade publishing.</p>

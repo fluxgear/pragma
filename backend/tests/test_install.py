@@ -50,6 +50,73 @@ def test_install_status_reports_schema_not_ready_before_migrations(
     assert response.json()["is_installed"] is False
 
 
+def test_install_status_reports_schema_not_ready_when_bootstrap_dependencies_missing(
+    runtime_database: dict[str, str],
+) -> None:
+    """Verify partial migration tables are not enough for bootstrap readiness.
+
+    Args:
+        runtime_database: Environment values for the isolated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    from pragma.app import create_app
+
+    dsn = build_database_dsn(runtime_database, runtime_database["PRAGMA_DATABASE_NAME"])
+    with psycopg.connect(dsn, row_factory=dict_row) as connection:
+        connection.execute(
+            """
+            CREATE TABLE pragma_install_state (
+                id INTEGER PRIMARY KEY,
+                is_installed BOOLEAN NOT NULL DEFAULT FALSE,
+                installed_at TIMESTAMPTZ,
+                installed_by_user_id UUID
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE pragma_users (
+                id UUID PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                username TEXT NOT NULL UNIQUE,
+                full_name TEXT,
+                password_hash TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
+                last_login_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE pragma_refresh_tokens (
+                id UUID PRIMARY KEY,
+                user_id UUID NOT NULL,
+                token_hash TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.commit()
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/v1/install/status")
+
+    assert response.status_code == 200
+    assert response.json()["schema_ready"] is False
+    assert response.json()["is_installed"] is False
+
+
 def test_migrations_create_expected_tables(migrated_database: dict[str, str]) -> None:
     """Verify the Alembic chain creates the required M11 schema objects.
 
@@ -201,6 +268,94 @@ def test_bootstrap_creates_first_superuser(
     assert "content.entries.publish" in login_payload["user"]["permissions"]
 
 
+def test_bootstrap_rejects_missing_or_invalid_configured_setup_secret(
+    migrated_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify configured setup secrets are required before first-run bootstrap.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    from pragma.app import create_app
+    from pragma.config import clear_settings_cache
+
+    del migrated_database
+    setup_secret = 'operator-controlled-setup-secret-1234567890'
+    monkeypatch.setenv('PRAGMA_SETUP_SECRET', setup_secret)
+    clear_settings_cache()
+
+    with TestClient(create_app()) as secret_client:
+        missing_response = secret_client.post(
+            "/api/v1/install/bootstrap", json=bootstrap_payload
+        )
+        invalid_response = secret_client.post(
+            "/api/v1/install/bootstrap",
+            json=bootstrap_payload,
+            headers={"X-Pragma-Setup-Secret": "wrong-secret"},
+        )
+        valid_response = secret_client.post(
+            "/api/v1/install/bootstrap",
+            json=bootstrap_payload,
+            headers={"X-Pragma-Setup-Secret": setup_secret},
+        )
+
+    assert missing_response.status_code == 403
+    assert missing_response.json() == {
+        "detail": "Invalid install setup secret",
+        "code": "INVALID_SETUP_SECRET",
+    }
+    assert invalid_response.status_code == 403
+    assert invalid_response.json() == {
+        "detail": "Invalid install setup secret",
+        "code": "INVALID_SETUP_SECRET",
+    }
+    assert valid_response.status_code == 201
+
+
+def test_bootstrap_setup_secret_fails_closed_in_production(
+    runtime_database: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify production bootstrap requires an operator setup secret.
+
+    Args:
+        runtime_database: Environment values for the isolated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    from pragma.config import get_settings
+    from pragma.errors import ConfigError
+    from pragma.install.service import verify_bootstrap_setup_secret
+
+    del runtime_database
+    monkeypatch.delenv('PRAGMA_SETUP_SECRET', raising=False)
+    production_settings = get_settings().model_copy(
+        update={"runtime_environment": "production"}
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        verify_bootstrap_setup_secret(production_settings, None)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == 'SETUP_SECRET_REQUIRED'
+
+
 def test_bootstrap_rejects_second_attempt(
     client: TestClient,
     bootstrap_payload: dict[str, str],
@@ -286,7 +441,7 @@ def test_concurrent_bootstrap_allows_only_one_superuser(
 
 
 def test_bootstrap_request_strips_identity_fields_before_length_validation() -> None:
-    """Verify bootstrap email and username strip before length validation.
+    """Verify bootstrap email and username strip before validation.
 
     Args:
         None.
@@ -301,6 +456,12 @@ def test_bootstrap_request_strips_identity_fields_before_length_validation() -> 
     with pytest.raises(ValidationError):
         BootstrapRequest(
             email='   ',
+            username='admin',
+            password='valid-password-123',
+        )
+    with pytest.raises(ValidationError):
+        BootstrapRequest(
+            email='not-an-email',
             username='admin',
             password='valid-password-123',
         )

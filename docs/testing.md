@@ -26,7 +26,7 @@ npm run build
 scripts/pre-commit-checks.sh
 ```
 
-This runs backend Ruff (`uv run ruff check .`), a fast backend pytest gate through `scripts/run-backend-tests.sh` (default target `tests/test_conftest.py`, override with `PRAGMA_PRE_COMMIT_BACKEND_TEST_TARGET`), and, when `admin/` exists, the admin Vitest suite plus production build.
+This runs backend Ruff (`uv run ruff check .`), a backend pytest gate through `scripts/run-backend-tests.sh` (default target `tests`, the full suite; override with `PRAGMA_PRE_COMMIT_BACKEND_TEST_TARGET`), and, when `admin/` exists, the admin Vitest suite plus production build.
 
 ## Docker config validation
 
@@ -36,10 +36,11 @@ Development DB compose config:
 docker compose -f docker/docker-compose.dev.yml --env-file docker/dev.env.example config >/dev/null
 ```
 
-Production compose config with the example env:
+Production compose config with the example env plus an explicit operator-chosen published DB port override:
 
 ```bash
-docker compose -f docker/docker-compose.yml --env-file docker/prod.env.example config >/dev/null
+PRAGMA_DATABASE_PUBLISHED_PORT=15432 \
+  docker compose -f docker/docker-compose.yml --env-file docker/prod.env.example config >/dev/null
 ```
 
 ## Production validation

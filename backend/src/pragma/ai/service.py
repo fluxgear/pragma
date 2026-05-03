@@ -254,6 +254,7 @@ def _provider_config_from_row(
         embedding_model=embedding_model,
         embedding_dimensions=embedding_dimensions,
         request_timeout_seconds=timeout_seconds,
+        allow_private_base_urls=allow_private_base_urls,
     )
 
 

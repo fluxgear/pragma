@@ -239,6 +239,8 @@ def update_user_record(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.storage.queries.users import lock_active_superusers
+
     actor_user_id = _require_user_id(current_user)
     timestamp = utc_now()
 
@@ -259,16 +261,25 @@ def update_user_record(
                     code='AUTH_SELF_DEACTIVATE_FORBIDDEN',
                     status_code=HTTPStatus.BAD_REQUEST,
                 )
-            if (
-                next_is_active is False
-                and bool(existing_user['is_superuser'])
-                and count_superusers(connection) <= 1
-            ):
-                raise AuthError(
-                    detail='At least one active superuser account is required',
-                    code='AUTH_LAST_SUPERUSER_REQUIRED',
-                    status_code=HTTPStatus.BAD_REQUEST,
-                )
+            if next_is_active is False and bool(existing_user['is_superuser']):
+                lock_active_superusers(connection)
+                existing_user = get_user_by_id(connection, user_id)
+                if existing_user is None:
+                    raise ConfigError(
+                        detail='User account not found',
+                        code='USER_NOT_FOUND',
+                        status_code=HTTPStatus.NOT_FOUND,
+                    )
+                if (
+                    bool(existing_user['is_active'])
+                    and bool(existing_user['is_superuser'])
+                    and count_superusers(connection) <= 1
+                ):
+                    raise AuthError(
+                        detail='At least one active superuser account is required',
+                        code='AUTH_LAST_SUPERUSER_REQUIRED',
+                        status_code=HTTPStatus.BAD_REQUEST,
+                    )
 
             updated_user = update_user_profile(
                 connection,
@@ -334,6 +345,8 @@ def replace_user_role_assignments(
         StorageError: If PostgreSQL access fails.
     """
 
+    from pragma.storage.queries.roles import lock_active_users_with_permission
+
     actor_user_id = _require_user_id(current_user)
     assigned_at = utc_now()
 
@@ -380,17 +393,38 @@ def replace_user_role_assignments(
                 and not bool(existing_user['is_superuser'])
                 and current_has_users_manage
                 and not next_has_users_manage
-                and count_active_users_with_permission(
-                    connection,
-                    PERMISSION_USERS_MANAGE,
-                )
-                <= 1
             ):
-                raise AuthError(
-                    detail='At least one active users.manage administrator is required',
-                    code='AUTH_LAST_USERS_MANAGER_REQUIRED',
-                    status_code=HTTPStatus.BAD_REQUEST,
+                lock_active_users_with_permission(connection, PERMISSION_USERS_MANAGE)
+                existing_user = get_user_by_id(connection, user_id)
+                if existing_user is None:
+                    raise ConfigError(
+                        detail='User account not found',
+                        code='USER_NOT_FOUND',
+                        status_code=HTTPStatus.NOT_FOUND,
+                    )
+                current_permissions = existing_user.get('permissions')
+                current_has_users_manage = (
+                    bool(existing_user['is_superuser'])
+                    or (
+                        isinstance(current_permissions, list)
+                        and PERMISSION_USERS_MANAGE in current_permissions
+                    )
                 )
+                if (
+                    bool(existing_user['is_active'])
+                    and not bool(existing_user['is_superuser'])
+                    and current_has_users_manage
+                    and count_active_users_with_permission(
+                        connection,
+                        PERMISSION_USERS_MANAGE,
+                    )
+                    <= 1
+                ):
+                    raise AuthError(
+                        detail='At least one active users.manage administrator is required',
+                        code='AUTH_LAST_USERS_MANAGER_REQUIRED',
+                        status_code=HTTPStatus.BAD_REQUEST,
+                    )
 
             replace_user_roles(
                 connection,

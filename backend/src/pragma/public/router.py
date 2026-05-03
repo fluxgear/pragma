@@ -526,7 +526,7 @@ def render_search(
         HTMLResponse: Rendered search response.
 
     Raises:
-        StorageError: If PostgreSQL access fails.
+        None.
     """
 
     site_context = build_site_context(settings, theme_runtime)
@@ -563,7 +563,12 @@ def render_search(
                 }
                 for item in response.items
             ]
-        except SearchError:
+        except (SearchError, StorageError, PsycopgError, PoolTimeout) as exc:
+            logger.warning(
+                'Public search unavailable',
+                extra={'path': str(request.url.path), 'error_type': type(exc).__name__},
+                exc_info=True,
+            )
             search_enabled = False
             search_error = 'Search is temporarily unavailable.'
 

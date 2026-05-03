@@ -347,11 +347,15 @@ async def validation_exception_handler(
         None.
     """
 
+    sanitized_errors = [
+        {key: value for key, value in error.items() if key != "input"}
+        for error in exc.errors()
+    ]
     logger.warning(
         "Request validation failed",
         extra={
             "path": str(request.url.path),
-            "errors": exc.errors(),
+            "errors": sanitized_errors,
         },
     )
     return JSONResponse(

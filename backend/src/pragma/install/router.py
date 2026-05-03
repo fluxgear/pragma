@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 
 from pragma.config import Settings, get_settings
 from pragma.install.models import BootstrapRequest, BootstrapResponse, InstallStatusResponse
@@ -50,6 +50,9 @@ def bootstrap(
     payload: BootstrapRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
     settings: Annotated[Settings, Depends(get_settings)],
+    setup_secret: Annotated[
+        str | None, Header(alias="X-Pragma-Setup-Secret")
+    ] = None,
 ) -> BootstrapResponse:
     """Create the first super-admin and mark the install complete.
 
@@ -57,6 +60,7 @@ def bootstrap(
         payload: Bootstrap request payload.
         storage: Initialized database pool manager.
         settings: Application settings.
+        setup_secret: Operator-controlled bootstrap setup secret.
 
     Returns:
         BootstrapResponse: Bootstrap completion payload.
@@ -66,5 +70,5 @@ def bootstrap(
         StorageError: If PostgreSQL access fails.
     """
 
-    result = bootstrap_install(storage, settings, payload)
+    result = bootstrap_install(storage, settings, payload, setup_secret)
     return BootstrapResponse(installed=True, user=result["user"])

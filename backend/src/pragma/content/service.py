@@ -1137,7 +1137,7 @@ def update_content_type_record(
 
     try:
         with storage.connection() as connection, connection.transaction():
-            existing_type = get_content_type_by_id(connection, content_type_id)
+            existing_type = get_content_type_by_id_for_update(connection, content_type_id)
             if existing_type is None:
                 raise ContentError(
                     detail="Content type not found",

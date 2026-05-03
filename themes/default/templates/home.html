@@ -20,11 +20,7 @@
     {'name': 'Jonas Ivers', 'role': 'Design Lead', 'bio': 'Owns interface systems, accessibility, and brand application.', 'initials': 'JI'},
     {'name': 'Ari Patel', 'role': 'Editorial Lead', 'bio': 'Connects publishing operations with conversion-oriented storytelling.', 'initials': 'AP'}
 ], true) %}
-{% set featured_posts = featured_posts|default([
-    {'title': 'Designing content systems that look enterprise-ready from day one', 'excerpt': 'A look at how disciplined spacing, visual tone, and fallback states lift perceived product quality.', 'category': 'Design Systems', 'author': 'Pragma Studio', 'published_at': 'Apr 2026', 'reading_time': '5 min read', 'url': '#'},
-    {'title': 'Why resilient templates matter before public routing is complete', 'excerpt': 'The best themes assume imperfect context and still produce calm, usable output.', 'category': 'Frontend Architecture', 'author': 'Pragma Engineering', 'published_at': 'Apr 2026', 'reading_time': '4 min read', 'url': '#'},
-    {'title': 'Dark mode as a first-class public experience, not an afterthought', 'excerpt': 'Token-based contrast and restrained color choices keep dark surfaces credible.', 'category': 'Experience', 'author': 'Pragma Design', 'published_at': 'Apr 2026', 'reading_time': '3 min read', 'url': '#'}
-], true) %}
+{% set featured_posts = featured_posts|default([], true) %}
 {% set contact = contact|default({}, true) %}
 {% block content %}
     {% include 'partials/hero.html' %}
@@ -50,6 +46,7 @@
                 </div>
                 <a class="button button--ghost" href="{{ archive_url|default('/archive', true) }}">Browse archive</a>
             </div>
+            {% if featured_posts %}
             <div class="panel-grid panel-grid--three">
                 {% for item in featured_posts %}
                 {% with post = item %}
@@ -57,6 +54,12 @@
                 {% endwith %}
                 {% endfor %}
             </div>
+            {% else %}
+            <div class="empty-panel">
+                <h2>No posts are published yet.</h2>
+                <p>Published posts will appear here automatically once they are available.</p>
+            </div>
+            {% endif %}
         </div>
     </section>
     {% include 'partials/contact.html' %}

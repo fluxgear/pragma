@@ -4,17 +4,32 @@
         <div class="contact-copy">
             <p class="eyebrow">Contact</p>
             <h2>{{ contact.title|default('Start a more credible public experience.', true) }}</h2>
-            <p>{{ contact.description|default('This contact block presents direct ways to reach the team while online enquiry submissions are not enabled for this site yet.', true) }}</p>
+            <p>{{ contact.description|default('Contact details can be added when the site is ready to publish direct enquiry options.', true) }}</p>
+            {% if contact.email or contact.phone or contact.availability %}
             <ul class="contact-list">
-                <li><strong>Email</strong><span>{{ contact.email|default('hello@example.com', true) }}</span></li>
-                <li><strong>Phone</strong><span>{{ contact.phone|default('+00 123 456 789', true) }}</span></li>
-                <li><strong>Availability</strong><span>{{ contact.availability|default('Response within one business day', true) }}</span></li>
+                {% if contact.email %}
+                <li><strong>Email</strong><span>{{ contact.email }}</span></li>
+                {% endif %}
+                {% if contact.phone %}
+                <li><strong>Phone</strong><span>{{ contact.phone }}</span></li>
+                {% endif %}
+                {% if contact.availability %}
+                <li><strong>Availability</strong><span>{{ contact.availability }}</span></li>
+                {% endif %}
             </ul>
+            {% else %}
+            <div class="empty-panel">
+                <h3>Contact details are not configured yet.</h3>
+                <p>Add real contact information before publishing direct enquiry options.</p>
+            </div>
+            {% endif %}
         </div>
+        {% if contact.email %}
         <div class="contact-form" aria-label="Contact options">
             <p><strong>{{ contact.panel_title|default('Prefer to start directly?', true) }}</strong></p>
-            <p class="form-note">{{ contact.note|default('Use the contact details listed here to start the conversation. Online enquiry submissions are not enabled for this site yet.', true) }}</p>
-            <a class="button button--primary" href="mailto:{{ contact.email|default('hello@example.com', true) }}">{{ contact.button_label|default('Email us', true) }}</a>
+            <p class="form-note">{{ contact.note|default('Use the configured email address to start the conversation.', true) }}</p>
+            <a class="button button--primary" href="mailto:{{ contact.email }}">{{ contact.button_label|default('Email us', true) }}</a>
         </div>
+        {% endif %}
     </div>
 </section>

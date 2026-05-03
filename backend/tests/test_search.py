@@ -23,11 +23,12 @@ import psycopg
 import pytest
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from psycopg_pool import PoolTimeout
 
 from alembic import command
 from pragma.app import create_app
 from pragma.config import clear_settings_cache
-from pragma.errors import SearchError
+from pragma.errors import SearchError, StorageError
 from pragma.search.models import MAX_SEARCH_OFFSET, SearchMode, SearchQueryParams
 from pragma.search.service import search_public_entries
 from tests.helpers import BACKEND_ROOT, build_database_dsn
@@ -1413,6 +1414,63 @@ def test_search_service_rejects_blank_queries() -> None:
 
     assert exc_info.value.code == 'SEARCH_QUERY_INVALID'
     assert exc_info.value.detail == 'Search query must not be blank'
+
+
+@pytest.mark.parametrize(
+    'storage_exception',
+    [
+        PoolTimeout('test pool exhausted'),
+        StorageError(
+            detail='Internal search storage failure should never leak',
+            code='DATABASE_UNAVAILABLE',
+        ),
+    ],
+)
+def test_search_service_converts_storage_failures_to_search_error(
+    storage_exception: Exception,
+) -> None:
+    '''Verify storage failures become structured search-domain errors.
+
+    Args:
+        storage_exception: Storage-layer exception raised while opening storage.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    '''
+
+    class _FailingStorage:
+        @contextmanager
+        def connection(self) -> Iterator[object]:
+            raise storage_exception
+            yield object()
+
+    class _Settings:
+        search_enable_semantic = False
+
+    params = SearchQueryParams.model_construct(
+        query='storage failure',
+        limit=20,
+        offset=0,
+        content_type_slug=None,
+        mode=SearchMode.AUTO,
+        query_embedding=None,
+    )
+
+    with pytest.raises(SearchError) as exc_info:
+        search_public_entries(
+            _FailingStorage(),
+            _Settings(),
+            params,
+            allow_provider_embeddings=False,
+        )
+
+    assert exc_info.value.code == 'SEARCH_QUERY_FAILED'
+    assert exc_info.value.detail == 'Unable to execute search query'
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.__cause__ is storage_exception
 
 
 def test_search_route_returns_validation_error_for_invalid_params(

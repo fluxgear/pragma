@@ -81,6 +81,43 @@ def count_active_users_with_permission(connection: Connection, permission_key: s
     return int(row["total"])
 
 
+def lock_active_users_with_permission(
+    connection: Connection, permission_key: str
+) -> list[dict[str, Any]]:
+    """Lock active users with an effective permission.
+
+    Args:
+        connection: Open PostgreSQL connection inside a transaction.
+        permission_key: Stable permission identifier.
+
+    Returns:
+        list[dict[str, Any]]: Locked active user identifier rows.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    return connection.execute(
+        """
+        SELECT u.id
+        FROM pragma_users AS u
+        WHERE u.is_active = TRUE
+          AND (
+              u.is_superuser = TRUE
+              OR EXISTS (
+                  SELECT 1
+                  FROM pragma_user_roles AS ur
+                  JOIN pragma_role_permissions AS rp ON rp.role_key = ur.role_key
+                  WHERE ur.user_id = u.id AND rp.permission_key = %s
+              )
+          )
+        ORDER BY u.id
+        FOR UPDATE
+        """,
+        (permission_key,),
+    ).fetchall()
+
+
 def replace_user_roles(
     connection: Connection,
     *,

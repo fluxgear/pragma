@@ -257,6 +257,30 @@ def count_superusers(connection: Connection) -> int:
     return int(row["total"])
 
 
+def lock_active_superusers(connection: Connection) -> list[dict[str, Any]]:
+    """Lock active superuser rows for last-superuser invariant checks.
+
+    Args:
+        connection: Open PostgreSQL connection inside a transaction.
+
+    Returns:
+        list[dict[str, Any]]: Locked active superuser identifier rows.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    return connection.execute(
+        """
+        SELECT id
+        FROM pragma_users
+        WHERE is_superuser = TRUE AND is_active = TRUE
+        ORDER BY id
+        FOR UPDATE
+        """
+    ).fetchall()
+
+
 def count_users(connection: Connection) -> int:
     """Return the total number of user accounts.
 

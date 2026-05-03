@@ -19,6 +19,7 @@ from importlib import import_module
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg_pool import PoolTimeout
 
 from pragma.errors import StorageError, ThemeError
 from tests.helpers import build_database_dsn
@@ -289,8 +290,18 @@ def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
     assert 'href="#archive"' not in response.text
     assert '<form class="contact-form"' not in response.text
     assert 'method="post"' not in response.text
-    assert 'mailto:hello@example.com' in response.text
-    assert 'Online enquiry submissions are not enabled for this site yet.' in response.text
+    assert 'No posts are published yet.' in response.text
+    published_posts_message = (
+        'Published posts will appear here automatically once they are available.'
+    )
+    assert published_posts_message in response.text
+    assert 'Designing content systems that look enterprise-ready from day one' not in response.text
+    assert 'Why resilient templates matter before public routing is complete' not in response.text
+    assert 'Dark mode as a first-class public experience' not in response.text
+    assert 'href="#"' not in response.text
+    assert 'hello@example.com' not in response.text
+    assert '+00 123 456 789' not in response.text
+    assert 'mailto:hello@example.com' not in response.text
 
 
 def test_published_page_renders_body_title_and_canonical(
@@ -942,6 +953,54 @@ def test_search_no_results_state(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert 'No results matched' in response.text
+
+
+@pytest.mark.parametrize(
+    'search_exception',
+    [
+        PoolTimeout('test pool exhausted'),
+        StorageError(
+            detail='Internal search storage failure should never leak',
+            code='DATABASE_UNAVAILABLE',
+        ),
+    ],
+)
+def test_search_storage_failures_return_visitor_safe_error(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    search_exception: Exception,
+) -> None:
+    """Verify public search degrades safely on storage-layer failures.
+
+    Args:
+        client: FastAPI test client.
+        monkeypatch: Pytest monkeypatch fixture.
+        search_exception: Storage/search exception raised by the search service.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    def _raise_search_failure(*args: object, **kwargs: object) -> None:
+        raise search_exception
+
+    monkeypatch.setattr(
+        public_router_module,
+        'search_public_entries',
+        _raise_search_failure,
+    )
+
+    response = client.get('/search', params={'q': 'nebula'})
+
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/html')
+    assert 'Search is temporarily unavailable.' in response.text
+    assert 'test pool exhausted' not in response.text
+    assert 'Internal search storage failure should never leak' not in response.text
+    assert 'DATABASE_UNAVAILABLE' not in response.text
 
 
 def test_theme_static_route_serves_assets_and_rejects_invalid_or_missing_paths(

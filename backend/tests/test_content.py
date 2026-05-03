@@ -1381,3 +1381,116 @@ def test_content_type_delete_conflicts_with_concurrent_entry_create(
 
     assert remaining_entry is not None
     assert remaining_type is not None
+
+
+def test_content_type_update_serializes_concurrent_entry_create(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify schema updates validate entries committed by concurrent creates.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If the schema update races past the concurrent entry.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    content_type_id = content_type['id']
+    entry_id = uuid4()
+    timestamp = datetime.now(UTC)
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    update_payload = {
+        'name': 'Blog Posts',
+        'slug': 'blog-posts',
+        'description': 'Schema requiring only title',
+        'field_definitions': [
+            {
+                'name': 'title',
+                'label': 'Title',
+                'kind': 'text',
+                'required': True,
+                'min_length': 3,
+            },
+        ],
+    }
+
+    with (
+        psycopg.connect(dsn, row_factory=dict_row) as creator_connection,
+        ThreadPoolExecutor(max_workers=1) as executor,
+    ):
+        with creator_connection.transaction():
+            locked_type = creator_connection.execute(
+                """
+                SELECT id
+                FROM pragma_content_types
+                WHERE id = %s
+                FOR KEY SHARE
+                """,
+                (content_type_id,),
+            ).fetchone()
+            assert locked_type is not None
+
+            update_future = executor.submit(
+                client.put,
+                f'/api/v1/content/types/{content_type_id}',
+                headers=headers,
+                json=update_payload,
+            )
+            time.sleep(0.2)
+            assert update_future.done() is False
+
+            creator_connection.execute(
+                """
+                INSERT INTO pragma_content_entries (
+                    id,
+                    content_type_id,
+                    slug,
+                    status,
+                    payload,
+                    published_at,
+                    created_by_user_id,
+                    updated_by_user_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                """,
+                (
+                    entry_id,
+                    content_type_id,
+                    'created-during-update',
+                    'draft',
+                    json.dumps(
+                        {
+                            'title': 'Created During Update',
+                            'body': '<p>Must be considered.</p>',
+                            'views': 1,
+                        }
+                    ),
+                    None,
+                    None,
+                    None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+        update_response = update_future.result(timeout=5)
+
+    assert update_response.status_code == 409
+    assert update_response.json() == {
+        'detail': (
+            "Field definition update would invalidate existing entry "
+            "'created-during-update': Unknown field(s) for this content type: body, views"
+        ),
+        'code': 'CONTENT_TYPE_UPDATE_INVALID',
+    }

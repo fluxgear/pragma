@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-beta.5 — 2026-05-02
+
+### Fixed
+- Closed generalized audit Session B findings across install/bootstrap authorization and schema readiness, content and admin concurrency invariants, AI provider runtime SSRF hardening, admin boot guard-state handling, and public/theme/search fallback behavior.
+- Completed quality tasks #1087-#1091 by pinning backend Python metadata to 3.12, hardening the development PostgreSQL healthcheck, removing the copied production DB host-port default, documenting the pre-commit gate as a full backend suite by default, and validating setup/admin email fields with email semantics.
+- Aligned release metadata for v1.0.0-beta.5 / 1.0.0b5 across the README, backend package/runtime metadata and lockfile, and the admin package and lockfile.
+
 ## v1.0.0-beta.4 — 2026-05-02
 
 ### Fixed

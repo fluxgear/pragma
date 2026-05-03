@@ -10,16 +10,23 @@ Returns:
 Raises:
     None.
 """
-
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.rows import dict_row
 from pydantic import ValidationError
 
 from pragma.auth.admin_models import AdminUserCreateRequest, AdminUserUpdateRequest
+from tests.helpers import build_database_dsn
 
 
 def _bootstrap_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> None:
@@ -480,7 +487,7 @@ def test_root_cannot_deactivate_own_account(
 
 
 def test_admin_user_requests_strip_identity_fields_before_length_validation() -> None:
-    """Verify user-admin identity fields strip before length validation.
+    """Verify user-admin email and username strip before validation.
 
     Args:
         None.
@@ -500,12 +507,20 @@ def test_admin_user_requests_strip_identity_fields_before_length_validation() ->
         )
     with pytest.raises(ValidationError):
         AdminUserCreateRequest(
+            email='not-an-email',
+            username='managed',
+            password='valid-password',
+        )
+    with pytest.raises(ValidationError):
+        AdminUserCreateRequest(
             email='managed@example.com',
             username='   ',
             password='valid-password',
         )
     with pytest.raises(ValidationError):
         AdminUserUpdateRequest(email='   ')
+    with pytest.raises(ValidationError):
+        AdminUserUpdateRequest(email='not-an-email')
     with pytest.raises(ValidationError):
         AdminUserUpdateRequest(username='   ')
 
@@ -523,3 +538,360 @@ def test_admin_user_requests_strip_identity_fields_before_length_validation() ->
     assert create_request.username == 'managed'
     assert update_request.email == 'managed-updated@example.com'
     assert update_request.username == 'managed-updated'
+
+
+def _insert_superuser(
+    migrated_database: dict[str, str],
+    *,
+    email: str,
+    username: str,
+) -> str:
+    """Insert an additional active superuser directly for race tests.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        email: Superuser email.
+        username: Superuser username.
+
+    Returns:
+        str: Inserted user identifier.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot insert the row.
+    """
+
+    user_id = uuid4()
+    timestamp = datetime.now(UTC)
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn, row_factory=dict_row) as connection, connection.transaction():
+        connection.execute(
+            """
+            INSERT INTO pragma_users (
+                id,
+                email,
+                username,
+                full_name,
+                password_hash,
+                is_active,
+                is_superuser,
+                password_changed_at,
+                force_password_change,
+                created_at,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                user_id,
+                email,
+                username,
+                username.title(),
+                'not-used-in-test',
+                True,
+                True,
+                timestamp,
+                False,
+                timestamp,
+                timestamp,
+            ),
+        )
+    return str(user_id)
+
+
+def _set_user_active(
+    migrated_database: dict[str, str],
+    *,
+    user_id: str,
+    is_active: bool,
+) -> None:
+    """Update a user's active flag directly for race-test setup.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        user_id: User identifier to update.
+        is_active: Desired active flag.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot update the row.
+    """
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn) as connection, connection.transaction():
+        connection.execute(
+            """
+            UPDATE pragma_users
+            SET is_active = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (is_active, user_id),
+        )
+
+
+def _count_active_superusers(migrated_database: dict[str, str]) -> int:
+    """Return active superuser count from the test database.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        int: Active superuser count.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot count rows.
+    """
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn, row_factory=dict_row) as connection:
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM pragma_users
+            WHERE is_superuser = TRUE AND is_active = TRUE
+            """
+        ).fetchone()
+    return int(row['total'])
+
+
+def _count_active_users_managers(migrated_database: dict[str, str]) -> int:
+    """Return active users.manage holder count from the test database.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        int: Active users.manage holder count.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot count rows.
+    """
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn, row_factory=dict_row) as connection:
+        row = connection.execute(
+            """
+            SELECT COUNT(DISTINCT u.id) AS total
+            FROM pragma_users AS u
+            LEFT JOIN pragma_user_roles AS ur ON ur.user_id = u.id
+            LEFT JOIN pragma_role_permissions AS rp ON rp.role_key = ur.role_key
+            WHERE u.is_active = TRUE
+              AND (u.is_superuser = TRUE OR rp.permission_key = 'users.manage')
+            """
+        ).fetchone()
+    return int(row['total'])
+
+
+def _force_concurrent_count_window(
+    monkeypatch: pytest.MonkeyPatch,
+    target: object,
+    attribute: str,
+) -> None:
+    """Patch a count helper so unfixed code reaches the race window.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+        target: Module object that owns the count helper.
+        attribute: Count helper attribute name.
+
+    Returns:
+        None.
+
+    Raises:
+        AttributeError: If the target does not expose the helper.
+    """
+
+    barrier = threading.Barrier(2)
+    original = getattr(target, attribute)
+
+    def _count_with_barrier(*args: Any) -> int:
+        total = original(*args)
+        with suppress(threading.BrokenBarrierError):
+            barrier.wait(timeout=0.5)
+        return int(total)
+
+    monkeypatch.setattr(target, attribute, _count_with_barrier)
+
+
+def test_last_superuser_deactivation_serializes_concurrent_requests(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify concurrent superuser deactivations cannot remove all roots.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If both deactivations succeed.
+    """
+
+    from pragma.auth import admin_service as admin_service_module
+
+    _bootstrap_admin(client, bootstrap_payload)
+    root_payload = _login_user(
+        client,
+        identity=bootstrap_payload['email'],
+        password=bootstrap_payload['password'],
+    )
+    root_headers = _auth_headers(root_payload['access_token'])
+    role_admin = _create_managed_user(
+        client,
+        root_headers,
+        email='superuser-race-admin@example.com',
+        username='superuserraceadmin',
+        password='superuser-race-admin-password',
+        role_keys=['administrator'],
+    )
+    role_admin_payload = _login_user(
+        client,
+        identity='superuser-race-admin@example.com',
+        password='superuser-race-admin-password',
+    )
+    role_admin_headers = _auth_headers(role_admin_payload['access_token'])
+    second_superuser_id = _insert_superuser(
+        migrated_database,
+        email='second-root@example.com',
+        username='secondroot',
+    )
+
+    _force_concurrent_count_window(monkeypatch, admin_service_module, 'count_superusers')
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                client.patch,
+                f"/api/v1/users/{root_payload['user']['id']}",
+                headers=role_admin_headers,
+                json={'is_active': False},
+            ),
+            executor.submit(
+                client.patch,
+                f'/api/v1/users/{second_superuser_id}',
+                headers=role_admin_headers,
+                json={'is_active': False},
+            ),
+        ]
+        responses = [future.result(timeout=5) for future in futures]
+
+    assert role_admin['roles'] == ['administrator']
+    assert sorted(response.status_code for response in responses) == [200, 400]
+    assert [
+        response.json()
+        for response in responses
+        if response.status_code == 400
+    ] == [
+        {
+            'detail': 'At least one active superuser account is required',
+            'code': 'AUTH_LAST_SUPERUSER_REQUIRED',
+        }
+    ]
+    assert _count_active_superusers(migrated_database) == 1
+
+
+def test_last_users_manager_role_removal_serializes_concurrent_requests(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify concurrent administrator demotions cannot remove all managers.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If both role removals succeed.
+    """
+
+    from pragma.auth import admin_service as admin_service_module
+
+    _bootstrap_admin(client, bootstrap_payload)
+    root_payload = _login_user(
+        client,
+        identity=bootstrap_payload['email'],
+        password=bootstrap_payload['password'],
+    )
+    root_headers = _auth_headers(root_payload['access_token'])
+    first_admin = _create_managed_user(
+        client,
+        root_headers,
+        email='first-manager@example.com',
+        username='firstmanager',
+        password='first-manager-password',
+        role_keys=['administrator'],
+    )
+    second_admin = _create_managed_user(
+        client,
+        root_headers,
+        email='second-manager@example.com',
+        username='secondmanager',
+        password='second-manager-password',
+        role_keys=['administrator'],
+    )
+    first_payload = _login_user(
+        client,
+        identity='first-manager@example.com',
+        password='first-manager-password',
+    )
+    second_payload = _login_user(
+        client,
+        identity='second-manager@example.com',
+        password='second-manager-password',
+    )
+    _set_user_active(
+        migrated_database,
+        user_id=root_payload['user']['id'],
+        is_active=False,
+    )
+
+    _force_concurrent_count_window(
+        monkeypatch,
+        admin_service_module,
+        'count_active_users_with_permission',
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                client.put,
+                f"/api/v1/users/{second_admin['id']}/roles",
+                headers=_auth_headers(first_payload['access_token']),
+                json={'role_keys': ['viewer']},
+            ),
+            executor.submit(
+                client.put,
+                f"/api/v1/users/{first_admin['id']}/roles",
+                headers=_auth_headers(second_payload['access_token']),
+                json={'role_keys': ['viewer']},
+            ),
+        ]
+        responses = [future.result(timeout=5) for future in futures]
+
+    assert sorted(response.status_code for response in responses) == [200, 400]
+    assert [
+        response.json()
+        for response in responses
+        if response.status_code == 400
+    ] == [
+        {
+            'detail': 'At least one active users.manage administrator is required',
+            'code': 'AUTH_LAST_USERS_MANAGER_REQUIRED',
+        }
+    ]
+    assert _count_active_users_managers(migrated_database) == 1

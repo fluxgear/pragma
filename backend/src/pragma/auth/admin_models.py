@@ -13,6 +13,7 @@ Raises:
 
 from __future__ import annotations
 
+import typing
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -22,6 +23,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from pragma.auth.models import UserResponse
 
+EmailField = typing.Annotated[
+    str,
+    Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+]
 
 class RoleResponse(BaseModel):
     """Serialized built-in role payload.
@@ -182,7 +187,7 @@ class AdminUserCreateRequest(BaseModel):
         ValidationError: If request values are invalid.
     """
 
-    email: str = Field(min_length=3, max_length=320)
+    email: EmailField
     username: str = Field(min_length=3, max_length=64)
     full_name: str | None = Field(default=None, max_length=255)
     password: str = Field(min_length=8, max_length=512)
@@ -193,7 +198,7 @@ class AdminUserCreateRequest(BaseModel):
     @field_validator("email", "username", mode="before")
     @classmethod
     def strip_identity_fields(cls, value: object) -> object:
-        """Strip managed-user identity fields before length validation.
+        """Strip managed-user identity fields before validation.
 
         Args:
             value: Raw email or username input.
@@ -223,7 +228,7 @@ class AdminUserUpdateRequest(BaseModel):
         ValidationError: If request values are invalid.
     """
 
-    email: str | None = Field(default=None, min_length=3, max_length=320)
+    email: EmailField | None = None
     username: str | None = Field(default=None, min_length=3, max_length=64)
     full_name: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
@@ -231,7 +236,7 @@ class AdminUserUpdateRequest(BaseModel):
     @field_validator("email", "username", mode="before")
     @classmethod
     def strip_identity_fields(cls, value: object) -> object:
-        """Strip managed-user identity fields before length validation.
+        """Strip managed-user identity fields before validation.
 
         Args:
             value: Raw email or username input.

@@ -13,6 +13,8 @@ Raises:
 
 from __future__ import annotations
 
+import os
+from secrets import compare_digest
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +34,64 @@ from pragma.storage.queries.install import (
     mark_installed,
 )
 from pragma.storage.queries.users import count_superusers, create_user
+
+_SETUP_SECRET_ENV = 'PRAGMA_SETUP_SECRET'
+_SETUP_SECRET_MIN_LENGTH = 32
+
+
+def _configured_setup_secret() -> str | None:
+    """Return the configured operator setup secret, if present and strong enough.
+
+    Args:
+        None.
+
+    Returns:
+        str | None: Trimmed setup secret when configured and long enough.
+
+    Raises:
+        None.
+    """
+
+    setup_secret = os.environ.get(_SETUP_SECRET_ENV, '').strip()
+    if len(setup_secret) < _SETUP_SECRET_MIN_LENGTH:
+        return None
+    return setup_secret
+
+
+def verify_bootstrap_setup_secret(
+    settings: Settings, provided_setup_secret: str | None
+) -> None:
+    """Authorize a first-run bootstrap request with the operator setup secret.
+
+    Args:
+        settings: Runtime application settings.
+        provided_setup_secret: Secret supplied by the bootstrap caller.
+
+    Returns:
+        None.
+
+    Raises:
+        ConfigError: If production is missing a valid setup secret or the caller secret mismatches.
+    """
+
+    configured_secret = _configured_setup_secret()
+    if configured_secret is None:
+        if settings.runtime_environment == 'production':
+            raise ConfigError(
+                detail='Install setup secret is required before bootstrap',
+                code='SETUP_SECRET_REQUIRED',
+                status_code=503,
+            )
+        return
+
+    supplied_secret = (provided_setup_secret or '').strip()
+    if not supplied_secret or not compare_digest(configured_secret, supplied_secret):
+        raise ConfigError(
+            detail='Invalid install setup secret',
+            code='INVALID_SETUP_SECRET',
+            status_code=403,
+        )
+
 
 
 def get_install_snapshot(storage: DatabasePool) -> dict[str, Any]:
@@ -74,7 +134,10 @@ def get_install_snapshot(storage: DatabasePool) -> dict[str, Any]:
 
 
 def bootstrap_install(
-    storage: DatabasePool, settings: Settings, payload: BootstrapRequest
+    storage: DatabasePool,
+    settings: Settings,
+    payload: BootstrapRequest,
+    setup_secret: str | None,
 ) -> dict[str, Any]:
     """Create the first super-admin and mark the install complete.
 
@@ -82,12 +145,14 @@ def bootstrap_install(
         storage: Initialized database pool manager.
         settings: Application settings.
         payload: Bootstrap request payload.
+        setup_secret: Operator-controlled bootstrap setup secret supplied by the caller.
 
     Returns:
         dict[str, Any]: Bootstrap completion payload.
 
     Raises:
-        ConfigError: If migrations are missing or bootstrap already completed.
+        ConfigError: If migrations are missing, bootstrap already completed, or setup
+            authorization fails.
         StorageError: If PostgreSQL access fails.
     """
 
@@ -118,6 +183,8 @@ def bootstrap_install(
                     code="INSTALL_ALREADY_COMPLETED",
                     status_code=409,
                 )
+
+            verify_bootstrap_setup_secret(settings, setup_secret)
 
             user = create_user(
                 connection=connection,

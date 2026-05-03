@@ -11,10 +11,13 @@ services:
       - "${PRAGMA_DB_PORT:?PRAGMA_DB_PORT must be set}:5432"
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
-        ]
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" &&
+          psql -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -v ON_ERROR_STOP=1 -tAc
+          "SELECT current_setting('server_version_num')::integer >= 180000
+          AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')
+          AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm')" | grep -q t
       interval: 5s
       timeout: 5s
       retries: 10
