@@ -53,6 +53,7 @@ For production Docker, configure exactly one source for each secret:
 
 - `PRAGMA_DATABASE_PASSWORD` or `PRAGMA_DATABASE_PASSWORD_FILE`
 - `PRAGMA_JWT_SECRET_KEY` or `PRAGMA_JWT_SECRET_KEY_FILE`
+- `PRAGMA_SETUP_SECRET` or `PRAGMA_SETUP_SECRET_FILE`
 
 Raw-secret deployments use only `docker/docker-compose.yml` and set the raw variables in `docker/prod.env`.
 
@@ -64,8 +65,9 @@ mkdir -p docker/secrets
   umask 077
   openssl rand -base64 48 > docker/secrets/pragma_database_password
   openssl rand -base64 48 > docker/secrets/pragma_jwt_secret_key
+  openssl rand -base64 48 > docker/secrets/pragma_setup_secret
 )
-chmod 600 docker/secrets/pragma_database_password docker/secrets/pragma_jwt_secret_key
+chmod 600 docker/secrets/pragma_database_password docker/secrets/pragma_jwt_secret_key docker/secrets/pragma_setup_secret
 ```
 
 Then leave `PRAGMA_DATABASE_PASSWORD` and `PRAGMA_JWT_SECRET_KEY` empty in `docker/prod.env` and set the host source paths relative to the compose file directory (`docker/`):
@@ -73,8 +75,10 @@ Then leave `PRAGMA_DATABASE_PASSWORD` and `PRAGMA_JWT_SECRET_KEY` empty in `dock
 ```env
 PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
 PRAGMA_JWT_SECRET_KEY_FILE=/run/secrets/pragma_jwt_secret_key
+PRAGMA_SETUP_SECRET_FILE=/run/secrets/pragma_setup_secret
 PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./secrets/pragma_database_password
 PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./secrets/pragma_jwt_secret_key
+PRAGMA_SETUP_SECRET_SECRET_SOURCE=./secrets/pragma_setup_secret
 ```
 
 Start or validate with both compose files:
@@ -83,7 +87,7 @@ Start or validate with both compose files:
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.secrets.yml --env-file docker/prod.env up -d --build
 ```
 
-The base compose file forwards both secret variants, `docker/docker-compose.secrets.yml` bind-mounts the host secret files to the documented `/run/secrets/...` paths for `db`, `migrate`, and `backend`, the backend entrypoint loads file secrets, and validation rejects raw+file conflicts or missing values.
+The base compose file forwards both secret variants, `docker/docker-compose.secrets.yml` bind-mounts database/JWT secret files to the documented `/run/secrets/...` paths for `db`, `migrate`, and `backend`, and bind-mounts the setup secret for `migrate` and `backend`. The backend entrypoint loads file secrets, validation rejects raw+file conflicts or missing values, and the admin setup wizard sends the operator setup secret as `X-Pragma-Setup-Secret` during first-run bootstrap.
 
 ## Migration and start commands
 
@@ -144,7 +148,7 @@ Smoke validation builds and boots the stack, checks DB extension state, verifies
 The repo does not include systemd, nginx, or other non-Docker service-manager artifacts. The current manual path is:
 
 1. Provision PostgreSQL 18 with `pg_trgm` and `vector`/pgvector.
-2. Prepare `backend/.env` with runtime settings and strong secrets.
+2. Prepare `backend/.env` with runtime settings and strong secrets. For production first-run bootstrap, set exactly one of `PRAGMA_SETUP_SECRET` or `PRAGMA_SETUP_SECRET_FILE`; enter the same value in the setup wizard's Operator setup secret field.
 3. Run backend dependencies and migrations:
 
    ```bash

@@ -13,6 +13,7 @@ The backend reads environment variables with the `PRAGMA_` prefix from `backend/
 | `PRAGMA_DATABASE_PASSWORD` | yes unless using file secret in Docker | none | Non-empty raw password. |
 | `PRAGMA_JWT_SECRET_KEY` | yes unless using file secret in Docker | none | Minimum length 16; use a strong random value. |
 | `PRAGMA_BASE_URL` | yes | none | Public base URL used for generated URLs. |
+| `PRAGMA_RUNTIME_ENVIRONMENT` | production deployments | `development` | Set `production` for production Docker, migrations, and backend runtime validation. |
 
 ## Database and pool variables
 
@@ -76,6 +77,15 @@ Search degrades to keyword/fuzzy behavior when semantic prerequisites or provide
 | `PRAGMA_REALTIME_RECONNECT_MAX_SECONDS` | `30.0` | Greater than 0 and not below min. |
 | `PRAGMA_REALTIME_TICKET_TTL_SECONDS` | `60` | 5-600. |
 
+## Setup bootstrap secret
+
+Production first-run bootstrap requires exactly one setup-secret source:
+
+- `PRAGMA_SETUP_SECRET` for a raw environment value
+- `PRAGMA_SETUP_SECRET_FILE` for a file containing the secret
+
+The secret must be at least 32 characters and must not use placeholder values such as `replace-with-*`. The backend reads the file path directly for non-Docker deployments; the production Docker entrypoint also loads the file into the runtime environment. Operators enter the same secret in the admin setup wizard, which sends it as the `X-Pragma-Setup-Secret` header to `POST /api/v1/install/bootstrap`.
+
 ## Logging
 
 | Variable | Default | Notes |
@@ -90,10 +100,11 @@ The example proxy host/port values are examples. Change them to match your deplo
 
 ## Docker secret-file variables
 
-Production Docker supports file-based alternatives for the two required secrets:
+Production Docker supports file-based alternatives for the required secrets:
 
 - `PRAGMA_DATABASE_PASSWORD_FILE` instead of `PRAGMA_DATABASE_PASSWORD`
 - `PRAGMA_JWT_SECRET_KEY_FILE` instead of `PRAGMA_JWT_SECRET_KEY`
+- `PRAGMA_SETUP_SECRET_FILE` instead of `PRAGMA_SETUP_SECRET`
 
 For each secret, set exactly one raw value or file path. The backend entrypoint and production validator reject raw+file conflicts and missing secret sources.
 
@@ -102,6 +113,7 @@ When using the documented production bind-mount override, set the container file
 ```env
 PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
 PRAGMA_JWT_SECRET_KEY_FILE=/run/secrets/pragma_jwt_secret_key
+PRAGMA_SETUP_SECRET_FILE=/run/secrets/pragma_setup_secret
 ```
 
 Then provide host-side source files for the override mounts. These source paths are relative to the compose file directory (`docker/`), so the following values point to `docker/secrets/...` from the repo root. `docker/secrets/` is ignored by Git and should remain local-only:
@@ -109,6 +121,7 @@ Then provide host-side source files for the override mounts. These source paths 
 ```env
 PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE=./secrets/pragma_database_password
 PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE=./secrets/pragma_jwt_secret_key
+PRAGMA_SETUP_SECRET_SECRET_SOURCE=./secrets/pragma_setup_secret
 ```
 
-Use `docker/docker-compose.secrets.yml` together with the base compose file so those two files are mounted read-only into `db`, `migrate`, and `backend`. Raw-env deployments do not use the override file.
+Use `docker/docker-compose.secrets.yml` together with the base compose file so database and JWT files are mounted read-only into `db`, `migrate`, and `backend`, and the setup secret file is mounted into `migrate` and `backend`. Raw-env deployments do not use the override file.

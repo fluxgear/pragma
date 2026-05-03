@@ -258,6 +258,95 @@ def get_media_by_id(connection: Connection, media_id: UUID) -> dict[str, Any] | 
     ).fetchone()
 
 
+def get_public_media_by_id(connection: Connection, media_id: UUID) -> dict[str, Any] | None:
+    """Return a media asset only when referenced by published content.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        media_id: Media asset identifier.
+
+    Returns:
+        dict[str, Any] | None: Media row when public, otherwise None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    media_id_text = str(media_id)
+    api_content_url = f'/api/v1/media/assets/{media_id_text}/content'
+    public_content_url = f'/media/{media_id_text}/content'
+    api_variant_pattern = f'/api/v1/media/assets/{media_id_text}/variants/%'
+    public_variant_pattern = f'/media/{media_id_text}/variants/%'
+    absolute_api_content_pattern = (
+        f'^https?://[^/]+/api/v1/media/assets/{media_id_text}/content$'
+    )
+    absolute_api_variant_pattern = (
+        f'^https?://[^/]+/api/v1/media/assets/{media_id_text}/variants/[A-Za-z0-9_-]+$'
+    )
+
+    return connection.execute(
+        """
+        SELECT
+            media.id,
+            media.original_filename,
+            media.storage_key,
+            media.mime_type,
+            media.size_bytes,
+            media.width,
+            media.height,
+            media.alt_text,
+            media.caption,
+            media.description,
+            media.variants,
+            media.metadata,
+            media.uploader_user_id,
+            media.created_at,
+            media.updated_at
+        FROM pragma_media_assets AS media
+        WHERE media.id = %s
+          AND EXISTS (
+              SELECT 1
+              FROM pragma_content_entries AS entry
+              WHERE entry.status = 'published'
+                AND (
+                    entry.payload->>'featured_image_media_id' = %s
+                    OR entry.payload->>'featured_image_id' = %s
+                    OR entry.payload #>> '{featured_image,id}' = %s
+                    OR entry.payload->>'featured_image_url' IN (%s, %s)
+                    OR entry.payload->>'featured_image_url' LIKE %s
+                    OR entry.payload->>'featured_image_url' LIKE %s
+                    OR entry.payload->>'featured_image_url' ~ %s
+                    OR entry.payload->>'featured_image_url' ~ %s
+                    OR entry.payload #>> '{featured_image,content_url}' IN (%s, %s)
+                    OR entry.payload #>> '{featured_image,content_url}' LIKE %s
+                    OR entry.payload #>> '{featured_image,content_url}' LIKE %s
+                    OR entry.payload #>> '{featured_image,content_url}' ~ %s
+                    OR entry.payload #>> '{featured_image,content_url}' ~ %s
+                )
+          )
+        LIMIT 1
+        """,
+        (
+            media_id,
+            media_id_text,
+            media_id_text,
+            media_id_text,
+            api_content_url,
+            public_content_url,
+            api_variant_pattern,
+            public_variant_pattern,
+            absolute_api_content_pattern,
+            absolute_api_variant_pattern,
+            api_content_url,
+            public_content_url,
+            api_variant_pattern,
+            public_variant_pattern,
+            absolute_api_content_pattern,
+            absolute_api_variant_pattern,
+        ),
+    ).fetchone()
+
+
 def delete_media(connection: Connection, media_id: UUID) -> None:
     """Delete a media asset by identifier.
 

@@ -1,29 +1,25 @@
-import { apiRequest, getApiBase } from '@/api/client'
+import { authenticatedApiRequest } from '@/api/authenticated'
+import { getApiBase } from '@/api/client'
 import type { RealtimeTicketResponse } from '@/api/types'
-import { useAuthStore } from '@/stores/auth'
 
-function getAccessToken(): string {
-  const authStore = useAuthStore()
-  if (authStore.accessToken === null) {
-    throw new Error('Authentication required')
-  }
-  return authStore.accessToken
-}
+const REALTIME_TICKET_SUBPROTOCOL_PREFIX = 'pragma.realtime.ticket.'
 
 export function createRealtimeTicket(): Promise<RealtimeTicketResponse> {
-  return apiRequest<RealtimeTicketResponse>('/realtime/ticket', {
+  return authenticatedApiRequest<RealtimeTicketResponse>('/realtime/ticket', {
     method: 'POST',
-    accessToken: getAccessToken(),
   })
 }
 
-export function buildRealtimeWebSocketUrl(ticket: string): string {
+export function buildRealtimeWebSocketUrl(): string {
   const apiBase = getApiBase().replace(/\/$/, '')
   const httpUrl = new URL(apiBase, window.location.origin)
   const websocketUrl = new URL(httpUrl.toString())
 
   websocketUrl.protocol = websocketUrl.protocol === 'https:' ? 'wss:' : 'ws:'
   websocketUrl.pathname = `${websocketUrl.pathname.replace(/\/$/, '')}/realtime/stream`
-  websocketUrl.searchParams.set('ticket', ticket)
   return websocketUrl.toString()
+}
+
+export function buildRealtimeWebSocketProtocols(ticket: string): string[] {
+  return [`${REALTIME_TICKET_SUBPROTOCOL_PREFIX}${ticket}`]
 }

@@ -10,14 +10,23 @@ import type {
   UserResponse,
 } from '@/api/types'
 
+const ACCESS_TOKEN_REFRESH_SKEW_MS = 30_000
+
+export interface EnsureAccessTokenOptions {
+  forceRefresh?: boolean
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const accessToken = ref<string | null>(null)
   const expiresIn = ref<number | null>(null)
+  const accessTokenExpiresAtMs = ref<number | null>(null)
   const user = ref<UserResponse | null>(null)
   const initialized = ref(false)
   const loading = ref(false)
   const errorMessage = ref<string | null>(null)
   const startupError = ref<string | null>(null)
+
+  let refreshPromise: Promise<TokenResponse> | null = null
 
   const isAuthenticated = computed(() => accessToken.value !== null && user.value !== null)
   const requiresPasswordChange = computed(() => user.value?.force_password_change === true)
@@ -25,6 +34,7 @@ export const useAuthStore = defineStore('auth', () => {
   function setSession(payload: TokenResponse): void {
     accessToken.value = payload.access_token
     expiresIn.value = payload.expires_in
+    accessTokenExpiresAtMs.value = Date.now() + payload.expires_in * 1000
     user.value = payload.user
     initialized.value = true
     errorMessage.value = null
@@ -34,9 +44,38 @@ export const useAuthStore = defineStore('auth', () => {
   function clearSession(markInitialized = true): void {
     accessToken.value = null
     expiresIn.value = null
+    accessTokenExpiresAtMs.value = null
     user.value = null
     initialized.value = markInitialized
     startupError.value = null
+  }
+
+  function isAccessTokenStale(): boolean {
+    if (accessTokenExpiresAtMs.value === null) {
+      return false
+    }
+
+    return Date.now() + ACCESS_TOKEN_REFRESH_SKEW_MS >= accessTokenExpiresAtMs.value
+  }
+
+  async function refreshAccessToken(): Promise<TokenResponse> {
+    if (refreshPromise === null) {
+      refreshPromise = refreshSession()
+        .then((response) => {
+          setSession(response)
+          return response
+        })
+        .catch((error: unknown) => {
+          clearSession()
+          errorMessage.value = asUserMessage(error)
+          throw error
+        })
+        .finally(() => {
+          refreshPromise = null
+        })
+    }
+
+    return await refreshPromise
   }
 
   function hasPermission(permission: string): boolean {
@@ -104,13 +143,22 @@ export const useAuthStore = defineStore('auth', () => {
     await restoreSession()
   }
 
-  async function syncCurrentUser(): Promise<UserResponse | null> {
-    if (!accessToken.value) {
-      return null
+  async function ensureAccessToken(options: EnsureAccessTokenOptions = {}): Promise<string> {
+    if (accessToken.value === null) {
+      throw new Error('Authentication required')
     }
 
+    if (!options.forceRefresh && !isAccessTokenStale()) {
+      return accessToken.value
+    }
+
+    const response = await refreshAccessToken()
+    return response.access_token
+  }
+
+  async function syncCurrentUser(): Promise<UserResponse | null> {
     try {
-      const currentUser = await getCurrentUser(accessToken.value)
+      const currentUser = await getCurrentUser(await ensureAccessToken())
       user.value = currentUser
       return currentUser
     } catch (error) {
@@ -121,11 +169,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function rotateOwnPassword(payload: ChangePasswordRequest): Promise<void> {
-    if (accessToken.value === null) {
-      throw new Error('Authentication required')
-    }
+    const token = await ensureAccessToken()
 
-    await changePassword(accessToken.value, payload)
+    await changePassword(token, payload)
     clearSession()
     errorMessage.value = null
   }
@@ -147,6 +193,7 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     accessToken,
     expiresIn,
+    accessTokenExpiresAtMs,
     user,
     initialized,
     loading,
@@ -158,6 +205,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     restoreSession,
     ensureInitialized,
+    ensureAccessToken,
     syncCurrentUser,
     rotateOwnPassword,
     logout,

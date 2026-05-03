@@ -1,4 +1,4 @@
-import { apiRequest } from '@/api/client'
+import { authenticatedApiRequest } from '@/api/authenticated'
 import type {
   ContentEntryCreateRequest,
   ContentEntryListResponse,
@@ -7,7 +7,6 @@ import type {
   ContentEntryUpdateRequest,
   ContentTypeListResponse,
 } from '@/api/types'
-import { useAuthStore } from '@/stores/auth'
 
 export type ContentTypeOrderBy = 'created_at' | 'updated_at' | 'name' | 'slug'
 export type ContentEntryOrderBy = 'created_at' | 'updated_at' | 'published_at' | 'slug'
@@ -73,35 +72,22 @@ function buildEntryQuery(params: ListContentEntriesParams = {}): string {
   return query.length > 0 ? `/content/entries?${query}` : '/content/entries'
 }
 
-function getAccessToken(): string {
-  const authStore = useAuthStore()
-  if (authStore.accessToken === null) {
-    throw new Error('Authentication required')
-  }
-  return authStore.accessToken
-}
-
 export function listContentTypes(
   params: ListContentTypesParams = {},
 ): Promise<ContentTypeListResponse> {
-  return apiRequest<ContentTypeListResponse>(buildContentTypeQuery(params), {
-    accessToken: getAccessToken(),
-  })
+  return authenticatedApiRequest<ContentTypeListResponse>(buildContentTypeQuery(params))
 }
 
 export function listContentEntries(
   params: ListContentEntriesParams = {},
 ): Promise<ContentEntryListResponse> {
-  return apiRequest<ContentEntryListResponse>(buildEntryQuery(params), {
-    accessToken: getAccessToken(),
-  })
+  return authenticatedApiRequest<ContentEntryListResponse>(buildEntryQuery(params))
 }
 
 export function createContentEntry(
   payload: ContentEntryCreateRequest,
 ): Promise<ContentEntryResponse> {
-  return apiRequest<ContentEntryResponse>('/content/entries', {
-    accessToken: getAccessToken(),
+  return authenticatedApiRequest<ContentEntryResponse>('/content/entries', {
     method: 'POST',
     body: payload,
   })
@@ -111,8 +97,7 @@ export function updateContentEntry(
   entryId: string,
   payload: ContentEntryUpdateRequest,
 ): Promise<ContentEntryResponse> {
-  return apiRequest<ContentEntryResponse>(`/content/entries/${entryId}`, {
-    accessToken: getAccessToken(),
+  return authenticatedApiRequest<ContentEntryResponse>(`/content/entries/${entryId}`, {
     method: 'PUT',
     body: payload,
   })

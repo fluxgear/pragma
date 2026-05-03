@@ -58,6 +58,20 @@
             </Message>
 
             <div class="form-grid">
+              <div class="field field--full">
+                <label for="setup-secret">Operator setup secret</label>
+                <InputText
+                  id="setup-secret"
+                  v-model.trim="form.setupSecret"
+                  autocomplete="off"
+                  type="password"
+                  aria-describedby="setup-secret-help"
+                />
+                <small id="setup-secret-help" class="muted">
+                  Required when the backend is configured with PRAGMA_SETUP_SECRET or PRAGMA_SETUP_SECRET_FILE.
+                </small>
+              </div>
+
               <div class="field">
                 <label for="setup-email">Email</label>
                 <InputText id="setup-email" v-model.trim="form.email" autocomplete="email" required />
@@ -153,6 +167,7 @@ const form = reactive({
   fullName: '',
   password: '',
   confirmPassword: '',
+  setupSecret: '',
 })
 
 const passwordMismatch = computed(
@@ -175,12 +190,15 @@ async function handleSubmit(): Promise<void> {
   }
 
   try {
-    await installStore.bootstrapAdmin({
-      email: form.email,
-      username: form.username,
-      password: form.password,
-      full_name: form.fullName || null,
-    })
+    await installStore.bootstrapAdmin(
+      {
+        email: form.email,
+        username: form.username,
+        password: form.password,
+        full_name: form.fullName || null,
+      },
+      form.setupSecret || null,
+    )
 
     try {
       await authStore.login({

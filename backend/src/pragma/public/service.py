@@ -52,6 +52,17 @@ _DEFAULT_CATEGORY = 'Content'
 _WORDS_PER_MINUTE = 200
 _WHITESPACE_PATTERN = re.compile(r'\s+')
 _HTML_TAG_PATTERN = re.compile(r'<[^>]+>')
+_MEDIA_UUID_PATTERN = (
+    r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+    r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+)
+_MEDIA_API_CONTENT_URL_PATTERN = re.compile(
+    rf'^(?:https?://[^/]+)?/api/v1/media/assets/(?P<media_id>{_MEDIA_UUID_PATTERN})/content$'
+)
+_MEDIA_API_VARIANT_URL_PATTERN = re.compile(
+    rf'^(?:https?://[^/]+)?/api/v1/media/assets/'
+    rf'(?P<media_id>{_MEDIA_UUID_PATTERN})/variants/(?P<variant_name>[A-Za-z0-9_-]+)$'
+)
 _RICH_TEXT_FIELD_METADATA_KEY = '__pragma_rich_text_fields'
 _PUBLIC_BODY_HTML_TAGS = frozenset(
     {
@@ -498,6 +509,40 @@ def build_theme_static_url(asset_path: str) -> str:
     return f'/theme/static/{normalized}'
 
 
+def build_public_media_url(value: str | None) -> str | None:
+    """Convert authenticated media-library URLs to public media routes.
+
+    Args:
+        value: Candidate media URL from published content payloads.
+
+    Returns:
+        str | None: Public media URL when recognized, original URL otherwise.
+
+    Raises:
+        None.
+    """
+
+    if value is None:
+        return None
+
+    normalized = _collapse_whitespace(value)
+    if not normalized:
+        return None
+
+    content_match = _MEDIA_API_CONTENT_URL_PATTERN.fullmatch(normalized)
+    if content_match is not None:
+        return f'/media/{content_match.group("media_id")}/content'
+
+    variant_match = _MEDIA_API_VARIANT_URL_PATTERN.fullmatch(normalized)
+    if variant_match is not None:
+        return (
+            f'/media/{variant_match.group("media_id")}/variants/'
+            f'{variant_match.group("variant_name")}'
+        )
+
+    return normalized
+
+
 def build_entry_url(content_type_slug: str, slug: str) -> str:
     """Return public URL for an entry slug and content type.
 
@@ -794,7 +839,7 @@ def build_public_entry_view(entry_row: dict[str, Any]) -> PublicEntryView:
         category=category,
         published_at=_format_published_at(entry_row.get('published_at')),
         reading_time=_estimate_reading_time(body_html, summary, title),
-        featured_image_url=_extract_text(payload, ('featured_image_url',)),
+        featured_image_url=build_public_media_url(_extract_text(payload, ('featured_image_url',))),
         featured_image_alt=_extract_text(payload, ('featured_image_alt',)),
     )
 
@@ -837,7 +882,7 @@ def build_public_entry_card(entry_row: dict[str, Any]) -> dict[str, str | None]:
         'author': _extract_text(payload, ('author',)) or _DEFAULT_AUTHOR,
         'published_at': _format_published_at(entry_row.get('published_at')),
         'reading_time': f'{reading_minutes} min read',
-        'image_url': _extract_text(payload, ('featured_image_url',)),
+        'image_url': build_public_media_url(_extract_text(payload, ('featured_image_url',))),
         'image_alt': _extract_text(payload, ('featured_image_alt',)),
     }
 

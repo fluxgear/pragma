@@ -50,6 +50,7 @@ from pragma.content.service import (
     update_content_type_record,
     update_entry_record,
 )
+from pragma.errors import ApiError
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 
@@ -59,8 +60,74 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
+_CONTENT_BASE_ERROR_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: {
+        'model': ApiError,
+        'description': 'Authentication required',
+    },
+    status.HTTP_403_FORBIDDEN: {
+        'model': ApiError,
+        'description': 'Permission required',
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        'model': ApiError,
+        'description': 'Request validation failed',
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        'model': ApiError,
+        'description': 'Content storage is unavailable',
+    },
+}
+_CONTENT_INVALID_REQUEST_ERROR_RESPONSES = {
+    **_CONTENT_BASE_ERROR_RESPONSES,
+    status.HTTP_400_BAD_REQUEST: {
+        'model': ApiError,
+        'description': 'Content request is invalid',
+    },
+}
+_CONTENT_MUTATION_ERROR_RESPONSES = {
+    **_CONTENT_INVALID_REQUEST_ERROR_RESPONSES,
+    status.HTTP_409_CONFLICT: {
+        'model': ApiError,
+        'description': 'Content resource conflicts with existing data',
+    },
+}
+_CONTENT_DETAIL_ERROR_RESPONSES = {
+    **_CONTENT_BASE_ERROR_RESPONSES,
+    status.HTTP_404_NOT_FOUND: {
+        'model': ApiError,
+        'description': 'Content resource was not found',
+    },
+}
+_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES = {
+    **_CONTENT_MUTATION_ERROR_RESPONSES,
+    status.HTTP_404_NOT_FOUND: {
+        'model': ApiError,
+        'description': 'Content resource was not found',
+    },
+}
+_CONTENT_DELETE_TYPE_ERROR_RESPONSES = {
+    **_CONTENT_DETAIL_ERROR_RESPONSES,
+    status.HTTP_409_CONFLICT: {
+        'model': ApiError,
+        'description': 'Content type cannot be deleted while entries exist',
+    },
+}
+_CONTENT_ENTRY_CREATE_ERROR_RESPONSES = {
+    **_CONTENT_MUTATION_ERROR_RESPONSES,
+    status.HTTP_404_NOT_FOUND: {
+        'model': ApiError,
+        'description': 'Content type was not found',
+    },
+}
 
-@router.post("/types", response_model=ContentTypeResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/types",
+    response_model=ContentTypeResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=_CONTENT_MUTATION_ERROR_RESPONSES,
+)
 def create_content_type(
     payload: ContentTypeCreateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -86,7 +153,11 @@ def create_content_type(
     return create_content_type_record(storage, payload, current_user)
 
 
-@router.get("/types", response_model=ContentTypeListResponse)
+@router.get(
+    "/types",
+    response_model=ContentTypeListResponse,
+    responses=_CONTENT_BASE_ERROR_RESPONSES,
+)
 def list_content_types(
     params: Annotated[ContentTypeListParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -112,7 +183,11 @@ def list_content_types(
     return list_content_type_records(storage, params)
 
 
-@router.get("/types/{content_type_id}", response_model=ContentTypeResponse)
+@router.get(
+    "/types/{content_type_id}",
+    response_model=ContentTypeResponse,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
 def get_content_type(
     content_type_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -139,7 +214,11 @@ def get_content_type(
     return get_content_type_record(storage, content_type_id)
 
 
-@router.put("/types/{content_type_id}", response_model=ContentTypeResponse)
+@router.put(
+    "/types/{content_type_id}",
+    response_model=ContentTypeResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
 def update_content_type(
     content_type_id: UUID,
     payload: ContentTypeUpdateRequest,
@@ -167,7 +246,11 @@ def update_content_type(
     return update_content_type_record(storage, content_type_id, payload, current_user)
 
 
-@router.delete("/types/{content_type_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/types/{content_type_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=_CONTENT_DELETE_TYPE_ERROR_RESPONSES,
+)
 def delete_content_type(
     content_type_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -195,7 +278,12 @@ def delete_content_type(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/entries", response_model=ContentEntryResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/entries",
+    response_model=ContentEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=_CONTENT_ENTRY_CREATE_ERROR_RESPONSES,
+)
 def create_entry(
     payload: ContentEntryCreateRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -221,7 +309,11 @@ def create_entry(
     return create_entry_record(storage, payload, current_user)
 
 
-@router.get("/entries", response_model=ContentEntryListResponse)
+@router.get(
+    "/entries",
+    response_model=ContentEntryListResponse,
+    responses=_CONTENT_INVALID_REQUEST_ERROR_RESPONSES,
+)
 def list_entries_for_content(
     params: Annotated[ContentEntryListParams, Query()],
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -248,7 +340,11 @@ def list_entries_for_content(
     return list_entry_records(storage, params)
 
 
-@router.get("/entries/{entry_id}", response_model=ContentEntryResponse)
+@router.get(
+    "/entries/{entry_id}",
+    response_model=ContentEntryResponse,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
 def get_entry(
     entry_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],
@@ -275,7 +371,11 @@ def get_entry(
     return get_entry_record(storage, entry_id)
 
 
-@router.put("/entries/{entry_id}", response_model=ContentEntryResponse)
+@router.put(
+    "/entries/{entry_id}",
+    response_model=ContentEntryResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
 def update_entry(
     entry_id: UUID,
     payload: ContentEntryUpdateRequest,
@@ -303,7 +403,11 @@ def update_entry(
     return update_entry_record(storage, entry_id, payload, current_user)
 
 
-@router.delete("/entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/entries/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
 def delete_entry_for_content(
     entry_id: UUID,
     storage: Annotated[DatabasePool, Depends(get_storage)],

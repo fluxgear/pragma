@@ -122,6 +122,7 @@ describe('SetupWizardView', () => {
   it('bootstraps the first super-admin and routes into the dashboard shell', async () => {
     const { router, wrapper } = await mountView()
 
+    await wrapper.get('#setup-secret').setValue('operator-setup-secret-1234567890')
     await wrapper.get('#setup-email').setValue('admin@example.com')
     await wrapper.get('#setup-username').setValue('admin')
     await wrapper.get('#setup-full-name').setValue('Admin User')
@@ -131,12 +132,15 @@ describe('SetupWizardView', () => {
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(installApiMocks.bootstrapInstall).toHaveBeenCalledWith({
-      email: 'admin@example.com',
-      username: 'admin',
-      password: 'very-secure-password',
-      full_name: 'Admin User',
-    })
+    expect(installApiMocks.bootstrapInstall).toHaveBeenCalledWith(
+      {
+        email: 'admin@example.com',
+        username: 'admin',
+        password: 'very-secure-password',
+        full_name: 'Admin User',
+      },
+      'operator-setup-secret-1234567890',
+    )
     expect(authApiMocks.loginUser).toHaveBeenCalledWith({
       identity: 'admin@example.com',
       password: 'very-secure-password',

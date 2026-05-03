@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0-beta.7 — 2026-05-03
+
+### Fixed
+- Closed the audit-fix release set by hardening production setup-secret raw/file handling (#7908), rejecting oversized image dimensions before Pillow decode (#7909), making admin token refresh single-flight with retry behavior (#7930), and authorizing public media references through published content (#7931).
+- Aligned OpenAPI error responses with structured `ApiError` schemas (#7929), moved realtime WebSocket ticket transport away from URL query strings with one-time ticket consumption (#7910), and corrected README/testing validation command references (#1094).
+- Aligned release metadata for v1.0.0-beta.7 / 1.0.0b7 across the README, backend package/runtime metadata and lockfile, and the admin package and lockfile.
 ## v1.0.0-beta.6 — 2026-05-03
 
 ### Fixed

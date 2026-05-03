@@ -10,10 +10,10 @@ Returns:
 Raises:
     None.
 """
-
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from secrets import compare_digest
 from typing import Any
 from uuid import uuid4
@@ -36,7 +36,12 @@ from pragma.storage.queries.install import (
 from pragma.storage.queries.users import count_superusers, create_user
 
 _SETUP_SECRET_ENV = 'PRAGMA_SETUP_SECRET'
+_SETUP_SECRET_FILE_ENV = 'PRAGMA_SETUP_SECRET_FILE'
 _SETUP_SECRET_MIN_LENGTH = 32
+_SETUP_SECRET_PLACEHOLDER_PREFIXES = ('replace-with-', 'REPLACE-WITH-')
+_SETUP_SECRET_WEAK_VALUES = frozenset(
+    {'change-me', 'CHANGE-ME', 'changeme', 'CHANGEME', 'password', 'secret', 'test'}
+)
 
 
 def _configured_setup_secret() -> str | None:
@@ -46,14 +51,50 @@ def _configured_setup_secret() -> str | None:
         None.
 
     Returns:
-        str | None: Trimmed setup secret when configured and long enough.
+        str | None: Trimmed setup secret when exactly one source is configured
+            and strong enough.
 
     Raises:
-        None.
+        ConfigError: If both setup-secret sources are configured or a configured
+            setup-secret file cannot be read.
     """
 
-    setup_secret = os.environ.get(_SETUP_SECRET_ENV, '').strip()
-    if len(setup_secret) < _SETUP_SECRET_MIN_LENGTH:
+    raw_setup_secret = os.environ.get(_SETUP_SECRET_ENV, '').strip()
+    setup_secret_file_path = os.environ.get(_SETUP_SECRET_FILE_ENV, '').strip()
+    if raw_setup_secret and setup_secret_file_path:
+        raise ConfigError(
+            detail='Set only one install setup secret source',
+            code='SETUP_SECRET_SOURCE_CONFLICT',
+            status_code=503,
+        )
+
+    if setup_secret_file_path:
+        setup_secret_path = Path(setup_secret_file_path)
+        if not setup_secret_path.is_file():
+            raise ConfigError(
+                detail='Install setup secret file is not readable',
+                code='SETUP_SECRET_FILE_UNREADABLE',
+                status_code=503,
+            )
+        try:
+            setup_secret = setup_secret_path.read_text(encoding='utf-8').strip()
+        except OSError as exc:
+            raise ConfigError(
+                detail='Install setup secret file is not readable',
+                code='SETUP_SECRET_FILE_UNREADABLE',
+                status_code=503,
+            ) from exc
+    else:
+        setup_secret = raw_setup_secret
+
+    if (
+        len(setup_secret) < _SETUP_SECRET_MIN_LENGTH
+        or setup_secret in _SETUP_SECRET_WEAK_VALUES
+        or any(
+            setup_secret.startswith(prefix)
+            for prefix in _SETUP_SECRET_PLACEHOLDER_PREFIXES
+        )
+    ):
         return None
     return setup_secret
 

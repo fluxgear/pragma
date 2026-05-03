@@ -1,7 +1,11 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import { buildRealtimeWebSocketUrl, createRealtimeTicket } from '@/api/realtime'
+import {
+  buildRealtimeWebSocketProtocols,
+  buildRealtimeWebSocketUrl,
+  createRealtimeTicket,
+} from '@/api/realtime'
 import type { RealtimeEventEnvelope, RealtimeEventType } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 
@@ -12,12 +16,16 @@ type RealtimeResyncHandler = () => void
 const MIN_RECONNECT_MS = 500
 const MAX_RECONNECT_MS = 30_000
 
-let websocketFactory: (url: string) => WebSocket = (url: string) => new WebSocket(url)
+let websocketFactory: (url: string, protocols: string[]) => WebSocket = (
+  url: string,
+  protocols: string[],
+) => new WebSocket(url, protocols)
 
 export function __setRealtimeWebSocketFactoryForTests(
-  factory: ((url: string) => WebSocket) | null,
+  factory: ((url: string, protocols: string[]) => WebSocket) | null,
 ): void {
-  websocketFactory = factory ?? ((url: string) => new WebSocket(url))
+  websocketFactory = factory
+    ?? ((url: string, protocols: string[]) => new WebSocket(url, protocols))
 }
 
 function shouldConnectSession(authStore: ReturnType<typeof useAuthStore>): boolean {
@@ -180,7 +188,10 @@ export const useRealtimeStore = defineStore('realtime', () => {
       return
     }
 
-    const websocket = websocketFactory(buildRealtimeWebSocketUrl(ticket))
+    const websocket = websocketFactory(
+      buildRealtimeWebSocketUrl(),
+      buildRealtimeWebSocketProtocols(ticket),
+    )
     socket = websocket
     connectionAttemptInFlight = false
 

@@ -29,7 +29,11 @@ from pragma.errors import AuthError, ConfigError, StorageError
 from pragma.realtime.dependencies import get_realtime_hub
 from pragma.realtime.hub import RealtimeHub
 from pragma.realtime.models import RealtimeTicketResponse, build_resync_required_event
-from pragma.realtime.security import create_realtime_ticket, decode_realtime_ticket
+from pragma.realtime.security import (
+    REALTIME_TICKET_SUBPROTOCOL_PREFIX,
+    consume_realtime_ticket,
+    create_realtime_ticket,
+)
 from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.users import get_user_by_id
 
@@ -91,13 +95,13 @@ def issue_realtime_ticket(
 @router.websocket('/stream')
 async def realtime_stream(
     websocket: WebSocket,
-    ticket: Annotated[str, Query(min_length=1)],
+    ticket: Annotated[str | None, Query(min_length=1)] = None,
 ) -> None:
     """Accept an authenticated websocket and bridge realtime envelopes.
 
     Args:
         websocket: Incoming websocket connection.
-        ticket: Signed websocket ticket query parameter.
+        ticket: Optional legacy signed websocket ticket query parameter.
 
     Returns:
         None.
@@ -117,10 +121,15 @@ async def realtime_stream(
         await websocket.close(code=1011, reason='realtime unavailable')
         return
 
+    websocket_ticket = _extract_websocket_ticket(websocket, ticket)
+    if websocket_ticket is None:
+        await websocket.close(code=1008)
+        return
+
     try:
         user = await run_in_threadpool(
             _authenticate_websocket_user,
-            ticket,
+            websocket_ticket,
             settings,
             storage,
         )
@@ -160,7 +169,7 @@ def _authenticate_websocket_user(
         StorageError: If user lookup fails.
     """
 
-    user_id = decode_realtime_ticket(settings, ticket)
+    user_id = consume_realtime_ticket(settings, ticket)
 
     try:
         with storage.connection() as connection:
@@ -190,6 +199,55 @@ def _authenticate_websocket_user(
         )
 
     return user
+
+
+def _extract_websocket_ticket(websocket: WebSocket, query_ticket: str | None) -> str | None:
+    """Extract a websocket ticket from subprotocols or legacy query transport.
+
+    Args:
+        websocket: Incoming websocket connection.
+        query_ticket: Optional legacy query-parameter ticket.
+
+    Returns:
+        str | None: Signed websocket ticket when one is present.
+
+    Raises:
+        None.
+    """
+
+    subprotocol_ticket = _extract_subprotocol_ticket(websocket.scope.get('subprotocols'))
+    if subprotocol_ticket is not None:
+        return subprotocol_ticket
+    return query_ticket
+
+
+def _extract_subprotocol_ticket(raw_subprotocols: object) -> str | None:
+    """Extract a realtime ticket from offered websocket subprotocol values.
+
+    Args:
+        raw_subprotocols: ASGI subprotocol list from the websocket scope.
+
+    Returns:
+        str | None: Signed websocket ticket when offered by the client.
+
+    Raises:
+        None.
+    """
+
+    if not isinstance(raw_subprotocols, (list, tuple)):
+        return None
+
+    for subprotocol in raw_subprotocols:
+        if not isinstance(subprotocol, str):
+            continue
+        if not subprotocol.startswith(REALTIME_TICKET_SUBPROTOCOL_PREFIX):
+            continue
+
+        ticket = subprotocol.removeprefix(REALTIME_TICKET_SUBPROTOCOL_PREFIX)
+        if ticket != '':
+            return ticket
+
+    return None
 
 
 def _has_content_read_permission(user: dict[str, Any]) -> bool:

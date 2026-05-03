@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict
 from typing import Annotated, Any, cast
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
@@ -24,6 +25,7 @@ from psycopg_pool import PoolTimeout
 
 from pragma.config import Settings, get_settings
 from pragma.errors import SearchError, StorageError, ThemeError
+from pragma.media.service import resolve_public_media_content
 from pragma.public.service import (
     build_archive_url,
     build_common_context,
@@ -605,6 +607,71 @@ def render_search(
         context=context,
         status_code=status.HTTP_200_OK,
         error_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
+
+@router.get('/media/{media_id}/content')
+def render_public_media_content(
+    media_id: UUID,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FileResponse:
+    """Serve media bytes only when referenced by published content.
+
+    Args:
+        media_id: Media asset identifier.
+        storage: Initialized database pool manager.
+        settings: Application settings.
+
+    Returns:
+        FileResponse: Public inline media response.
+
+    Raises:
+        MediaError: If the media asset is not public or bytes are missing.
+        StorageError: If the storage layer fails.
+    """
+
+    path, mime_type, _filename = resolve_public_media_content(storage, settings, media_id)
+    return FileResponse(
+        path=path,
+        media_type=mime_type,
+        headers={'Cache-Control': 'public, max-age=300, must-revalidate'},
+    )
+
+
+@router.get('/media/{media_id}/variants/{variant_name}')
+def render_public_media_variant(
+    media_id: UUID,
+    variant_name: str,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FileResponse:
+    """Serve media variants only when the asset is referenced by published content.
+
+    Args:
+        media_id: Media asset identifier.
+        variant_name: Derivative variant name.
+        storage: Initialized database pool manager.
+        settings: Application settings.
+
+    Returns:
+        FileResponse: Public inline media variant response.
+
+    Raises:
+        MediaError: If the media asset or variant is not public or is missing.
+        StorageError: If the storage layer fails.
+    """
+
+    path, mime_type, _filename = resolve_public_media_content(
+        storage,
+        settings,
+        media_id,
+        variant_name,
+    )
+    return FileResponse(
+        path=path,
+        media_type=mime_type,
+        headers={'Cache-Control': 'public, max-age=300, must-revalidate'},
     )
 
 

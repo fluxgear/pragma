@@ -1,7 +1,7 @@
-import { apiRequest, getApiBase } from '@/api/client'
+import { authenticatedApiRequest, withFreshAccessToken } from '@/api/authenticated'
+import { getApiBase } from '@/api/client'
 import { toApiClientError } from '@/api/errors'
 import type { MediaAssetListResponse, MediaAssetResponse } from '@/api/types'
-import { useAuthStore } from '@/stores/auth'
 
 export interface ListMediaAssetsParams {
   mime_type?: string
@@ -20,14 +20,6 @@ const UPLOAD_METADATA_HEADER_ENCODING_PREFIX = 'utf8-url:'
 
 function encodeUploadMetadataHeaderValue(value: string): string {
   return UPLOAD_METADATA_HEADER_ENCODING_PREFIX + encodeURIComponent(value)
-}
-
-function getAccessToken(): string {
-  const authStore = useAuthStore()
-  if (authStore.accessToken === null) {
-    throw new Error('Authentication required')
-  }
-  return authStore.accessToken
 }
 
 function buildMediaListQuery(params: ListMediaAssetsParams = {}): string {
@@ -75,23 +67,18 @@ function buildUploadHeaders(file: File, options: UploadMediaAssetOptions): Recor
 export function listMediaAssets(
   params: ListMediaAssetsParams = {},
 ): Promise<MediaAssetListResponse> {
-  return apiRequest<MediaAssetListResponse>(buildMediaListQuery(params), {
-    accessToken: getAccessToken(),
-  })
+  return authenticatedApiRequest<MediaAssetListResponse>(buildMediaListQuery(params))
 }
 
 export function getMediaAsset(mediaId: string): Promise<MediaAssetResponse> {
-  return apiRequest<MediaAssetResponse>(`/media/assets/${mediaId}`, {
-    accessToken: getAccessToken(),
-  })
+  return authenticatedApiRequest<MediaAssetResponse>(`/media/assets/${mediaId}`)
 }
 
 export function uploadMediaAsset(
   file: File,
   options: UploadMediaAssetOptions = {},
 ): Promise<MediaAssetResponse> {
-  return apiRequest<MediaAssetResponse>('/media/assets', {
-    accessToken: getAccessToken(),
+  return authenticatedApiRequest<MediaAssetResponse>('/media/assets', {
     method: 'POST',
     headers: buildUploadHeaders(file, options),
     body: file,
@@ -99,17 +86,16 @@ export function uploadMediaAsset(
 }
 
 export function deleteMediaAsset(mediaId: string): Promise<void> {
-  return apiRequest<void>(`/media/assets/${mediaId}`, {
-    accessToken: getAccessToken(),
+  return authenticatedApiRequest<void>(`/media/assets/${mediaId}`, {
     method: 'DELETE',
   })
 }
 
-export async function fetchMediaContentBlob(mediaId: string): Promise<Blob> {
+async function fetchMediaContentBlobWithToken(mediaId: string, accessToken: string): Promise<Blob> {
   const response = await fetch(`${getApiBase()}/media/assets/${mediaId}/content`, {
     credentials: 'include',
     headers: {
-      Authorization: `Bearer ${getAccessToken()}`,
+      Authorization: `Bearer ${accessToken}`,
     },
   })
 
@@ -118,4 +104,8 @@ export async function fetchMediaContentBlob(mediaId: string): Promise<Blob> {
   }
 
   return await response.blob()
+}
+
+export function fetchMediaContentBlob(mediaId: string): Promise<Blob> {
+  return withFreshAccessToken((accessToken) => fetchMediaContentBlobWithToken(mediaId, accessToken))
 }

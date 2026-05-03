@@ -72,7 +72,10 @@ export const useInstallStore = defineStore('install', () => {
     await Promise.all([loadStatus(true), loadReadiness(true)])
   }
 
-  async function bootstrapAdmin(payload: BootstrapRequest): Promise<BootstrapResponse> {
+  async function bootstrapAdmin(
+    payload: BootstrapRequest,
+    setupSecret?: string | null,
+  ): Promise<BootstrapResponse> {
     submitting.value = true
     errorMessage.value = null
 
@@ -84,7 +87,7 @@ export const useInstallStore = defineStore('install', () => {
         throw new Error(message)
       }
 
-      const response = await bootstrapInstall(payload)
+      const response = await bootstrapInstall(payload, setupSecret)
       await loadStatus(true)
       return response
     } catch (error) {

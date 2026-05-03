@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     media_storage_backend: Literal['local'] = 'local'
     media_root: str = Field(default='media', min_length=1)
     media_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    media_max_image_width: int = Field(default=12000, ge=1, le=100000)
+    media_max_image_height: int = Field(default=12000, ge=1, le=100000)
+    media_max_image_pixels: int = Field(default=50000000, ge=1, le=1000000000)
     media_allowed_mime_types: str = Field(
         default='image/jpeg,image/png,image/gif,image/webp,application/pdf,audio/mpeg,audio/wav,audio/ogg,video/mp4,video/webm',
         min_length=1,

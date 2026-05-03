@@ -40,6 +40,14 @@ _PNG_1X1 = (
 )
 
 
+_PNG_2X2_HEADER = (
+    b'\x89PNG\r\n\x1a\n'
+    b'\x00\x00\x00\rIHDR'
+    b'\x00\x00\x00\x02\x00\x00\x00\x02'
+    b'\x08\x02\x00\x00\x00'
+)
+
+
 def _bootstrap_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> None:
     """Create the first super-admin for media-flow tests.
 
@@ -557,6 +565,56 @@ def test_media_upload_rejects_disallowed_mime_type(
     assert response.json() == {
         'detail': 'Uploaded media type is not allowed by configuration',
         'code': 'MEDIA_TYPE_DISALLOWED',
+    }
+
+
+
+def test_media_upload_rejects_image_pixel_cap_before_storage_or_pillow(
+    migrated_database: dict[str, str],
+    apply_runtime_env,
+    bootstrap_payload: dict[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify image pixel caps run before storage persistence or Pillow decoding."""
+
+    _ = migrated_database
+    media_root = tmp_path / 'media-root-pixel-cap'
+    apply_runtime_env(
+        {
+            'PRAGMA_MEDIA_ROOT': str(media_root),
+            'PRAGMA_MEDIA_MAX_UPLOAD_BYTES': '1048576',
+            'PRAGMA_MEDIA_MAX_IMAGE_PIXELS': '1',
+        }
+    )
+
+    def _fail_store_from_stream(*args, **kwargs) -> object:
+        _ = args, kwargs
+        raise AssertionError('oversized images must be rejected before storage')
+
+    def _fail_image_open(*args, **kwargs) -> object:
+        _ = args, kwargs
+        raise AssertionError('oversized images must be rejected before Pillow opens them')
+
+    monkeypatch.setattr(
+        LocalFilesystemStorageBackend,
+        'store_from_stream',
+        _fail_store_from_stream,
+    )
+    monkeypatch.setattr('pragma.media.service.Image.open', _fail_image_open)
+
+    with TestClient(create_app()) as client:
+        headers = {**_auth_headers(client, bootstrap_payload), 'Content-Type': 'image/png'}
+        response = client.post(
+            '/api/v1/media/assets?filename=too-many-pixels.png',
+            headers=headers,
+            content=_PNG_2X2_HEADER,
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        'detail': 'Uploaded image pixel count exceeds the configured limit',
+        'code': 'MEDIA_IMAGE_PIXELS_TOO_LARGE',
     }
 
 

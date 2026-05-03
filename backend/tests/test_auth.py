@@ -454,6 +454,41 @@ def test_protected_endpoint_requires_auth(
     }
 
 
+def test_auth_openapi_documents_structured_error_responses(client: TestClient) -> None:
+    """Verify auth endpoints publish structured error schemas in OpenAPI.
+
+    Args:
+        client: FastAPI test client.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    api_error_schema = schema["components"]["schemas"]["ApiError"]
+    assert set(api_error_schema["required"]) == {"detail", "code"}
+    assert set(api_error_schema["properties"]) == {"detail", "code"}
+
+    api_error_ref = {"$ref": "#/components/schemas/ApiError"}
+    documented_responses = {
+        ("/api/v1/auth/login", "post"): ("401", "422", "503"),
+        ("/api/v1/auth/refresh", "post"): ("401", "422", "503"),
+        ("/api/v1/auth/me", "get"): ("401", "503"),
+        ("/api/v1/auth/change-password", "post"): ("401", "422", "503"),
+    }
+
+    for (path, method), status_codes in documented_responses.items():
+        responses = schema["paths"][path][method]["responses"]
+        for status_code in status_codes:
+            assert responses[status_code]["content"]["application/json"]["schema"] == api_error_ref
+
+
 def test_current_user_returns_identity(
     client: TestClient,
     bootstrap_payload: dict[str, str],

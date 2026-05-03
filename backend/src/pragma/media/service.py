@@ -69,6 +69,8 @@ _MEDIA_KIND_BY_MIME_TYPE = {
 _THUMBNAIL_MIME_TYPE = 'image/jpeg'
 _THUMBNAIL_SIZE = (320, 320)
 _VARIANT_MIME_TYPES = {'thumbnail': _THUMBNAIL_MIME_TYPE}
+_IMAGE_MIME_TYPES = frozenset({'image/gif', 'image/jpeg', 'image/png', 'image/webp'})
+
 
 
 def create_media_asset(
@@ -116,6 +118,7 @@ def create_media_asset(
         )
 
     width, height = _extract_dimensions(upload_source, mime_type)
+    _validate_image_dimensions(width, height, mime_type, settings)
     metadata = _extract_media_metadata(upload_source, mime_type, size_bytes)
     media_id = uuid4()
     created_at = utc_now()
@@ -315,6 +318,71 @@ def resolve_media_content(
             code='MEDIA_CONTENT_LOOKUP_FAILED',
         ) from exc
 
+    return _resolve_media_row_content(backend, row, variant_name)
+
+
+def resolve_public_media_content(
+    storage: DatabasePool,
+    settings: Settings,
+    media_id: UUID,
+    variant_name: str | None = None,
+) -> tuple[Path, str, str]:
+    """Resolve media bytes only when referenced by published content.
+
+    Args:
+        storage: Initialized database pool manager.
+        settings: Application settings.
+        media_id: Media asset identifier.
+        variant_name: Optional derivative variant name.
+
+    Returns:
+        tuple[Path, str, str]: Absolute path, MIME type, and original filename.
+
+    Raises:
+        MediaError: If the media asset is missing, unpublished, or bytes are missing.
+        StorageError: If metadata lookup fails.
+    """
+
+    backend = build_storage_backend(settings)
+
+    try:
+        with storage.connection() as connection:
+            row = media_queries.get_public_media_by_id(connection, media_id)
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load public media bytes',
+            code='PUBLIC_MEDIA_CONTENT_LOOKUP_FAILED',
+        ) from exc
+
+    if row is None:
+        raise MediaError(
+            detail='Public media asset not found',
+            code='PUBLIC_MEDIA_NOT_FOUND',
+            status_code=HTTPStatus.NOT_FOUND,
+        )
+
+    return _resolve_media_row_content(backend, row, variant_name)
+
+
+def _resolve_media_row_content(
+    backend: StorageBackend,
+    row: dict[str, Any],
+    variant_name: str | None,
+) -> tuple[Path, str, str]:
+    """Resolve stored bytes from an already-authorized media row.
+
+    Args:
+        backend: Active media storage backend.
+        row: Media row selected by the storage layer.
+        variant_name: Optional derivative variant name.
+
+    Returns:
+        tuple[Path, str, str]: Absolute path, MIME type, and original filename.
+
+    Raises:
+        MediaError: If a requested variant or stored bytes are missing.
+    """
+
     filename = str(row['original_filename'])
     mime_type = str(row['mime_type'])
     storage_key = str(row['storage_key'])
@@ -457,6 +525,54 @@ def _sniff_media_type(upload_source: BinaryIO, declared_content_type: str | None
         status_code=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
     )
 
+
+def _validate_image_dimensions(
+    width: int | None,
+    height: int | None,
+    mime_type: str,
+    settings: Settings,
+) -> None:
+    """Enforce configured image dimension and pixel-count caps before Pillow runs.
+
+    Args:
+        width: Parsed image width, if available.
+        height: Parsed image height, if available.
+        mime_type: Trusted MIME type derived from upload bytes.
+        settings: Runtime settings containing image safety limits.
+
+    Returns:
+        None.
+
+    Raises:
+        MediaError: If image dimensions are unreadable, invalid, or too large.
+    """
+
+    if mime_type not in _IMAGE_MIME_TYPES:
+        return
+    if width is None or height is None:
+        raise MediaError(
+            detail='Uploaded image dimensions could not be determined',
+            code='MEDIA_IMAGE_DIMENSIONS_UNREADABLE',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if width <= 0 or height <= 0:
+        raise MediaError(
+            detail='Uploaded image dimensions are invalid',
+            code='MEDIA_IMAGE_DIMENSIONS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if width > settings.media_max_image_width or height > settings.media_max_image_height:
+        raise MediaError(
+            detail='Uploaded image dimensions exceed the configured limit',
+            code='MEDIA_IMAGE_DIMENSIONS_TOO_LARGE',
+            status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+        )
+    if width * height > settings.media_max_image_pixels:
+        raise MediaError(
+            detail='Uploaded image pixel count exceeds the configured limit',
+            code='MEDIA_IMAGE_PIXELS_TOO_LARGE',
+            status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+        )
 
 def _extract_dimensions(
     upload_source: BinaryIO,
@@ -646,7 +762,7 @@ def _build_media_variants(
         RuntimeError: If derivative generation fails unexpectedly.
     """
 
-    if mime_type not in {'image/gif', 'image/jpeg', 'image/png', 'image/webp'}:
+    if mime_type not in _IMAGE_MIME_TYPES:
         return {}
     return {'thumbnail': _build_thumbnail_variant(backend, stored_media, media_id, created_at)}
 

@@ -27,8 +27,47 @@ from pragma.auth.models import (
 )
 from pragma.auth.service import authenticate_user, logout_user, refresh_user_session
 from pragma.config import Settings, get_settings
+from pragma.errors import ApiError
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
+
+_AUTH_TOKEN_ERROR_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "model": ApiError,
+        "description": "Authentication credentials are invalid or expired",
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "model": ApiError,
+        "description": "Request validation failed",
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ApiError,
+        "description": "Authentication storage is unavailable",
+    },
+}
+_AUTH_STORAGE_ERROR_RESPONSES = {
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ApiError,
+        "description": "Authentication storage is unavailable",
+    },
+}
+_AUTH_IDENTITY_ERROR_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "model": ApiError,
+        "description": "Authentication required",
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ApiError,
+        "description": "Authentication storage is unavailable",
+    },
+}
+_AUTH_PASSWORD_ERROR_RESPONSES = {
+    **_AUTH_TOKEN_ERROR_RESPONSES,
+    status.HTTP_401_UNAUTHORIZED: {
+        "model": ApiError,
+        "description": "Authentication or current password is invalid",
+    },
+}
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -98,7 +137,7 @@ def _require_refresh_cookie(request: Request, settings: Settings) -> str:
     return refresh_token
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, responses=_AUTH_TOKEN_ERROR_RESPONSES)
 def login(
     payload: LoginRequest,
     response: Response,
@@ -130,7 +169,7 @@ def login(
     )
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, responses=_AUTH_TOKEN_ERROR_RESPONSES)
 def refresh(
     request: Request,
     response: Response,
@@ -163,7 +202,11 @@ def refresh(
     )
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=_AUTH_STORAGE_ERROR_RESPONSES,
+)
 def logout(
     request: Request,
     response: Response,
@@ -191,7 +234,7 @@ def logout(
     return response
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=UserResponse, responses=_AUTH_IDENTITY_ERROR_RESPONSES)
 def me(current_user: Annotated[dict[str, object], Depends(get_current_user)]) -> UserResponse:
     """Return the current authenticated user.
 
@@ -209,7 +252,11 @@ def me(current_user: Annotated[dict[str, object], Depends(get_current_user)]) ->
     return UserResponse.from_record(current_user)
 
 
-@router.post("/change-password", response_model=UserResponse)
+@router.post(
+    "/change-password",
+    response_model=UserResponse,
+    responses=_AUTH_PASSWORD_ERROR_RESPONSES,
+)
 def change_password(
     payload: ChangePasswordRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],

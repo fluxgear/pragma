@@ -120,11 +120,11 @@ describe('media API helpers', () => {
     expect(result).toBe(blob)
   })
 
-  it('fails fast when no session access token is available', () => {
+  it('fails fast when no session access token is available', async () => {
     const authStore = useAuthStore()
     authStore.accessToken = null
 
-    expect(() => listMediaAssets()).toThrowError(new Error('Authentication required'))
+    await expect(listMediaAssets()).rejects.toThrowError(new Error('Authentication required'))
     expect(apiClientMocks.apiRequest).not.toHaveBeenCalled()
   })
 })

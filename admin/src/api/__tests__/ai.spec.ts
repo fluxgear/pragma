@@ -125,11 +125,11 @@ describe('AI API helpers', () => {
     })
   })
 
-  it('fails fast when no session access token is available', () => {
+  it('fails fast when no session access token is available', async () => {
     const authStore = useAuthStore()
     authStore.accessToken = null
 
-    expect(() => getAiSettings()).toThrowError(new Error('Authentication required'))
+    await expect(getAiSettings()).rejects.toThrowError(new Error('Authentication required'))
     expect(apiClientMocks.apiRequest).not.toHaveBeenCalled()
   })
 })

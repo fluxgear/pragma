@@ -20,6 +20,15 @@ All setup endpoints are under `/api/v1`:
 
 The admin install store checks install status and system readiness before bootstrap. If the schema is not ready or the backend cannot reach PostgreSQL, complete database setup and migrations first.
 
+## Operator setup secret
+
+Production bootstrap is fail-closed unless exactly one backend setup-secret source is configured:
+
+- `PRAGMA_SETUP_SECRET`
+- `PRAGMA_SETUP_SECRET_FILE`
+
+The setup wizard includes an Operator setup secret field. When populated, the admin SPA sends the value as the `X-Pragma-Setup-Secret` header; it is not part of the JSON body. Use the same raw secret value, or the contents of the configured file, during first-run setup.
+
 ## Bootstrap payload
 
 `POST /api/v1/install/bootstrap` accepts:

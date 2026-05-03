@@ -9,6 +9,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 
 const realtimeApiMocks = vi.hoisted(() => ({
+  buildRealtimeWebSocketProtocols: vi.fn(),
   buildRealtimeWebSocketUrl: vi.fn(),
   createRealtimeTicket: vi.fn(),
 }))
@@ -22,6 +23,7 @@ class FakeWebSocket {
   static readonly CLOSED = 3
 
   url: string
+  protocols: string[]
   readyState = FakeWebSocket.CONNECTING
 
   onopen: ((event: Event) => void) | null = null
@@ -34,8 +36,9 @@ class FakeWebSocket {
     this.onclose?.({ code: code ?? 1000, reason: reason ?? '', wasClean: true } as CloseEvent)
   })
 
-  constructor(url: string) {
+  constructor(url: string, protocols: string[]) {
     this.url = url
+    this.protocols = protocols
   }
 
   emitOpen(): void {
@@ -78,8 +81,11 @@ describe('useRealtimeStore', () => {
       ticket: 'ticket-1',
       expires_at: '2026-04-27T19:00:00Z',
     })
-    realtimeApiMocks.buildRealtimeWebSocketUrl.mockImplementation(
-      (ticket: string) => `ws://localhost/api/v1/realtime/stream?ticket=${ticket}`,
+    realtimeApiMocks.buildRealtimeWebSocketUrl.mockReturnValue(
+      'ws://localhost/api/v1/realtime/stream',
+    )
+    realtimeApiMocks.buildRealtimeWebSocketProtocols.mockImplementation(
+      (ticket: string) => [`pragma.realtime.ticket.${ticket}`],
     )
   })
 
@@ -104,8 +110,8 @@ describe('useRealtimeStore', () => {
 
   it('resets reconnect attempts and emits resync when socket opens', async () => {
     const sockets: FakeWebSocket[] = []
-    __setRealtimeWebSocketFactoryForTests((url: string) => {
-      const socket = new FakeWebSocket(url)
+    __setRealtimeWebSocketFactoryForTests((url: string, protocols: string[]) => {
+      const socket = new FakeWebSocket(url, protocols)
       sockets.push(socket)
       return socket as unknown as WebSocket
     })
@@ -118,6 +124,9 @@ describe('useRealtimeStore', () => {
     await Promise.resolve()
 
     expect(realtimeApiMocks.createRealtimeTicket).toHaveBeenCalledTimes(1)
+    expect(sockets[0].url).toBe('ws://localhost/api/v1/realtime/stream')
+    expect(sockets[0].url).not.toContain('ticket-1')
+    expect(sockets[0].protocols).toEqual(['pragma.realtime.ticket.ticket-1'])
     sockets[0].emitOpen()
 
     expect(store.connectionState).toBe('live')
@@ -133,8 +142,8 @@ describe('useRealtimeStore', () => {
         resolveTicket = resolve
       }),
     )
-    __setRealtimeWebSocketFactoryForTests((url: string) => {
-      const socket = new FakeWebSocket(url)
+    __setRealtimeWebSocketFactoryForTests((url: string, protocols: string[]) => {
+      const socket = new FakeWebSocket(url, protocols)
       sockets.push(socket)
       return socket as unknown as WebSocket
     })
@@ -159,8 +168,8 @@ describe('useRealtimeStore', () => {
 
   it('reconnects with capped exponential backoff after transient close', async () => {
     const sockets: FakeWebSocket[] = []
-    __setRealtimeWebSocketFactoryForTests((url: string) => {
-      const socket = new FakeWebSocket(url)
+    __setRealtimeWebSocketFactoryForTests((url: string, protocols: string[]) => {
+      const socket = new FakeWebSocket(url, protocols)
       sockets.push(socket)
       return socket as unknown as WebSocket
     })
@@ -184,8 +193,8 @@ describe('useRealtimeStore', () => {
 
   it('stops reconnect attempts when websocket closes with policy violation', async () => {
     const sockets: FakeWebSocket[] = []
-    __setRealtimeWebSocketFactoryForTests((url: string) => {
-      const socket = new FakeWebSocket(url)
+    __setRealtimeWebSocketFactoryForTests((url: string, protocols: string[]) => {
+      const socket = new FakeWebSocket(url, protocols)
       sockets.push(socket)
       return socket as unknown as WebSocket
     })
@@ -204,8 +213,8 @@ describe('useRealtimeStore', () => {
 
   it('stop() closes the socket and clears reconnect timers', async () => {
     const sockets: FakeWebSocket[] = []
-    __setRealtimeWebSocketFactoryForTests((url: string) => {
-      const socket = new FakeWebSocket(url)
+    __setRealtimeWebSocketFactoryForTests((url: string, protocols: string[]) => {
+      const socket = new FakeWebSocket(url, protocols)
       sockets.push(socket)
       return socket as unknown as WebSocket
     })
@@ -225,8 +234,8 @@ describe('useRealtimeStore', () => {
 
   it('ignores malformed or unknown envelopes and dispatches valid events', async () => {
     const sockets: FakeWebSocket[] = []
-    __setRealtimeWebSocketFactoryForTests((url: string) => {
-      const socket = new FakeWebSocket(url)
+    __setRealtimeWebSocketFactoryForTests((url: string, protocols: string[]) => {
+      const socket = new FakeWebSocket(url, protocols)
       sockets.push(socket)
       return socket as unknown as WebSocket
     })

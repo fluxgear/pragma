@@ -40,7 +40,11 @@ from pragma.realtime.models import (
     serialize_envelope,
 )
 from pragma.realtime.publisher import RealtimePublisher
-from pragma.realtime.security import WEBSOCKET_TICKET_TOKEN_TYPE, create_realtime_ticket
+from pragma.realtime.security import (
+    REALTIME_TICKET_SUBPROTOCOL_PREFIX,
+    WEBSOCKET_TICKET_TOKEN_TYPE,
+    create_realtime_ticket,
+)
 
 
 class _ExplodingPublisher:
@@ -291,6 +295,22 @@ def _create_content_type(client: TestClient, headers: dict[str, str]) -> dict[st
     )
     assert response.status_code == 201
     return response.json()
+
+
+def _ticket_subprotocols(ticket: str) -> list[str]:
+    """Build websocket subprotocol values carrying a realtime ticket.
+
+    Args:
+        ticket: Signed websocket ticket.
+
+    Returns:
+        list[str]: Subprotocol values for websocket connection.
+
+    Raises:
+        None.
+    """
+
+    return [f'{REALTIME_TICKET_SUBPROTOCOL_PREFIX}{ticket}']
 
 
 def test_realtime_envelope_round_trip_and_payload_guard() -> None:
@@ -671,6 +691,47 @@ def test_realtime_ticket_endpoint_requires_content_read_permission(
     }
 
 
+def test_realtime_websocket_rejects_replayed_ticket(
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify websocket tickets are rejected after first successful use.
+
+    Args:
+        migrated_database: Runtime environment values for the migrated test database.
+        bootstrap_payload: Bootstrap payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _ = migrated_database
+    with TestClient(create_app()) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+
+        ticket_response = client.post('/api/v1/realtime/ticket', headers=headers)
+        assert ticket_response.status_code == 201
+        ticket = ticket_response.json()['ticket']
+
+        with client.websocket_connect(
+            '/api/v1/realtime/stream',
+            subprotocols=_ticket_subprotocols(ticket),
+        ) as websocket:
+            event = websocket.receive_json()
+            assert event['type'] == 'realtime.resync_required'
+
+        with pytest.raises(WebSocketDisconnect) as replay_exc, client.websocket_connect(
+            '/api/v1/realtime/stream',
+            subprotocols=_ticket_subprotocols(ticket),
+        ):
+            pass
+
+    assert replay_exc.value.code == 1008
+
+
 def test_realtime_websocket_connect_disconnect_and_reconnect(
     migrated_database: dict[str, str],
     bootstrap_payload: dict[str, str],
@@ -710,7 +771,8 @@ def test_realtime_websocket_connect_disconnect_and_reconnect(
         first_ticket = first_ticket_response.json()['ticket']
 
         with client.websocket_connect(
-            f'/api/v1/realtime/stream?ticket={first_ticket}'
+            '/api/v1/realtime/stream',
+            subprotocols=_ticket_subprotocols(first_ticket),
         ) as websocket:
             event = websocket.receive_json()
             assert event['version'] == 1
@@ -725,7 +787,8 @@ def test_realtime_websocket_connect_disconnect_and_reconnect(
         second_ticket = second_ticket_response.json()['ticket']
 
         with client.websocket_connect(
-            f'/api/v1/realtime/stream?ticket={second_ticket}'
+            '/api/v1/realtime/stream',
+            subprotocols=_ticket_subprotocols(second_ticket),
         ) as websocket:
             event = websocket.receive_json()
             assert event['type'] == 'realtime.resync_required'
@@ -841,7 +904,8 @@ def test_realtime_websocket_rejects_unauthorized_and_force_password_change_users
         with (
             pytest.raises(WebSocketDisconnect) as no_permission_exc,
             client.websocket_connect(
-                f'/api/v1/realtime/stream?ticket={no_permission_ticket}'
+                '/api/v1/realtime/stream',
+                subprotocols=_ticket_subprotocols(no_permission_ticket),
             ),
         ):
             pass
@@ -849,7 +913,8 @@ def test_realtime_websocket_rejects_unauthorized_and_force_password_change_users
         with (
             pytest.raises(WebSocketDisconnect) as forced_change_exc,
             client.websocket_connect(
-                f'/api/v1/realtime/stream?ticket={forced_change_ticket}'
+                '/api/v1/realtime/stream',
+                subprotocols=_ticket_subprotocols(forced_change_ticket),
             ),
         ):
             pass

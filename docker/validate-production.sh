@@ -12,6 +12,7 @@ USE_SECRETS_COMPOSE=0
 MIN_RAW_SECRET_LENGTH=32
 DATABASE_PASSWORD_SECRET_DEFAULT_SOURCE="./secrets/pragma_database_password"
 JWT_SECRET_KEY_SECRET_DEFAULT_SOURCE="./secrets/pragma_jwt_secret_key"
+SETUP_SECRET_SECRET_DEFAULT_SOURCE="./secrets/pragma_setup_secret"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Environment file not found: $ENV_FILE" >&2
@@ -136,7 +137,9 @@ validate_effective_secret_source_file() {
 }
 
 uses_file_secret() {
-  [ -n "${PRAGMA_DATABASE_PASSWORD_FILE:-}" ] || [ -n "${PRAGMA_JWT_SECRET_KEY_FILE:-}" ]
+  [ -n "${PRAGMA_DATABASE_PASSWORD_FILE:-}" ] || \
+    [ -n "${PRAGMA_JWT_SECRET_KEY_FILE:-}" ] || \
+    [ -n "${PRAGMA_SETUP_SECRET_FILE:-}" ]
 }
 
 configure_compose_override() {
@@ -169,10 +172,13 @@ validate_secret_configuration() {
   load_env_file
   require_secret_value_or_file PRAGMA_DATABASE_PASSWORD PRAGMA_DATABASE_PASSWORD_FILE
   require_secret_value_or_file PRAGMA_JWT_SECRET_KEY PRAGMA_JWT_SECRET_KEY_FILE
+  require_secret_value_or_file PRAGMA_SETUP_SECRET PRAGMA_SETUP_SECRET_FILE
   validate_secret_source_file PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE
   validate_secret_source_file PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE
+  validate_secret_source_file PRAGMA_SETUP_SECRET_SECRET_SOURCE
   validate_effective_secret_source_file PRAGMA_DATABASE_PASSWORD_FILE PRAGMA_DATABASE_PASSWORD_SECRET_SOURCE "$DATABASE_PASSWORD_SECRET_DEFAULT_SOURCE"
   validate_effective_secret_source_file PRAGMA_JWT_SECRET_KEY_FILE PRAGMA_JWT_SECRET_KEY_SECRET_SOURCE "$JWT_SECRET_KEY_SECRET_DEFAULT_SOURCE"
+  validate_effective_secret_source_file PRAGMA_SETUP_SECRET_FILE PRAGMA_SETUP_SECRET_SECRET_SOURCE "$SETUP_SECRET_SECRET_DEFAULT_SOURCE"
   configure_compose_override
 }
 

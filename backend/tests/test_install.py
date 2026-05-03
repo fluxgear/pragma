@@ -345,6 +345,7 @@ def test_bootstrap_setup_secret_fails_closed_in_production(
 
     del runtime_database
     monkeypatch.delenv('PRAGMA_SETUP_SECRET', raising=False)
+    monkeypatch.delenv('PRAGMA_SETUP_SECRET_FILE', raising=False)
     production_settings = get_settings().model_copy(
         update={"runtime_environment": "production"}
     )
@@ -354,6 +355,115 @@ def test_bootstrap_setup_secret_fails_closed_in_production(
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.code == 'SETUP_SECRET_REQUIRED'
+
+
+def test_bootstrap_setup_secret_uses_file_secret(
+    runtime_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Verify bootstrap setup secret can be loaded from a configured file.
+
+    Args:
+        runtime_database: Environment values for the isolated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+        tmp_path: Temporary directory for the setup-secret source file.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    from pragma.config import get_settings
+    from pragma.errors import ConfigError
+    from pragma.install.service import verify_bootstrap_setup_secret
+
+    del runtime_database
+    setup_secret = 'file-backed-setup-secret-12345678901234567890'
+    setup_secret_file = tmp_path / 'setup-secret'
+    setup_secret_file.write_text(f'  {setup_secret}\n', encoding='utf-8')
+    monkeypatch.delenv('PRAGMA_SETUP_SECRET', raising=False)
+    monkeypatch.setenv('PRAGMA_SETUP_SECRET_FILE', str(setup_secret_file))
+
+    verify_bootstrap_setup_secret(get_settings(), setup_secret)
+    with pytest.raises(ConfigError) as exc_info:
+        verify_bootstrap_setup_secret(get_settings(), 'wrong-secret')
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == 'INVALID_SETUP_SECRET'
+
+
+def test_bootstrap_setup_secret_rejects_raw_and_file_sources(
+    runtime_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Verify setup-secret raw and file sources are mutually exclusive.
+
+    Args:
+        runtime_database: Environment values for the isolated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+        tmp_path: Temporary directory for the setup-secret source file.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    from pragma.config import get_settings
+    from pragma.errors import ConfigError
+    from pragma.install.service import verify_bootstrap_setup_secret
+
+    del runtime_database
+    setup_secret_file = tmp_path / 'setup-secret'
+    setup_secret_file.write_text('file-backed-setup-secret-12345678901234567890', encoding='utf-8')
+    monkeypatch.setenv('PRAGMA_SETUP_SECRET', 'raw-setup-secret-123456789012345678901234')
+    monkeypatch.setenv('PRAGMA_SETUP_SECRET_FILE', str(setup_secret_file))
+
+    with pytest.raises(ConfigError) as exc_info:
+        verify_bootstrap_setup_secret(get_settings(), 'raw-setup-secret-123456789012345678901234')
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == 'SETUP_SECRET_SOURCE_CONFLICT'
+
+
+def test_bootstrap_setup_secret_fails_closed_for_invalid_production_file(
+    runtime_database: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify production setup fails closed when the configured file is missing.
+
+    Args:
+        runtime_database: Environment values for the isolated test database.
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    from pragma.config import get_settings
+    from pragma.errors import ConfigError
+    from pragma.install.service import verify_bootstrap_setup_secret
+
+    del runtime_database
+    monkeypatch.delenv('PRAGMA_SETUP_SECRET', raising=False)
+    monkeypatch.setenv('PRAGMA_SETUP_SECRET_FILE', '/missing/pragma/setup-secret')
+    production_settings = get_settings().model_copy(
+        update={"runtime_environment": "production"}
+    )
+
+    with pytest.raises(ConfigError) as exc_info:
+        verify_bootstrap_setup_secret(production_settings, None)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == 'SETUP_SECRET_FILE_UNREADABLE'
 
 
 def test_bootstrap_rejects_second_attempt(

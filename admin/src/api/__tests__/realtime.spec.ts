@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-import { buildRealtimeWebSocketUrl, createRealtimeTicket } from '@/api/realtime'
+import {
+  buildRealtimeWebSocketProtocols,
+  buildRealtimeWebSocketUrl,
+  createRealtimeTicket,
+} from '@/api/realtime'
 import { useAuthStore } from '@/stores/auth'
 
 const apiClientMocks = vi.hoisted(() => ({
@@ -45,29 +49,35 @@ describe('realtime API helpers', () => {
     })
   })
 
-  it('derives websocket URLs from same-origin api base', () => {
+  it('derives token-free websocket URLs from same-origin api base', () => {
     apiClientMocks.getApiBase.mockReturnValue('/api/v1')
 
-    const url = new URL(buildRealtimeWebSocketUrl('ticket-abc'))
+    const url = new URL(buildRealtimeWebSocketUrl())
 
     expect(url.protocol).toBe('ws:')
     expect(url.pathname).toBe('/api/v1/realtime/stream')
-    expect(url.searchParams.get('ticket')).toBe('ticket-abc')
+    expect(url.search).toBe('')
   })
 
-  it('derives websocket URLs from explicit HTTPS api base', () => {
+  it('derives token-free websocket URLs from explicit HTTPS api base', () => {
     apiClientMocks.getApiBase.mockReturnValue('https://admin.example.com/api/v1')
 
-    const url = buildRealtimeWebSocketUrl('ticket-xyz')
+    const url = buildRealtimeWebSocketUrl()
 
-    expect(url).toBe('wss://admin.example.com/api/v1/realtime/stream?ticket=ticket-xyz')
+    expect(url).toBe('wss://admin.example.com/api/v1/realtime/stream')
   })
 
-  it('fails fast when session access token is unavailable', () => {
+  it('builds realtime ticket websocket subprotocols', () => {
+    expect(buildRealtimeWebSocketProtocols('ticket-xyz')).toEqual([
+      'pragma.realtime.ticket.ticket-xyz',
+    ])
+  })
+
+  it('fails fast when session access token is unavailable', async () => {
     const authStore = useAuthStore()
     authStore.accessToken = null
 
-    expect(() => createRealtimeTicket()).toThrowError(new Error('Authentication required'))
+    await expect(createRealtimeTicket()).rejects.toThrowError(new Error('Authentication required'))
     expect(apiClientMocks.apiRequest).not.toHaveBeenCalled()
   })
 })

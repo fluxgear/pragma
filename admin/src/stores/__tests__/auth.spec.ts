@@ -35,9 +35,13 @@ describe('useAuthStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    vi.useRealTimers()
   })
 
-  it('restores a session from the refresh endpoint', async () => {
+  it('restores a session from the refresh endpoint and stores access token expiry', async () => {
+    const now = new Date('2026-04-27T12:00:00Z')
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
     authApiMocks.refreshSession.mockResolvedValue(authPayload)
 
     const store = useAuthStore()
@@ -45,6 +49,8 @@ describe('useAuthStore', () => {
     await expect(store.restoreSession()).resolves.toBe(true)
     expect(store.isAuthenticated).toBe(true)
     expect(store.accessToken).toBe('token-123')
+    expect(store.expiresIn).toBe(900)
+    expect(store.accessTokenExpiresAtMs).toBe(now.getTime() + 900_000)
     expect(store.user?.email).toBe('admin@example.com')
   })
 
@@ -68,6 +74,30 @@ describe('useAuthStore', () => {
     await expect(store.restoreSession()).resolves.toBe(false)
     expect(store.isAuthenticated).toBe(false)
     expect(store.errorMessage).toBe('Backend unavailable')
+  })
+
+  it('coalesces concurrent stale-token refreshes through ensureAccessToken', async () => {
+    let resolveRefresh: (value: typeof authPayload) => void = () => undefined
+    const refreshPromise = new Promise<typeof authPayload>((resolve) => {
+      resolveRefresh = resolve
+    })
+    authApiMocks.refreshSession.mockReturnValue(refreshPromise)
+
+    const store = useAuthStore()
+    store.accessToken = 'stale-token'
+    store.accessTokenExpiresAtMs = Date.now() - 1
+    store.user = authPayload.user
+
+    const firstTokenPromise = store.ensureAccessToken()
+    const secondTokenPromise = store.ensureAccessToken()
+    resolveRefresh(authPayload)
+
+    await expect(Promise.all([firstTokenPromise, secondTokenPromise])).resolves.toEqual([
+      'token-123',
+      'token-123',
+    ])
+    expect(authApiMocks.refreshSession).toHaveBeenCalledTimes(1)
+    expect(store.accessToken).toBe('token-123')
   })
 
   it('logs in, syncs identity, and logs out', async () => {

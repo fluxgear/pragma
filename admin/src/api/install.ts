@@ -7,9 +7,19 @@ export function fetchInstallStatus(): Promise<InstallStatusResponse> {
   })
 }
 
-export function bootstrapInstall(payload: BootstrapRequest): Promise<BootstrapResponse> {
+export function bootstrapInstall(
+  payload: BootstrapRequest,
+  setupSecret?: string | null,
+): Promise<BootstrapResponse> {
+  const headers = new Headers()
+  const trimmedSetupSecret = setupSecret?.trim() ?? ''
+  if (trimmedSetupSecret.length > 0) {
+    headers.set('X-Pragma-Setup-Secret', trimmedSetupSecret)
+  }
+
   return apiRequest<BootstrapResponse>('/install/bootstrap', {
     method: 'POST',
+    headers,
     body: payload,
   })
 }

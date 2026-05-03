@@ -1,4 +1,4 @@
-import { apiRequest } from '@/api/client'
+import { authenticatedApiRequest } from '@/api/authenticated'
 import type {
   AdminUserCreateRequest,
   AdminUserListResponse,
@@ -8,7 +8,6 @@ import type {
   RoleListResponse,
   UserRoleAssignmentRequest,
 } from '@/api/types'
-import { useAuthStore } from '@/stores/auth'
 
 export interface ListUsersParams {
   limit?: number
@@ -30,30 +29,17 @@ function buildUsersQuery(params: ListUsersParams = {}): string {
   return query.length > 0 ? `/users?${query}` : '/users'
 }
 
-function getAccessToken(): string {
-  const authStore = useAuthStore()
-  if (authStore.accessToken === null) {
-    throw new Error('Authentication required')
-  }
-  return authStore.accessToken
-}
-
 export function listUsers(params: ListUsersParams = {}): Promise<AdminUserListResponse> {
-  return apiRequest<AdminUserListResponse>(buildUsersQuery(params), {
-    accessToken: getAccessToken(),
-  })
+  return authenticatedApiRequest<AdminUserListResponse>(buildUsersQuery(params))
 }
 
 export function listRoles(): Promise<RoleListResponse> {
-  return apiRequest<RoleListResponse>('/users/roles', {
-    accessToken: getAccessToken(),
-  })
+  return authenticatedApiRequest<RoleListResponse>('/users/roles')
 }
 
 export function createUser(payload: AdminUserCreateRequest): Promise<AdminUserResponse> {
-  return apiRequest<AdminUserResponse>('/users', {
+  return authenticatedApiRequest<AdminUserResponse>('/users', {
     method: 'POST',
-    accessToken: getAccessToken(),
     body: payload,
   })
 }
@@ -62,9 +48,8 @@ export function updateUser(
   userId: string,
   payload: AdminUserUpdateRequest,
 ): Promise<AdminUserResponse> {
-  return apiRequest<AdminUserResponse>(`/users/${userId}`, {
+  return authenticatedApiRequest<AdminUserResponse>(`/users/${userId}`, {
     method: 'PATCH',
-    accessToken: getAccessToken(),
     body: payload,
   })
 }
@@ -73,16 +58,14 @@ export function replaceUserRoles(
   userId: string,
   payload: UserRoleAssignmentRequest,
 ): Promise<AdminUserResponse> {
-  return apiRequest<AdminUserResponse>(`/users/${userId}/roles`, {
+  return authenticatedApiRequest<AdminUserResponse>(`/users/${userId}/roles`, {
     method: 'PUT',
-    accessToken: getAccessToken(),
     body: payload,
   })
 }
 
 export function resetUserPassword(userId: string): Promise<PasswordResetResponse> {
-  return apiRequest<PasswordResetResponse>(`/users/${userId}/password-reset`, {
+  return authenticatedApiRequest<PasswordResetResponse>(`/users/${userId}/password-reset`, {
     method: 'POST',
-    accessToken: getAccessToken(),
   })
 }

@@ -260,6 +260,80 @@ def test_content_routes_require_auth(client: TestClient) -> None:
     }
 
 
+def test_content_openapi_documents_structured_error_responses(client: TestClient) -> None:
+    """Verify content endpoints publish structured error schemas in OpenAPI.
+
+    Args:
+        client: FastAPI test client.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    response = client.get('/openapi.json')
+
+    assert response.status_code == 200
+    schema = response.json()
+    api_error_schema = schema['components']['schemas']['ApiError']
+    assert set(api_error_schema['required']) == {'detail', 'code'}
+    assert set(api_error_schema['properties']) == {'detail', 'code'}
+
+    api_error_ref = {'$ref': '#/components/schemas/ApiError'}
+    documented_responses = {
+        ('/api/v1/content/types', 'get'): ('401', '403', '422', '503'),
+        ('/api/v1/content/types', 'post'): ('400', '401', '403', '409', '422', '503'),
+        ('/api/v1/content/types/{content_type_id}', 'get'): (
+            '401',
+            '403',
+            '404',
+            '422',
+            '503',
+        ),
+        ('/api/v1/content/types/{content_type_id}', 'put'): (
+            '400',
+            '401',
+            '403',
+            '404',
+            '409',
+            '422',
+            '503',
+        ),
+        ('/api/v1/content/types/{content_type_id}', 'delete'): (
+            '401',
+            '403',
+            '404',
+            '409',
+            '422',
+            '503',
+        ),
+        ('/api/v1/content/entries', 'get'): ('400', '401', '403', '422', '503'),
+        ('/api/v1/content/entries', 'post'): (
+            '400',
+            '401',
+            '403',
+            '404',
+            '409',
+            '422',
+            '503',
+        ),
+        ('/api/v1/content/entries/{entry_id}', 'delete'): (
+            '401',
+            '403',
+            '404',
+            '422',
+            '503',
+        ),
+    }
+
+    for (path, method), status_codes in documented_responses.items():
+        responses = schema['paths'][path][method]['responses']
+        for status_code in status_codes:
+            assert responses[status_code]['content']['application/json']['schema'] == api_error_ref
+
+
 def test_content_type_crud_flow(
     client: TestClient,
     bootstrap_payload: dict[str, str],

@@ -15,17 +15,29 @@ from __future__ import annotations
 
 import json
 from importlib import import_module
+from pathlib import Path
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg_pool import PoolTimeout
 
+from pragma.app import create_app
 from pragma.errors import StorageError, ThemeError
 from tests.helpers import build_database_dsn
 
 public_router_module = import_module('pragma.public.router')
 public_service_module = import_module('pragma.public.service')
+
+_PNG_1X1 = (
+    b'\x89PNG\r\n\x1a\n'
+    b'\x00\x00\x00\rIHDR'
+    b'\x00\x00\x00\x01\x00\x00\x00\x01'
+    b'\x08\x02\x00\x00\x00\x90wS\xde'
+    b'\x00\x00\x00\x0bIDATx\x9cc```\x00\x00\x00\x04\x00\x01'
+    b'\x0b\x0e-\xb4'
+    b'\x00\x00\x00\x00IEND\xaeB`\x82'
+)
 
 
 def _bootstrap_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> None:
@@ -195,6 +207,8 @@ def _create_entry(
     summary: str | None = None,
     author: str | None = None,
     category: str | None = None,
+    featured_image_url: str | None = None,
+    featured_image_alt: str | None = None,
 ) -> dict[str, object]:
     """Create a content entry for public-route tests.
 
@@ -209,6 +223,8 @@ def _create_entry(
         summary: Optional summary text.
         author: Optional author text.
         category: Optional category text.
+        featured_image_url: Optional featured image URL.
+        featured_image_alt: Optional featured image alt text.
 
     Returns:
         dict[str, object]: Serialized content-entry response.
@@ -226,6 +242,10 @@ def _create_entry(
         payload['author'] = author
     if category is not None:
         payload['category'] = category
+    if featured_image_url is not None:
+        payload['featured_image_url'] = featured_image_url
+    if featured_image_alt is not None:
+        payload['featured_image_alt'] = featured_image_alt
 
     response = client.post(
         '/api/v1/content/entries',
@@ -302,6 +322,77 @@ def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
     assert 'hello@example.com' not in response.text
     assert '+00 123 456 789' not in response.text
     assert 'mailto:hello@example.com' not in response.text
+
+
+def test_public_media_route_serves_published_references_only(
+    migrated_database: dict[str, str],
+    apply_runtime_env,
+    bootstrap_payload: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    """Verify public media URLs serve published absolute API references only."""
+
+    _ = migrated_database
+    media_root = tmp_path / 'public-media-root'
+    apply_runtime_env(
+        {
+            'PRAGMA_MEDIA_ROOT': str(media_root),
+            'PRAGMA_MEDIA_MAX_UPLOAD_BYTES': '1048576',
+        }
+    )
+
+    with TestClient(create_app()) as client:
+        headers = _auth_headers(client, bootstrap_payload)
+        published_upload_response = client.post(
+            '/api/v1/media/assets?filename=published-hero.png',
+            headers={**headers, 'Content-Type': 'image/png'},
+            content=_PNG_1X1,
+        )
+        draft_upload_response = client.post(
+            '/api/v1/media/assets?filename=draft-hero.png',
+            headers={**headers, 'Content-Type': 'image/png'},
+            content=_PNG_1X1,
+        )
+        assert published_upload_response.status_code == 201
+        assert draft_upload_response.status_code == 201
+        published_upload = published_upload_response.json()
+        draft_upload = draft_upload_response.json()
+        absolute_published_content_url = f"http://testserver{published_upload['content_url']}"
+
+        post_type = _create_content_type(client, headers, name='Posts', slug='post')
+        published_entry = _create_entry(
+            client,
+            headers,
+            str(post_type['id']),
+            title='Public Media Post',
+            body='<p>Published media body</p>',
+            featured_image_url=absolute_published_content_url,
+            featured_image_alt='Published hero',
+        )
+        _create_entry(
+            client,
+            headers,
+            str(post_type['id']),
+            title='Draft Media Post',
+            body='<p>Draft media body</p>',
+            status='draft',
+            featured_image_url=draft_upload['content_url'],
+            featured_image_alt='Draft hero',
+        )
+
+        page_response = client.get(f"/posts/{published_entry['slug']}")
+        public_media_url = f"/media/{published_upload['id']}/content"
+        published_media_response = client.get(public_media_url)
+        draft_media_response = client.get(f"/media/{draft_upload['id']}/content")
+
+    assert page_response.status_code == 200
+    assert public_media_url in page_response.text
+    assert absolute_published_content_url not in page_response.text
+    assert published_upload['content_url'] not in page_response.text
+    assert published_media_response.status_code == 200
+    assert published_media_response.content == _PNG_1X1
+    assert draft_media_response.status_code == 404
+
 
 
 def test_published_page_renders_body_title_and_canonical(

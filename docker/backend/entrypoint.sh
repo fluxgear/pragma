@@ -19,12 +19,14 @@ read_secret_file() {
     fi
     secret_value="$(cat "$secret_file")"
     export "${secret_var}=${secret_value}"
+    unset "$secret_file_var"
   fi
 }
 
 load_file_secrets() {
   read_secret_file PRAGMA_DATABASE_PASSWORD
   read_secret_file PRAGMA_JWT_SECRET_KEY
+  read_secret_file PRAGMA_SETUP_SECRET
 }
 
 prepare_writable_paths() {

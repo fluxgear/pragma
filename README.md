@@ -29,7 +29,7 @@ Pragma is a **single-site, multi-user content management system** for operators 
 
 You get a modern administration workspace, a REST API under `/api/v1`, local image media, filesystem themes, trusted backend modules, optional semantic search, and backend-rendered public pages from the same deployment.
 
-Pragma release copy is currently aligned to **v1.0.0-beta.6**. The backend Python package uses the PEP 440-compatible version **1.0.0b6**, and the admin package uses the semver prerelease **1.0.0-beta.6**.
+Pragma release copy is currently aligned to **v1.0.0-beta.7**. The backend Python package uses the PEP 440-compatible version **1.0.0b7**, and the admin package uses the semver prerelease **1.0.0-beta.7**.
 
 ---
 
@@ -271,7 +271,7 @@ PRAGMA_DATABASE_PUBLISHED_PORT=15432 \
   docker compose -f docker/docker-compose.yml --env-file docker/prod.env.example config >/dev/null
 ```
 
-The backend pytest command runs through `uv` with the project xdist defaults. The local gate runs backend Ruff, backend pytest, admin Vitest, and the admin production build.
+The backend pytest command runs through `uv` with the project xdist defaults. Run only one pytest process at a time; if a backend suite fails, follow the retry policy in [Testing](docs/testing.md#retry-policy-note). The local gate runs backend Ruff, backend pytest, admin Vitest, and the admin production build.
 
 More: [Testing](docs/testing.md).
 
