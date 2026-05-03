@@ -29,7 +29,7 @@ Pragma is a **single-site, multi-user content management system** for operators 
 
 You get a modern administration workspace, a REST API under `/api/v1`, local image media, filesystem themes, trusted backend modules, optional semantic search, and backend-rendered public pages from the same deployment.
 
-Pragma release copy is currently aligned to **v1.0.0-beta.5**. The backend Python package uses the PEP 440-compatible version **1.0.0b5**, and the admin package uses the semver prerelease **1.0.0-beta.5**.
+Pragma release copy is currently aligned to **v1.0.0-beta.6**. The backend Python package uses the PEP 440-compatible version **1.0.0b6**, and the admin package uses the semver prerelease **1.0.0-beta.6**.
 
 ---
 
@@ -155,8 +155,7 @@ pragma/
 ├── admin/            Vue 3 admin SPA, Vite, Vitest specs
 ├── docker/           Dev DB compose, production compose, proxy, validation
 ├── themes/default/   Checked-in public theme templates and static assets
-├── docs/             Install, deployment, architecture, configuration, testing
-└── scripts/          Backend test and pre-commit helpers
+└── docs/             Install, deployment, architecture, configuration, testing
 ```
 
 ---
@@ -249,17 +248,21 @@ Production Docker supports raw env secrets or file-secret variants for the datab
 ## Testing and validation
 
 ```bash
-scripts/run-backend-tests.sh
+(cd backend && uv run pytest -n 32 --dist loadscope tests)
 ```
 
 ```bash
-cd admin
-npm run test
-npm run build
+(cd admin && npm run test)
+(cd admin && npm run build)
 ```
 
+For a local pre-commit-equivalent gate, run the checks directly from the repo root:
+
 ```bash
-scripts/pre-commit-checks.sh
+(cd backend && uv run ruff check .)
+(cd backend && uv run pytest -n 32 --dist loadscope tests)
+(cd admin && npm run test)
+(cd admin && npm run build)
 ```
 
 ```bash
@@ -268,7 +271,7 @@ PRAGMA_DATABASE_PUBLISHED_PORT=15432 \
   docker compose -f docker/docker-compose.yml --env-file docker/prod.env.example config >/dev/null
 ```
 
-The backend wrapper runs one pytest command through `uv`, applies the project xdist defaults, and guards against simultaneous backend pytest runs. The pre-commit helper runs backend Ruff, the backend pytest suite by default (override with `PRAGMA_PRE_COMMIT_BACKEND_TEST_TARGET` when needed), admin Vitest, and the admin production build.
+The backend pytest command runs through `uv` with the project xdist defaults. The local gate runs backend Ruff, backend pytest, admin Vitest, and the admin production build.
 
 More: [Testing](docs/testing.md).
 

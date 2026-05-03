@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-beta.6 — 2026-05-03
+
+### Fixed
+- Made backend test bootstrap hermetic against ambient `PRAGMA_SETUP_SECRET` and `PRAGMA_SETUP_SECRET_FILE` values by scrubbing those env vars before shared test runtime setup, so unrelated backend bootstrap/login flows no longer fail when those values are exported by the parent shell or CI environment.
+- Reconciled the shipped README and testing docs with the actual repository contents by replacing unavailable helper-script references with direct backend, admin, and Docker validation commands.
+- Aligned release metadata for v1.0.0-beta.6 / 1.0.0b6 across the README, backend package/runtime metadata and lockfile, and the admin package and lockfile.
+
 ## v1.0.0-beta.5 — 2026-05-02
 
 ### Fixed

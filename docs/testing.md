@@ -1,14 +1,14 @@
 # Testing and validation
 
-## Backend test entrypoint
+## Backend test command
 
-Use the repository wrapper from the repo root:
+Run backend tests from the repo root:
 
 ```bash
-scripts/run-backend-tests.sh
+(cd backend && uv run pytest -n 32 --dist loadscope tests)
 ```
 
-The wrapper changes into `backend/`, acquires the shared backend pytest lock, adds `--dist loadscope` when not supplied, adds `-n 32` when not supplied, and runs `uv run pytest`. By default, a simultaneous backend pytest run fails fast; set `PRAGMA_BACKEND_TEST_LOCK_WAIT=1` to wait indefinitely or `PRAGMA_BACKEND_TEST_LOCK_WAIT=<seconds>` to wait with a timeout.
+This runs pytest through `uv` with the project xdist defaults.
 
 ## Admin test and build commands
 
@@ -20,13 +20,18 @@ npm run build
 
 `npm run test` runs Vitest. `npm run build` runs `vue-tsc --noEmit` and Vite production build.
 
-## Pre-commit gate
+## Pre-commit-equivalent gate
+
+No repo-level pre-commit helper script is currently shipped. Run the checks directly from the repo root:
 
 ```bash
-scripts/pre-commit-checks.sh
+(cd backend && uv run ruff check .)
+(cd backend && uv run pytest -n 32 --dist loadscope tests)
+(cd admin && npm run test)
+(cd admin && npm run build)
 ```
 
-This runs backend Ruff (`uv run ruff check .`), a backend pytest gate through `scripts/run-backend-tests.sh` (default target `tests`, the full suite; override with `PRAGMA_PRE_COMMIT_BACKEND_TEST_TARGET`), and, when `admin/` exists, the admin Vitest suite plus production build.
+This runs backend Ruff, the backend pytest suite, admin Vitest, and the admin production build.
 
 ## Docker config validation
 

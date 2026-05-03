@@ -43,6 +43,8 @@ def _apply_runtime_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str]) 
         None.
     """
 
+    for key in ("PRAGMA_SETUP_SECRET", "PRAGMA_SETUP_SECRET_FILE"):
+        monkeypatch.delenv(key, raising=False)
     for key, value in values.items():
         monkeypatch.setenv(key, value)
     clear_settings_cache()

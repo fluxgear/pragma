@@ -1544,8 +1544,6 @@ def test_search_falls_back_to_keyword_when_provider_hostname_resolves_private(
             (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('127.0.0.1', port))
         ]
 
-    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _private_getaddrinfo)
-
     with _ai_client(apply_runtime_env, migrated_database, search_enable_semantic=True) as client:
         headers = _auth_headers(client, bootstrap_payload)
         _update_ai_settings(client, headers)
@@ -1557,6 +1555,8 @@ def test_search_falls_back_to_keyword_when_provider_hostname_resolves_private(
             title='Stored Private Resolution Fallback',
             body='<p>Keyword fallback should survive runtime private DNS resolution</p>',
         )
+
+        monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _private_getaddrinfo)
 
         response = client.get(
             '/api/v1/search/entries',
