@@ -148,7 +148,7 @@ Smoke validation builds and boots the stack, checks DB extension state, verifies
 The repo does not include systemd, nginx, or other non-Docker service-manager artifacts. The current manual path is:
 
 1. Provision PostgreSQL 18 with `pg_trgm` and `vector`/pgvector.
-2. Prepare `backend/.env` with runtime settings and strong secrets. For production first-run bootstrap, set exactly one of `PRAGMA_SETUP_SECRET` or `PRAGMA_SETUP_SECRET_FILE`; enter the same value in the setup wizard's Operator setup secret field.
+2. Prepare `backend/.env` with runtime settings, strong secrets, and `PRAGMA_RUNTIME_ENVIRONMENT=production` before running migrations or starting the backend. This activates production secret-strength and setup-secret fail-closed validation; leaving the development default in place can let a production process start with placeholder/weak values. For production first-run bootstrap, set exactly one of `PRAGMA_SETUP_SECRET` or `PRAGMA_SETUP_SECRET_FILE`; enter the same value in the setup wizard's Operator setup secret field.
 3. Run backend dependencies and migrations:
 
    ```bash

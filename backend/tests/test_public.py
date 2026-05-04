@@ -310,11 +310,35 @@ def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
     assert 'href="#archive"' not in response.text
     assert '<form class="contact-form"' not in response.text
     assert 'method="post"' not in response.text
+    assert 'Your public site is ready for published content.' in response.text
+    assert 'class="metric-grid"' not in response.text
+    assert 'Services are ready for configuration.' in response.text
+    assert 'Testimonials can be enabled later.' in response.text
+    assert 'Your team section is ready.' in response.text
     assert 'No posts are published yet.' in response.text
     published_posts_message = (
         'Published posts will appear here automatically once they are available.'
     )
     assert published_posts_message in response.text
+    sample_homepage_content = (
+        '32%',
+        'faster publishing cycles',
+        '4.8/5',
+        'client satisfaction',
+        '24/7',
+        'operational confidence',
+        'Positioning and narrative systems',
+        'Content that reads like a product site',
+        'Graceful empty and fallback states',
+        'Elena Voss',
+        'Marcus Trent',
+        'Mara Stone',
+        'Jonas Ivers',
+        'Ari Patel',
+    )
+    for sample_text in sample_homepage_content:
+        assert sample_text not in response.text
+
     assert 'Designing content systems that look enterprise-ready from day one' not in response.text
     assert 'Why resilient templates matter before public routing is complete' not in response.text
     assert 'Dark mode as a first-class public experience' not in response.text
@@ -324,13 +348,67 @@ def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
     assert 'mailto:hello@example.com' not in response.text
 
 
+@pytest.mark.parametrize(
+    (
+        'published_reference_kind',
+        'draft_reference_kind',
+        'public_route_kind',
+    ),
+    [
+        pytest.param(
+            'api-absolute-content',
+            'api-relative-content',
+            'content',
+            id='published-api-absolute-content-draft-api-relative-content',
+        ),
+        pytest.param(
+            'api-relative-content',
+            'api-absolute-content',
+            'content',
+            id='published-api-relative-content-draft-api-absolute-content',
+        ),
+        pytest.param(
+            'public-relative-content',
+            'api-relative-content',
+            'content',
+            id='published-public-relative-content-draft-api-relative-content',
+        ),
+        pytest.param(
+            'api-absolute-content',
+            'public-relative-content',
+            'content',
+            id='published-api-absolute-content-draft-public-relative-content',
+        ),
+        pytest.param(
+            'api-relative-variant',
+            'api-absolute-variant',
+            'variant',
+            id='published-api-relative-variant-draft-api-absolute-variant',
+        ),
+        pytest.param(
+            'public-relative-variant',
+            'api-absolute-variant',
+            'variant',
+            id='published-public-relative-variant-draft-api-absolute-variant',
+        ),
+        pytest.param(
+            'api-relative-variant',
+            'public-relative-variant',
+            'variant',
+            id='published-api-relative-variant-draft-public-relative-variant',
+        ),
+    ],
+)
 def test_public_media_route_serves_published_references_only(
     migrated_database: dict[str, str],
     apply_runtime_env,
     bootstrap_payload: dict[str, str],
     tmp_path: Path,
+    published_reference_kind: str,
+    draft_reference_kind: str,
+    public_route_kind: str,
 ) -> None:
-    """Verify public media URLs serve published absolute API references only."""
+    """Verify public media authorization covers URL forms and variants."""
 
     _ = migrated_database
     media_root = tmp_path / 'public-media-root'
@@ -340,6 +418,42 @@ def test_public_media_route_serves_published_references_only(
             'PRAGMA_MEDIA_MAX_UPLOAD_BYTES': '1048576',
         }
     )
+
+    def _reference_url(upload: dict[str, object], kind: str) -> str:
+        """Return a content payload media reference for a URL form.
+
+        Args:
+            upload: Serialized media upload response.
+            kind: URL form identifier.
+
+        Returns:
+            str: Media URL to store on the content entry payload.
+
+        Raises:
+            AssertionError: If the uploaded image lacks a thumbnail variant or
+                the URL form is unknown.
+        """
+
+        media_id = str(upload['id'])
+        content_url = str(upload['content_url'])
+        variants = upload['variants']
+        assert isinstance(variants, dict)
+        thumbnail_url = str(variants['thumbnail'])
+
+        if kind == 'api-absolute-content':
+            return f'http://testserver{content_url}'
+        if kind == 'api-relative-content':
+            return content_url
+        if kind == 'api-absolute-variant':
+            return f'http://testserver{thumbnail_url}'
+        if kind == 'api-relative-variant':
+            return thumbnail_url
+        if kind == 'public-relative-content':
+            return f'/media/{media_id}/content'
+        if kind == 'public-relative-variant':
+            return f'/media/{media_id}/variants/thumbnail'
+
+        raise AssertionError(f'Unknown public media URL form: {kind}')
 
     with TestClient(create_app()) as client:
         headers = _auth_headers(client, bootstrap_payload)
@@ -357,7 +471,11 @@ def test_public_media_route_serves_published_references_only(
         assert draft_upload_response.status_code == 201
         published_upload = published_upload_response.json()
         draft_upload = draft_upload_response.json()
-        absolute_published_content_url = f"http://testserver{published_upload['content_url']}"
+        published_reference_url = _reference_url(
+            published_upload,
+            published_reference_kind,
+        )
+        draft_reference_url = _reference_url(draft_upload, draft_reference_kind)
 
         post_type = _create_content_type(client, headers, name='Posts', slug='post')
         published_entry = _create_entry(
@@ -366,7 +484,7 @@ def test_public_media_route_serves_published_references_only(
             str(post_type['id']),
             title='Public Media Post',
             body='<p>Published media body</p>',
-            featured_image_url=absolute_published_content_url,
+            featured_image_url=published_reference_url,
             featured_image_alt='Published hero',
         )
         _create_entry(
@@ -376,21 +494,29 @@ def test_public_media_route_serves_published_references_only(
             title='Draft Media Post',
             body='<p>Draft media body</p>',
             status='draft',
-            featured_image_url=draft_upload['content_url'],
+            featured_image_url=draft_reference_url,
             featured_image_alt='Draft hero',
         )
 
         page_response = client.get(f"/posts/{published_entry['slug']}")
-        public_media_url = f"/media/{published_upload['id']}/content"
+        if public_route_kind == 'variant':
+            public_media_url = f"/media/{published_upload['id']}/variants/thumbnail"
+            draft_media_url = f"/media/{draft_upload['id']}/variants/thumbnail"
+        else:
+            public_media_url = f"/media/{published_upload['id']}/content"
+            draft_media_url = f"/media/{draft_upload['id']}/content"
         published_media_response = client.get(public_media_url)
-        draft_media_response = client.get(f"/media/{draft_upload['id']}/content")
+        draft_media_response = client.get(draft_media_url)
 
     assert page_response.status_code == 200
     assert public_media_url in page_response.text
-    assert absolute_published_content_url not in page_response.text
-    assert published_upload['content_url'] not in page_response.text
+    if published_reference_url != public_media_url:
+        assert published_reference_url not in page_response.text
     assert published_media_response.status_code == 200
-    assert published_media_response.content == _PNG_1X1
+    if public_route_kind == 'variant':
+        assert published_media_response.headers['content-type'].startswith('image/jpeg')
+    else:
+        assert published_media_response.content == _PNG_1X1
     assert draft_media_response.status_code == 404
 
 

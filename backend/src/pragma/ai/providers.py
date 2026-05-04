@@ -141,21 +141,14 @@ def _is_private_or_local_address(
         address: Parsed IP address returned from runtime DNS resolution.
 
     Returns:
-        bool: True when the address is private, local, reserved, or otherwise
+        bool: True when the address is not globally reachable or is otherwise
             unsuitable for outbound provider traffic.
 
     Raises:
         None.
     """
 
-    return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    )
+    return not address.is_global or address.is_multicast
 
 
 def _validate_runtime_provider_target(

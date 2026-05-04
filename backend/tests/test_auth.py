@@ -14,6 +14,7 @@ Raises:
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
 from uuid import UUID
@@ -23,10 +24,11 @@ from fastapi.testclient import TestClient
 from psycopg import Connection
 from pydantic import ValidationError
 
+from pragma.app import create_app
 from pragma.auth import service as auth_service
 from pragma.auth.models import LoginRequest
 from pragma.auth.security import REFRESH_TOKEN_TYPE, decode_token
-from pragma.config import get_settings
+from pragma.config import clear_settings_cache, get_settings
 from pragma.errors import AuthError
 from pragma.storage.pool import DatabasePool
 
@@ -72,6 +74,39 @@ def _login_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> dict[
     )
     assert response.status_code == 200
     return response.json()
+
+
+@pytest.fixture()
+def samesite_none_client(
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_database: dict[str, str],
+) -> Iterator[TestClient]:
+    """Return a test client configured for SameSite=None refresh cookies.
+
+    Args:
+        monkeypatch: Pytest monkeypatch helper.
+        migrated_database: Migrated database environment for this test.
+
+    Returns:
+        Iterator[TestClient]: HTTPS test client with cross-site cookies enabled.
+
+    Raises:
+        None.
+    """
+
+    _ = migrated_database
+    monkeypatch.setenv("PRAGMA_REFRESH_COOKIE_SAMESITE", "none")
+    monkeypatch.setenv("PRAGMA_REFRESH_COOKIE_SECURE", "true")
+    monkeypatch.setenv("PRAGMA_BASE_URL", "https://pragma.example")
+    clear_settings_cache()
+    try:
+        with TestClient(
+            create_app(),
+            base_url="https://api.pragma.example",
+        ) as test_client:
+            yield test_client
+    finally:
+        clear_settings_cache()
 
 
 def test_login_success_sets_refresh_cookie(
@@ -249,6 +284,61 @@ def test_refresh_success_rotates_session(
     assert payload["token_type"] == "bearer"
     assert payload["access_token"] != first_login["access_token"]
     assert "pragma_refresh_token=" in response.headers["set-cookie"]
+
+
+def test_samesite_none_refresh_requires_same_site_origin(
+    samesite_none_client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify SameSite=None refresh rejects missing or cross-site origins.
+
+    Args:
+        samesite_none_client: HTTPS client configured for SameSite=None cookies.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _bootstrap_admin(samesite_none_client, bootstrap_payload)
+    _login_admin(samesite_none_client, bootstrap_payload)
+
+    missing_origin_response = samesite_none_client.post("/api/v1/auth/refresh")
+    assert missing_origin_response.status_code == 403
+    assert missing_origin_response.json() == {
+        "detail": "Origin or Referer header is required",
+        "code": "CSRF_ORIGIN_REQUIRED",
+    }
+
+    cross_site_response = samesite_none_client.post(
+        "/api/v1/auth/refresh",
+        headers={"Origin": "https://evil.example"},
+    )
+    assert cross_site_response.status_code == 403
+    assert cross_site_response.json() == {
+        "detail": "Origin is not allowed for this request",
+        "code": "CSRF_ORIGIN_FORBIDDEN",
+    }
+
+    malformed_origin_response = samesite_none_client.post(
+        "/api/v1/auth/refresh",
+        headers={"Origin": "http://[::1"},
+    )
+    assert malformed_origin_response.status_code == 403
+    assert malformed_origin_response.json() == {
+        "detail": "Origin is not allowed for this request",
+        "code": "CSRF_ORIGIN_FORBIDDEN",
+    }
+
+    same_site_response = samesite_none_client.post(
+        "/api/v1/auth/refresh",
+        headers={"Origin": "https://pragma.example"},
+    )
+    assert same_site_response.status_code == 200
+    assert same_site_response.json()["token_type"] == "bearer"
 
 
 def test_concurrent_refresh_reuse_creates_single_successor(
@@ -540,6 +630,61 @@ def test_logout_clears_refresh_cookie(
 
     assert response.status_code == 204
     assert "pragma_refresh_token=" in response.headers["set-cookie"]
+
+
+def test_samesite_none_logout_requires_same_site_origin_or_referer(
+    samesite_none_client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify SameSite=None logout rejects unsafe cross-site requests.
+
+    Args:
+        samesite_none_client: HTTPS client configured for SameSite=None cookies.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _bootstrap_admin(samesite_none_client, bootstrap_payload)
+    _login_admin(samesite_none_client, bootstrap_payload)
+
+    missing_origin_response = samesite_none_client.post("/api/v1/auth/logout")
+    assert missing_origin_response.status_code == 403
+    assert missing_origin_response.json() == {
+        "detail": "Origin or Referer header is required",
+        "code": "CSRF_ORIGIN_REQUIRED",
+    }
+
+    cross_site_response = samesite_none_client.post(
+        "/api/v1/auth/logout",
+        headers={"Referer": "https://evil.example/account"},
+    )
+    assert cross_site_response.status_code == 403
+    assert cross_site_response.json() == {
+        "detail": "Origin is not allowed for this request",
+        "code": "CSRF_ORIGIN_FORBIDDEN",
+    }
+
+    malformed_referer_response = samesite_none_client.post(
+        "/api/v1/auth/logout",
+        headers={"Referer": "http://[::1/account"},
+    )
+    assert malformed_referer_response.status_code == 403
+    assert malformed_referer_response.json() == {
+        "detail": "Origin is not allowed for this request",
+        "code": "CSRF_ORIGIN_FORBIDDEN",
+    }
+
+    same_site_response = samesite_none_client.post(
+        "/api/v1/auth/logout",
+        headers={"Referer": "https://api.pragma.example/app"},
+    )
+    assert same_site_response.status_code == 204
+    assert "pragma_refresh_token=" in same_site_response.headers["set-cookie"]
 
 
 def test_login_request_strips_identity_before_length_validation() -> None:

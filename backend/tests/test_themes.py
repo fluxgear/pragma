@@ -860,7 +860,7 @@ def test_checked_in_default_theme_templates_render_with_sparse_context(
     }
 
     expected_fragments = {
-        'home.html': 'A public-facing foundation with the finish of a commercial product.',
+        'home.html': 'Your public site is ready for published content.',
         'page.html': 'A flexible page layout for polished long-form content.',
         'post.html': 'A refined article template with metadata, media, and related reading.',
         'archive.html': 'Browse the publication archive.',
@@ -870,6 +870,23 @@ def test_checked_in_default_theme_templates_render_with_sparse_context(
 
     for template_name, fragment in expected_fragments.items():
         assert fragment in rendered[template_name]
+
+    assert 'class="metric-grid"' not in rendered['home.html']
+    sample_homepage_content = (
+        '32%',
+        'faster publishing cycles',
+        '4.8/5',
+        'client satisfaction',
+        '24/7',
+        'operational confidence',
+        'Elena Voss',
+        'Marcus Trent',
+        'Mara Stone',
+        'Jonas Ivers',
+        'Ari Patel',
+    )
+    for sample_text in sample_homepage_content:
+        assert sample_text not in rendered['home.html']
 
     assert '<title>Pragma</title>' in rendered['page.html']
     assert 'Pragma · Pragma' not in rendered['page.html']
@@ -930,6 +947,10 @@ def test_checked_in_default_theme_shipped_sources_match_runtime_contracts() -> N
     """
 
     theme_root = _repo_theme_root() / 'default'
+    home_source = (theme_root / 'templates' / 'home.html').read_text(encoding='utf-8')
+    hero_source = (
+        theme_root / 'templates' / 'partials' / 'hero.html'
+    ).read_text(encoding='utf-8')
     archive_source = (
         theme_root / 'templates' / 'archive.html'
     ).read_text(encoding='utf-8')
@@ -949,6 +970,25 @@ def test_checked_in_default_theme_shipped_sources_match_runtime_contracts() -> N
     assert "pagination.next_url|default('#', true)" not in search_source
     assert '{# SECURITY: sanitized via nh3 #}' in page_source
     assert '{# SECURITY: sanitized via nh3 #}' in post_source
+    assert "{% set stats = hero.stats|default([], true) %}" in hero_source
+    sample_homepage_content = (
+        '32%',
+        'faster publishing cycles',
+        '4.8/5',
+        'client satisfaction',
+        '24/7',
+        'operational confidence',
+        'Positioning and narrative systems',
+        'Elena Voss',
+        'Marcus Trent',
+        'Mara Stone',
+        'Jonas Ivers',
+        'Ari Patel',
+    )
+    for sample_text in sample_homepage_content:
+        assert sample_text not in home_source
+        assert sample_text not in hero_source
+
     assert '.meta-list' in css_source
     assert '.post-shell' in css_source
     assert 'resolveServerMode' in js_source

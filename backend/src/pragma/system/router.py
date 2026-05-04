@@ -15,15 +15,22 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from psycopg import Error as PsycopgError
 
-from pragma.errors import StorageError
+from pragma.errors import ApiError, StorageError
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.capabilities import get_extension_capabilities
 from pragma.storage.queries.install import get_schema_status
 from pragma.storage.queries.system import ping_database
+
+_SYSTEM_READY_ERROR_RESPONSES = {
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ApiError,
+        "description": "Readiness storage is unavailable",
+    },
+}
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -93,7 +100,7 @@ def health() -> dict[str, str]:
     return _build_health_payload()
 
 
-@router.get("/ready")
+@router.get("/ready", responses=_SYSTEM_READY_ERROR_RESPONSES)
 def ready(
     storage: Annotated[DatabasePool, Depends(get_storage)],
 ) -> dict[str, Any]:

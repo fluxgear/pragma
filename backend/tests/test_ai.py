@@ -609,6 +609,61 @@ def test_request_embedding_rejects_hostnames_resolving_to_private_targets(
     assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
 
 
+def test_request_embedding_rejects_hostnames_resolving_to_cgnat_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify runtime DNS resolution rejects non-global CGNAT targets.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider
+    from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+
+    def _cgnat_getaddrinfo(
+        _host: str,
+        port: int,
+        *args: object,
+        **kwargs: object,
+    ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        del args, kwargs
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                '',
+                ('100.64.0.1', port),
+            )
+        ]
+
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _cgnat_getaddrinfo)
+
+    with pytest.raises(SearchError) as exc_info:
+        request_embedding(
+            EmbeddingProviderConfig(
+                provider=AIProvider.VOYAGE,
+                base_url='https://api.example.com/v1',
+                api_key='test-ai-key',
+                embedding_model='voyage-3.5-lite',
+                embedding_dimensions=2,
+                request_timeout_seconds=1,
+            ),
+            'cgnat target query',
+            input_type='query',
+        )
+
+    assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
+
+
 def test_request_embedding_rejects_provider_redirects() -> None:
     """Verify redirect-based provider pivots are rejected.
 
@@ -1035,6 +1090,20 @@ def test_ai_settings_reject_private_or_plain_http_base_urls_by_default(
                 'provider': 'openai_compatible',
                 'base_url': 'https://127.0.0.1:11434/v1',
                 'embedding_model': 'local-embedding',
+                'embedding_dimensions': 2,
+                'request_timeout_seconds': 15,
+                'api_key': 'local-key',
+            },
+        )
+        cgnat_response = client.put(
+            '/api/v1/ai/settings',
+            headers=headers,
+            json={
+                'enabled': True,
+                'provider': 'openai_compatible',
+                'base_url': 'https://100.64.0.1/v1',
+                'embedding_model': 'local-embedding',
+                'embedding_dimensions': 2,
                 'request_timeout_seconds': 15,
                 'api_key': 'local-key',
             },
@@ -1047,6 +1116,7 @@ def test_ai_settings_reject_private_or_plain_http_base_urls_by_default(
                 'provider': 'openai_compatible',
                 'base_url': 'http://api.example.com/v1',
                 'embedding_model': 'remote-embedding',
+                'embedding_dimensions': 2,
                 'request_timeout_seconds': 15,
                 'api_key': 'remote-key',
             },
@@ -1054,6 +1124,8 @@ def test_ai_settings_reject_private_or_plain_http_base_urls_by_default(
 
     assert localhost_response.status_code == 400
     assert localhost_response.json()['code'] == 'AI_SETTINGS_INVALID'
+    assert cgnat_response.status_code == 400
+    assert cgnat_response.json()['code'] == 'AI_SETTINGS_INVALID'
     assert http_response.status_code == 400
     assert http_response.json()['code'] == 'AI_SETTINGS_INVALID'
 

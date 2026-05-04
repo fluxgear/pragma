@@ -14,6 +14,7 @@ Raises:
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
@@ -27,7 +28,7 @@ from pragma.auth.models import (
 )
 from pragma.auth.service import authenticate_user, logout_user, refresh_user_session
 from pragma.config import Settings, get_settings
-from pragma.errors import ApiError
+from pragma.errors import ApiError, AuthError
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 
@@ -131,10 +132,136 @@ def _require_refresh_cookie(request: Request, settings: Settings) -> str:
 
     refresh_token = request.cookies.get(settings.refresh_cookie_name)
     if refresh_token is None:
-        from pragma.errors import AuthError
-
         raise AuthError(detail="Refresh token is required", code="REFRESH_TOKEN_REQUIRED")
     return refresh_token
+
+
+def _normalize_origin_from_url(value: str) -> str | None:
+    """Normalize a URL-like value to its serialized origin.
+
+    Args:
+        value: Absolute URL or Origin header value to normalize.
+
+    Returns:
+        str | None: Lowercase origin without default ports, or None if invalid.
+
+    Raises:
+        None.
+    """
+
+    try:
+        parsed = urlparse(value.strip())
+        hostname = parsed.hostname
+    except ValueError:
+        return None
+
+    if parsed.scheme not in {"http", "https"} or hostname is None:
+        return None
+
+    scheme = parsed.scheme.lower()
+    host = hostname.lower()
+    netloc = parsed.netloc.rsplit("@", maxsplit=1)[-1]
+    port_text = ""
+    if netloc.startswith("["):
+        bracket_index = netloc.find("]")
+        if bracket_index == -1:
+            return None
+        port_text = netloc[bracket_index + 1 :].removeprefix(":")
+    elif ":" in netloc:
+        port_text = netloc.rsplit(":", maxsplit=1)[-1]
+    if port_text and not port_text.isdecimal():
+        return None
+
+    port = int(port_text) if port_text else None
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    is_default_port = (scheme == "http" and port == 80) or (
+        scheme == "https" and port == 443
+    )
+    if port is None or is_default_port:
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
+def _refresh_cookie_header_origin(request: Request) -> str | None:
+    """Extract the request's Origin/Referer origin for CSRF checks.
+
+    Args:
+        request: Incoming HTTP request.
+
+    Returns:
+        str | None: Normalized supplied origin, an empty string for an invalid
+            supplied header, or None when both headers are absent.
+
+    Raises:
+        None.
+    """
+
+    for header_name in ("origin", "referer"):
+        header_value = request.headers.get(header_name)
+        if header_value is None:
+            continue
+        supplied_origin = _normalize_origin_from_url(header_value)
+        return supplied_origin or ""
+    return None
+
+
+def _allowed_refresh_cookie_origins(request: Request, settings: Settings) -> frozenset[str]:
+    """Return allowed origins for SameSite=None refresh-cookie requests.
+
+    Args:
+        request: Incoming HTTP request.
+        settings: Application settings containing the configured site URL.
+
+    Returns:
+        frozenset[str]: Configured site origin plus the current API origin.
+
+    Raises:
+        None.
+    """
+
+    origins = {
+        origin
+        for origin in (
+            _normalize_origin_from_url(settings.base_url),
+            _normalize_origin_from_url(str(request.url)),
+        )
+        if origin is not None
+    }
+    return frozenset(origins)
+
+
+def _require_same_site_none_origin(request: Request, settings: Settings) -> None:
+    """Require same-site Origin/Referer for SameSite=None cookie requests.
+
+    Args:
+        request: Incoming HTTP request.
+        settings: Application settings controlling refresh-cookie SameSite mode.
+
+    Returns:
+        None.
+
+    Raises:
+        AuthError: If SameSite=None is active and the request lacks a valid,
+            allowed Origin or Referer header.
+    """
+
+    if settings.refresh_cookie_samesite != "none":
+        return
+
+    supplied_origin = _refresh_cookie_header_origin(request)
+    if supplied_origin is None:
+        raise AuthError(
+            detail="Origin or Referer header is required",
+            code="CSRF_ORIGIN_REQUIRED",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    if supplied_origin not in _allowed_refresh_cookie_origins(request, settings):
+        raise AuthError(
+            detail="Origin is not allowed for this request",
+            code="CSRF_ORIGIN_FORBIDDEN",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
 
 
 @router.post("/login", response_model=TokenResponse, responses=_AUTH_TOKEN_ERROR_RESPONSES)
@@ -192,6 +319,7 @@ def refresh(
         StorageError: If the storage layer fails during refresh.
     """
 
+    _require_same_site_none_origin(request, settings)
     refresh_token = _require_refresh_cookie(request, settings)
     auth_payload = refresh_user_session(storage, settings, refresh_token)
     _set_refresh_cookie(response, settings, auth_payload["refresh_token"])
@@ -225,9 +353,11 @@ def logout(
         Response: Empty HTTP 204 response.
 
     Raises:
+        AuthError: If SameSite=None origin validation fails.
         StorageError: If the storage layer fails during logout.
     """
 
+    _require_same_site_none_origin(request, settings)
     logout_user(storage, settings, request.cookies.get(settings.refresh_cookie_name))
     _clear_refresh_cookie(response, settings)
     response.status_code = status.HTTP_204_NO_CONTENT

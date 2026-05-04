@@ -10,7 +10,7 @@ import MediaLibraryView from '@/views/MediaLibraryView.vue'
 
 const mediaApiMocks = vi.hoisted(() => ({
   deleteMediaAsset: vi.fn(),
-  fetchMediaContentBlob: vi.fn(),
+  fetchMediaVariantBlob: vi.fn(),
   listMediaAssets: vi.fn(),
   uploadMediaAsset: vi.fn(),
 }))
@@ -49,7 +49,9 @@ const mediaAsset = {
   alt_text: 'Hero image',
   caption: 'Homepage hero',
   description: null,
-  variants: {},
+  variants: {
+    thumbnail: '/api/v1/media/assets/media-1/variants/thumbnail',
+  },
   uploader_user_id: null,
   created_at: '2026-04-21T00:00:00Z',
   updated_at: '2026-04-21T00:00:00Z',
@@ -121,7 +123,7 @@ describe('MediaLibraryView', () => {
       limit: 50,
       offset: 0,
     })
-    mediaApiMocks.fetchMediaContentBlob.mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    mediaApiMocks.fetchMediaVariantBlob.mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
     mediaApiMocks.uploadMediaAsset.mockResolvedValue(mediaAsset)
     mediaApiMocks.deleteMediaAsset.mockResolvedValue(undefined)
 
@@ -135,7 +137,15 @@ describe('MediaLibraryView', () => {
     })
   })
 
-  it('loads media assets without preview blob requests on mount', async () => {
+  it('loads authenticated thumbnail variants as object URLs and revokes them on refresh and unmount', async () => {
+    const createObjectUrl = vi.fn()
+      .mockReturnValueOnce('blob:hero')
+      .mockReturnValueOnce('blob:hero-refresh')
+    Object.defineProperty(globalThis.URL, 'createObjectURL', {
+      value: createObjectUrl,
+      configurable: true,
+    })
+
     const { wrapper } = await mountView()
 
     expect(mediaApiMocks.listMediaAssets).toHaveBeenCalledTimes(1)
@@ -144,13 +154,29 @@ describe('MediaLibraryView', () => {
       offset: 0,
       order_by: 'updated_at',
     })
-    expect(mediaApiMocks.fetchMediaContentBlob).not.toHaveBeenCalled()
-    expect(wrapper.find('img.media-library__thumb').exists()).toBe(false)
-    expect(wrapper.text()).toContain('No preview')
+    expect(mediaApiMocks.fetchMediaVariantBlob).toHaveBeenCalledWith('media-1', 'thumbnail')
+    expect(wrapper.get('img.media-library__thumb').attributes('src')).toBe('blob:hero')
+    expect(wrapper.html()).not.toContain(mediaAsset.variants.thumbnail)
     expect(wrapper.html()).not.toContain(`src=\"${mediaAsset.content_url}\"`)
     expect(wrapper.text()).toContain('Media library')
     expect(wrapper.text()).toContain('hero.png')
     expect(wrapper.text()).toContain('Hero image')
+
+    const refreshButton = wrapper.findAll('button').find((button) => button.text().includes('Refresh'))
+    if (!refreshButton) {
+      throw new Error('Refresh button not found')
+    }
+
+    await refreshButton.trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith('blob:hero')
+    expect(wrapper.get('img.media-library__thumb').attributes('src')).toBe('blob:hero-refresh')
+
+    wrapper.unmount()
+
+    expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith('blob:hero-refresh')
   })
   it('shows an error when loading media fails instead of empty-state text', async () => {
     mediaApiMocks.listMediaAssets.mockRejectedValueOnce(new Error('Media service is unavailable'))
@@ -206,7 +232,7 @@ describe('MediaLibraryView', () => {
     })
     expect(wrapper.get('[data-testid="media-pagination-summary"]').text()).toContain('51-51 of 75')
     expect(wrapper.text()).toContain('gallery.png')
-    expect(mediaApiMocks.fetchMediaContentBlob).not.toHaveBeenCalled()
+    expect(mediaApiMocks.fetchMediaVariantBlob).toHaveBeenCalledWith('media-2', 'thumbnail')
   })
 
   it('uploads the selected file with metadata and reloads the list', async () => {

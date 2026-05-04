@@ -590,3 +590,36 @@ def test_bootstrap_request_strips_identity_fields_before_length_validation() -> 
 
     assert request.email == 'admin@example.com'
     assert request.username == 'admin'
+
+
+def test_install_openapi_documents_structured_error_responses(client: TestClient) -> None:
+    """Verify install endpoints publish structured error schemas in OpenAPI.
+
+    Args:
+        client: FastAPI test client.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    api_error_schema = schema["components"]["schemas"]["ApiError"]
+    assert set(api_error_schema["required"]) == {"detail", "code"}
+    assert set(api_error_schema["properties"]) == {"detail", "code"}
+
+    api_error_ref = {"$ref": "#/components/schemas/ApiError"}
+    documented_responses = {
+        ("/api/v1/install/status", "get"): ("503",),
+        ("/api/v1/install/bootstrap", "post"): ("403", "409", "422", "503"),
+    }
+
+    for (path, method), status_codes in documented_responses.items():
+        responses = schema["paths"][path][method]["responses"]
+        for status_code in status_codes:
+            assert responses[status_code]["content"]["application/json"]["schema"] == api_error_ref

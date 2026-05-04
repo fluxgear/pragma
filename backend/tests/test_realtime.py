@@ -691,6 +691,34 @@ def test_realtime_ticket_endpoint_requires_content_read_permission(
     }
 
 
+def test_realtime_openapi_documents_structured_error_responses(client: TestClient) -> None:
+    """Verify realtime ticket endpoints publish structured error schemas in OpenAPI.
+
+    Args:
+        client: FastAPI test client.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    response = client.get('/openapi.json')
+
+    assert response.status_code == 200
+    schema = response.json()
+    api_error_schema = schema['components']['schemas']['ApiError']
+    assert set(api_error_schema['required']) == {'detail', 'code'}
+    assert set(api_error_schema['properties']) == {'detail', 'code'}
+
+    api_error_ref = {'$ref': '#/components/schemas/ApiError'}
+    responses = schema['paths']['/api/v1/realtime/ticket']['post']['responses']
+
+    for status_code in ('401', '403', '422', '503'):
+        assert responses[status_code]['content']['application/json']['schema'] == api_error_ref
+
+
 def test_realtime_websocket_rejects_replayed_ticket(
     migrated_database: dict[str, str],
     bootstrap_payload: dict[str, str],

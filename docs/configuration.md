@@ -13,7 +13,7 @@ The backend reads environment variables with the `PRAGMA_` prefix from `backend/
 | `PRAGMA_DATABASE_PASSWORD` | yes unless using file secret in Docker | none | Non-empty raw password. |
 | `PRAGMA_JWT_SECRET_KEY` | yes unless using file secret in Docker | none | Minimum length 16; use a strong random value. |
 | `PRAGMA_BASE_URL` | yes | none | Public base URL used for generated URLs. |
-| `PRAGMA_RUNTIME_ENVIRONMENT` | production deployments | `development` | Set `production` for production Docker, migrations, and backend runtime validation. |
+| `PRAGMA_RUNTIME_ENVIRONMENT` | production deployments | `development` | Set `production` for production Docker, non-Docker migrations, and backend runtime validation. Do not rely on the development default for production starts. |
 
 ## Database and pool variables
 
@@ -44,6 +44,9 @@ PostgreSQL 18 with `pg_trgm` and `vector`/pgvector is the supported target. Read
 | `PRAGMA_MEDIA_STORAGE_BACKEND` | `local` | Local filesystem is the only implemented backend. |
 | `PRAGMA_MEDIA_ROOT` | `media` | Relative paths resolve under `backend/`; production Docker uses `/var/lib/pragma/media`. |
 | `PRAGMA_MEDIA_MAX_UPLOAD_BYTES` | `10485760` | 1 byte to 100 MiB. |
+| `PRAGMA_MEDIA_MAX_IMAGE_WIDTH` | `12000` | Maximum decoded image width in pixels. Production Docker passes it to both `migrate` and `backend`. |
+| `PRAGMA_MEDIA_MAX_IMAGE_HEIGHT` | `12000` | Maximum decoded image height in pixels. Production Docker passes it to both `migrate` and `backend`. |
+| `PRAGMA_MEDIA_MAX_IMAGE_PIXELS` | `50000000` | Maximum decoded image pixel count before storage. Production Docker passes it to both `migrate` and `backend`. |
 | `PRAGMA_MEDIA_ALLOWED_MIME_TYPES` | `image/jpeg,image/png,image/gif,image/webp,application/pdf,audio/mpeg,audio/wav,audio/ogg,video/mp4,video/webm` | Upload sniffing supports PNG, JPEG, GIF, WebP, PDF, MP3, WAV, OGG, MP4, and WebM. SVG remains unsupported because raw SVG can carry active content. |
 
 There is no object storage/S3 backend, non-image upload support, or generated thumbnail/derivative pipeline in the current repo.
@@ -63,6 +66,7 @@ There is no object storage/S3 backend, non-image upload support, or generated th
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `PRAGMA_SEARCH_ENABLE_SEMANTIC` | `false` | Enables semantic/vector strategy only when database capabilities and embeddings are available. |
+| `PRAGMA_AI_ALLOW_PRIVATE_BASE_URLS` | `false` | Allows AI provider base URLs to target private or other non-global addresses. Keep `false` unless the operator intentionally trusts a private AI endpoint; production Docker passes it to both `migrate` and `backend`. |
 
 Search degrades to keyword/fuzzy behavior when semantic prerequisites or provider calls are unavailable. AI provider settings are managed through privileged admin/API flows, not through a backend env table. Settings changes can require explicit embedding rebuilds.
 

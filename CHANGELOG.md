@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-beta.8 — 2026-05-04
+
+### Fixed
+- Finalized audit follow-up fixes from session 5879 across auth refresh/logout origin handling, setup/install readiness, realtime ticket handling, AI/media validation, admin dashboard/media flows, and public theme media authorization.
+- Expanded backend and admin regression coverage for the audit follow-up cases, including SameSite origin normalization, public media reference authorization, media-library behavior, and dashboard readiness failures.
+- Aligned release metadata for v1.0.0-beta.8 / 1.0.0b8 across the README, backend package/runtime metadata and lockfile, and the admin package and lockfile.
+
 ## v1.0.0-beta.7 — 2026-05-03
 
 ### Fixed

@@ -449,6 +449,57 @@ def test_user_deactivation_blocks_future_login(
     }
 
 
+def test_admin_patch_full_name_null_clears_nullable_field(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify admin PATCH distinguishes omitted and null full_name values.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _bootstrap_admin(client, bootstrap_payload)
+    admin_payload = _login_user(
+        client,
+        identity=bootstrap_payload['email'],
+        password=bootstrap_payload['password'],
+    )
+    admin_headers = _auth_headers(admin_payload['access_token'])
+    created_user = _create_managed_user(
+        client,
+        admin_headers,
+        email='full-name-clear@example.com',
+        username='fullnameclear',
+        password='full-name-clear-password-123',
+        role_keys=['viewer'],
+    )
+    assert created_user['full_name'] == 'Fullnameclear'
+
+    omit_response = client.patch(
+        f"/api/v1/users/{created_user['id']}",
+        headers=admin_headers,
+        json={'username': 'fullnameclearupdated'},
+    )
+    assert omit_response.status_code == 200
+    assert omit_response.json()['full_name'] == 'Fullnameclear'
+
+    clear_response = client.patch(
+        f"/api/v1/users/{created_user['id']}",
+        headers=admin_headers,
+        json={'full_name': None},
+    )
+    assert clear_response.status_code == 200
+    assert clear_response.json()['full_name'] is None
+
+
 def test_root_cannot_deactivate_own_account(
     client: TestClient,
     bootstrap_payload: dict[str, str],

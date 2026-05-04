@@ -103,6 +103,33 @@ def test_readiness_reports_schema_status(client: TestClient) -> None:
         assert capability["installed_version"] is not None
 
 
+def test_system_openapi_documents_structured_error_responses(client: TestClient) -> None:
+    """Verify system endpoints publish structured error schemas in OpenAPI.
+
+    Args:
+        client: FastAPI test client.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    api_error_schema = schema["components"]["schemas"]["ApiError"]
+    assert set(api_error_schema["required"]) == {"detail", "code"}
+    assert set(api_error_schema["properties"]) == {"detail", "code"}
+
+    api_error_ref = {"$ref": "#/components/schemas/ApiError"}
+    responses = schema["paths"]["/api/v1/system/ready"]["get"]["responses"]
+
+    assert responses["503"]["content"]["application/json"]["schema"] == api_error_ref
+
+
 def test_configure_logging_uses_validated_standard_log_level(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

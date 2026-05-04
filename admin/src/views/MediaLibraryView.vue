@@ -256,7 +256,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Column from 'primevue/column'
@@ -269,6 +269,7 @@ import Textarea from 'primevue/textarea'
 
 import {
   deleteMediaAsset,
+  fetchMediaVariantBlob,
   listMediaAssets,
   uploadMediaAsset,
 } from '@/api/media'
@@ -282,6 +283,7 @@ const MEDIA_ORDER_BY = 'updated_at'
 const authStore = useAuthStore()
 
 const assets = ref<MediaAssetResponse[]>([])
+const thumbnailObjectUrls = ref<Record<string, string>>({})
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const loading = ref(false)
@@ -299,6 +301,8 @@ const uploadForm = reactive({
   caption: '',
   description: '',
 })
+
+let thumbnailLoadGeneration = 0
 
 const canUploadMediaAssets = computed(() => authStore.hasPermission('media.assets.upload'))
 const canDeleteMediaAssets = computed(() => authStore.hasPermission('media.assets.delete'))
@@ -351,10 +355,12 @@ async function loadAssets(): Promise<void> {
     assetsTotal.value = response.total
     assetsLimit.value = response.limit
     assetsOffset.value = response.offset
+    await loadThumbnailObjectUrls(response.items)
   } catch (error) {
     pageErrorMessage.value = asUserMessage(error)
     assets.value = []
     assetsTotal.value = 0
+    clearThumbnailObjectUrls()
   } finally {
     loading.value = false
   }
@@ -461,23 +467,75 @@ async function goToNextAssetsPage(): Promise<void> {
   await loadAssets()
 }
 
-function isSafeThumbnailUrl(url: string | undefined): url is string {
-  if (!url) {
-    return false
+function revokeObjectUrls(urls: Record<string, string>): void {
+  Object.values(urls).forEach((url) => {
+    URL.revokeObjectURL(url)
+  })
+}
+
+function clearThumbnailObjectUrls(): void {
+  const existingObjectUrls = thumbnailObjectUrls.value
+  thumbnailObjectUrls.value = {}
+  revokeObjectUrls(existingObjectUrls)
+}
+
+function thumbnailVariantName(asset: MediaAssetResponse): string | null {
+  if (asset.variants.thumbnail) {
+    return 'thumbnail'
   }
 
-  return (
-    url.startsWith('data:image/')
-    || url.startsWith('blob:')
-    || url.startsWith('http://')
-    || url.startsWith('https://')
-    || (url.startsWith('/') && !url.startsWith('/api/'))
+  if (asset.variants.thumb) {
+    return 'thumb'
+  }
+
+  return null
+}
+
+async function loadThumbnailObjectUrls(mediaAssets: MediaAssetResponse[]): Promise<void> {
+  const loadGeneration = ++thumbnailLoadGeneration
+  clearThumbnailObjectUrls()
+
+  const thumbnailEntries = await Promise.all(
+    mediaAssets.map(async (asset): Promise<[string, string] | null> => {
+      if (!asset.is_image) {
+        return null
+      }
+
+      const variantName = thumbnailVariantName(asset)
+      if (variantName === null) {
+        return null
+      }
+
+      try {
+        const blob = await fetchMediaVariantBlob(asset.id, variantName)
+        return [asset.id, URL.createObjectURL(blob)]
+      } catch {
+        return null
+      }
+    }),
   )
+
+  const nextObjectUrls = thumbnailEntries.reduce<Record<string, string>>((objectUrls, entry) => {
+    if (entry !== null) {
+      const [assetId, objectUrl] = entry
+      objectUrls[assetId] = objectUrl
+    }
+
+    return objectUrls
+  }, {})
+
+  if (loadGeneration !== thumbnailLoadGeneration) {
+    revokeObjectUrls(nextObjectUrls)
+    return
+  }
+
+  const existingObjectUrls = thumbnailObjectUrls.value
+  thumbnailObjectUrls.value = nextObjectUrls
+  revokeObjectUrls(existingObjectUrls)
 }
 
 function thumbnailUrl(asset: MediaAssetResponse): string | null {
-  const candidateUrls = [asset.variants.thumbnail, asset.variants.thumb]
-  return candidateUrls.find(isSafeThumbnailUrl) ?? null
+  return thumbnailObjectUrls.value[asset.id] ?? null
 }
 
 function formatSize(sizeBytes: number): string {
@@ -511,5 +569,10 @@ function formatTimestamp(value: string): string {
 
 onMounted(async () => {
   await loadAssets()
+})
+
+onBeforeUnmount(() => {
+  thumbnailLoadGeneration += 1
+  clearThumbnailObjectUrls()
 })
 </script>

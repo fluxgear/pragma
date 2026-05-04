@@ -365,6 +365,7 @@ def update_user_profile(
     email: str | None,
     username: str | None,
     full_name: str | None,
+    full_name_provided: bool,
     is_active: bool | None,
     updated_at: datetime,
 ) -> dict[str, Any] | None:
@@ -376,6 +377,7 @@ def update_user_profile(
         email: Optional normalized email address override.
         username: Optional normalized username override.
         full_name: Optional display name override.
+        full_name_provided: Whether full_name was included in the request payload.
         is_active: Optional active-state override.
         updated_at: Profile update timestamp.
 
@@ -392,7 +394,7 @@ def update_user_profile(
         SET
             email = COALESCE(%s, email),
             username = COALESCE(%s, username),
-            full_name = COALESCE(%s, full_name),
+            full_name = CASE WHEN %s THEN %s ELSE full_name END,
             is_active = COALESCE(%s, is_active),
             updated_at = %s
         WHERE id = %s
@@ -427,7 +429,15 @@ def update_user_profile(
                 ARRAY[]::text[]
             ) AS permissions
         """,
-        (email, username, full_name, is_active, updated_at, user_id),
+        (
+            email,
+            username,
+            full_name_provided,
+            full_name,
+            is_active,
+            updated_at,
+            user_id,
+        ),
     ).fetchone()
 
 

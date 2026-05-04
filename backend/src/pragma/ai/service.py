@@ -150,12 +150,7 @@ def _validate_provider_base_url(
     except ValueError:
         parsed_ip = None
     private_address = parsed_ip is not None and (
-        parsed_ip.is_private
-        or parsed_ip.is_loopback
-        or parsed_ip.is_link_local
-        or parsed_ip.is_reserved
-        or parsed_ip.is_multicast
-        or parsed_ip.is_unspecified
+        not parsed_ip.is_global or parsed_ip.is_multicast
     )
     if (private_hostname or private_address) and not allow_private_base_urls:
         raise ConfigError(

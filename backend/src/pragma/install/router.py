@@ -18,15 +18,45 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, status
 
 from pragma.config import Settings, get_settings
+from pragma.errors import ApiError
 from pragma.install.models import BootstrapRequest, BootstrapResponse, InstallStatusResponse
 from pragma.install.service import bootstrap_install, get_install_snapshot
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 
+_INSTALL_STATUS_ERROR_RESPONSES = {
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ApiError,
+        "description": "Install status storage is unavailable",
+    },
+}
+_INSTALL_BOOTSTRAP_ERROR_RESPONSES = {
+    status.HTTP_403_FORBIDDEN: {
+        "model": ApiError,
+        "description": "Install setup secret is invalid",
+    },
+    status.HTTP_409_CONFLICT: {
+        "model": ApiError,
+        "description": "Install bootstrap has already completed",
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "model": ApiError,
+        "description": "Request validation failed",
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "model": ApiError,
+        "description": "Install bootstrap storage or configuration is unavailable",
+    },
+}
+
 router = APIRouter(prefix="/install", tags=["install"])
 
 
-@router.get("/status", response_model=InstallStatusResponse)
+@router.get(
+    "/status",
+    response_model=InstallStatusResponse,
+    responses=_INSTALL_STATUS_ERROR_RESPONSES,
+)
 def install_status(
     storage: Annotated[DatabasePool, Depends(get_storage)],
 ) -> InstallStatusResponse:
@@ -45,7 +75,12 @@ def install_status(
     return InstallStatusResponse.model_validate(get_install_snapshot(storage))
 
 
-@router.post("/bootstrap", response_model=BootstrapResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/bootstrap",
+    response_model=BootstrapResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=_INSTALL_BOOTSTRAP_ERROR_RESPONSES,
+)
 def bootstrap(
     payload: BootstrapRequest,
     storage: Annotated[DatabasePool, Depends(get_storage)],

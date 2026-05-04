@@ -25,7 +25,7 @@ from starlette.websockets import WebSocketDisconnect
 from pragma.auth.dependencies import require_permission
 from pragma.auth.permissions import PERMISSION_CONTENT_ENTRIES_READ
 from pragma.config import Settings, get_settings
-from pragma.errors import AuthError, ConfigError, StorageError
+from pragma.errors import ApiError, AuthError, ConfigError, StorageError
 from pragma.realtime.dependencies import get_realtime_hub
 from pragma.realtime.hub import RealtimeHub
 from pragma.realtime.models import RealtimeTicketResponse, build_resync_required_event
@@ -38,6 +38,24 @@ from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.users import get_user_by_id
 
 logger = logging.getLogger(__name__)
+_REALTIME_TICKET_ERROR_RESPONSES = {
+    status.HTTP_401_UNAUTHORIZED: {
+        'model': ApiError,
+        'description': 'Authentication credentials are invalid or expired',
+    },
+    status.HTTP_403_FORBIDDEN: {
+        'model': ApiError,
+        'description': 'Realtime ticket access is forbidden',
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        'model': ApiError,
+        'description': 'Request validation failed',
+    },
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        'model': ApiError,
+        'description': 'Realtime transport is unavailable',
+    },
+}
 
 router = APIRouter(prefix='/realtime', tags=['realtime'])
 
@@ -46,6 +64,7 @@ router = APIRouter(prefix='/realtime', tags=['realtime'])
     '/ticket',
     response_model=RealtimeTicketResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=_REALTIME_TICKET_ERROR_RESPONSES,
 )
 def issue_realtime_ticket(
     current_user: Annotated[

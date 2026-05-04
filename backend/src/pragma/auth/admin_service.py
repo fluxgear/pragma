@@ -281,6 +281,12 @@ def update_user_record(
                         status_code=HTTPStatus.BAD_REQUEST,
                     )
 
+            full_name_provided = 'full_name' in payload.model_fields_set
+            full_name = (
+                payload.full_name.strip()
+                if full_name_provided and payload.full_name is not None
+                else None
+            )
             updated_user = update_user_profile(
                 connection,
                 user_id=user_id,
@@ -294,7 +300,8 @@ def update_user_record(
                     if payload.username is not None
                     else None
                 ),
-                full_name=payload.full_name.strip() if payload.full_name is not None else None,
+                full_name=full_name,
+                full_name_provided=full_name_provided,
                 is_active=payload.is_active,
                 updated_at=timestamp,
             )

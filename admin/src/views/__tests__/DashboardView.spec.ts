@@ -86,6 +86,7 @@ describe('DashboardView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     systemApiMocks.fetchReadinessStatus.mockResolvedValue(readinessStatus)
+    authApiMocks.getCurrentUser.mockResolvedValue(authPayload)
     authApiMocks.loginUser.mockResolvedValue(undefined)
     authApiMocks.logoutUser.mockResolvedValue(undefined)
     authApiMocks.refreshSession.mockResolvedValue(undefined)
@@ -102,5 +103,38 @@ describe('DashboardView', () => {
 
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/app')
+  })
+
+  it('renders readiness load errors without redirecting authenticated sessions', async () => {
+    systemApiMocks.fetchReadinessStatus.mockRejectedValue(
+      new ApiClientError(503, 'Readiness API unavailable', 'SYSTEM_NOT_READY'),
+    )
+
+    const { router, wrapper } = await mountView()
+
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('dashboard')
+    expect(wrapper.text()).toContain('Readiness API unavailable')
+  })
+
+  it('renders readiness refresh errors from the install store', async () => {
+    const { wrapper } = await mountView()
+    systemApiMocks.fetchReadinessStatus.mockRejectedValueOnce(
+      new ApiClientError(503, 'Readiness refresh failed', 'SYSTEM_NOT_READY'),
+    )
+
+    const refreshButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('Refresh readiness'))
+    if (refreshButton === undefined) {
+      throw new Error('Refresh readiness button not found')
+    }
+
+    await refreshButton.trigger('click')
+    await flushPromises()
+
+    expect(systemApiMocks.fetchReadinessStatus).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('Readiness refresh failed')
   })
 })

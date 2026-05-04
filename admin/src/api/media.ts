@@ -91,8 +91,8 @@ export function deleteMediaAsset(mediaId: string): Promise<void> {
   })
 }
 
-async function fetchMediaContentBlobWithToken(mediaId: string, accessToken: string): Promise<Blob> {
-  const response = await fetch(`${getApiBase()}/media/assets/${mediaId}/content`, {
+async function fetchAuthenticatedMediaBlobWithToken(path: string, accessToken: string): Promise<Blob> {
+  const response = await fetch(`${getApiBase()}${path}`, {
     credentials: 'include',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -106,6 +106,28 @@ async function fetchMediaContentBlobWithToken(mediaId: string, accessToken: stri
   return await response.blob()
 }
 
+async function fetchMediaContentBlobWithToken(mediaId: string, accessToken: string): Promise<Blob> {
+  return await fetchAuthenticatedMediaBlobWithToken(`/media/assets/${mediaId}/content`, accessToken)
+}
+
+async function fetchMediaVariantBlobWithToken(
+  mediaId: string,
+  variantName: string,
+  accessToken: string,
+): Promise<Blob> {
+  const encodedVariantName = encodeURIComponent(variantName)
+  return await fetchAuthenticatedMediaBlobWithToken(
+    `/media/assets/${mediaId}/variants/${encodedVariantName}`,
+    accessToken,
+  )
+}
+
 export function fetchMediaContentBlob(mediaId: string): Promise<Blob> {
   return withFreshAccessToken((accessToken) => fetchMediaContentBlobWithToken(mediaId, accessToken))
+}
+
+export function fetchMediaVariantBlob(mediaId: string, variantName: string): Promise<Blob> {
+  return withFreshAccessToken((accessToken) =>
+    fetchMediaVariantBlobWithToken(mediaId, variantName, accessToken),
+  )
 }

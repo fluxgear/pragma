@@ -1,25 +1,15 @@
 {% extends 'base.html' %}
 {% set hero = hero|default({
-    'eyebrow': 'Premium default theme',
-    'title': 'A public-facing foundation with the finish of a commercial product.',
-    'subtitle': 'Pragma default ships with a high-trust homepage, conversion-ready sections, and a design system tuned for professional publishing.',
-    'primary_cta': {'label': 'View services', 'href': '#services'},
-    'secondary_cta': {'label': 'Read the overview', 'href': '#insights'}
+    'eyebrow': 'Public launch state',
+    'title': 'Your public site is ready for published content.',
+    'subtitle': 'Add published posts, services, testimonials, team profiles, or contact details to replace these neutral launch states.',
+    'primary_cta': {'label': 'Browse archive', 'href': '/archive'},
+    'secondary_cta': {'label': 'View contact state', 'href': '#contact'},
+    'stats': []
 }, true) %}
-{% set services = services|default([
-    {'kicker': 'Strategy', 'title': 'Positioning and narrative systems', 'description': 'Present services, editorial programs, and thought leadership with stronger visual hierarchy.', 'points': ['Brand-aligned section architecture', 'Editorial conversion pathways', 'Whitespace-first layouts']},
-    {'kicker': 'Publishing', 'title': 'Content that reads like a product site', 'description': 'Pages and posts share a consistent typographic system with optional metadata and sidebars.', 'points': ['Page and post templates', 'Archive and search states', 'Accessible content containers']},
-    {'kicker': 'Operations', 'title': 'Graceful empty and fallback states', 'description': 'Even before public routing is complete, the theme renders intentionally and avoids brittle assumptions.', 'points': ['Sparse-context rendering', 'Dark-mode support', 'Minimal client-side behavior']}
-], true) %}
-{% set testimonials = testimonials|default([
-    {'quote': 'The default theme looks like something we would have commissioned, not something we would need to replace.', 'name': 'Elena Voss', 'role': 'Managing Partner, Northline Advisory'},
-    {'quote': 'It gives our team a premium shell for publishing before the rest of the public stack is fully wired.', 'name': 'Marcus Trent', 'role': 'Head of Digital, Aster Systems'}
-], true) %}
-{% set team = team|default([
-    {'name': 'Mara Stone', 'role': 'Strategy Director', 'bio': 'Shapes positioning, narrative systems, and executive messaging.', 'initials': 'MS'},
-    {'name': 'Jonas Ivers', 'role': 'Design Lead', 'bio': 'Owns interface systems, accessibility, and brand application.', 'initials': 'JI'},
-    {'name': 'Ari Patel', 'role': 'Editorial Lead', 'bio': 'Connects publishing operations with conversion-oriented storytelling.', 'initials': 'AP'}
-], true) %}
+{% set services = services|default([], true) %}
+{% set testimonials = testimonials|default([], true) %}
+{% set team = team|default([], true) %}
 {% set featured_posts = featured_posts|default([], true) %}
 {% set contact = contact|default({}, true) %}
 {% block content %}
@@ -30,11 +20,11 @@
     <section class="section cta-section">
         <div class="shell-container cta-banner">
             <div>
-                <p class="eyebrow">Call to action</p>
-                <h2>Ready to turn a CMS install into a polished business presence?</h2>
-                <p>Use the default theme as a strong baseline for launch, then refine it as content models and public routes mature.</p>
+                <p class="eyebrow">Launch state</p>
+                <h2>Use this space once real homepage content is configured.</h2>
+                <p>The default theme keeps empty sections visible as neutral setup prompts instead of publishing sample business claims.</p>
             </div>
-            <a class="button button--primary" href="#contact">Start the conversation</a>
+            <a class="button button--primary" href="#contact">Review contact state</a>
         </div>
     </section>
     <section class="section" id="insights">

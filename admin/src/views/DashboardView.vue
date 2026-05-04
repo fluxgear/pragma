@@ -40,6 +40,9 @@
       <Card>
         <template #title>Platform readiness</template>
         <template #content>
+          <Message v-if="readinessError" severity="error" :closable="false">
+            {{ readinessError }}
+          </Message>
           <div class="status-list">
             <div class="status-row">
               <span>Schema</span>
@@ -108,7 +111,7 @@ const route = useRoute()
 const router = useRouter()
 
 const { accessToken, user, requiresPasswordChange } = storeToRefs(authStore)
-const { readiness, readinessOk, schemaReady } = storeToRefs(installStore)
+const { readiness, readinessOk, schemaReady, errorMessage: readinessError } = storeToRefs(installStore)
 
 const capabilityEntries = computed(() => Object.entries(readiness.value?.capabilities ?? {}))
 
@@ -128,12 +131,20 @@ async function refreshIdentity(): Promise<void> {
   }
 }
 
+async function loadReadinessForDashboard(force = false): Promise<void> {
+  try {
+    await installStore.loadReadiness(force)
+  } catch (error: unknown) {
+    void error
+  }
+}
+
 async function refreshReadiness(): Promise<void> {
-  await installStore.loadReadiness(true)
+  await loadReadinessForDashboard(true)
 }
 
 onMounted(async () => {
-  const [currentUser] = await Promise.all([authStore.syncCurrentUser(), installStore.loadReadiness()])
+  const [currentUser] = await Promise.all([authStore.syncCurrentUser(), loadReadinessForDashboard()])
   if (currentUser === null) {
     await redirectToLogin()
   }
