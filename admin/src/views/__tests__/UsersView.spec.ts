@@ -173,7 +173,7 @@ describe('UsersView', () => {
     expect(userApiMocks.createUser).toHaveBeenCalled()
   })
 
-  it('requires confirmation before resetting a password and shows the temporary credential', async () => {
+  it('requires confirmation before resetting a password and clears the one-time reveal', async () => {
     const { wrapper } = await mountView()
 
     const resetButton = wrapper.findAll('button').find((button) => button.text().includes('Reset password'))
@@ -197,7 +197,29 @@ describe('UsersView', () => {
     await flushPromises()
 
     expect(userApiMocks.resetUserPassword).toHaveBeenCalledWith('user-1')
-    expect(wrapper.text()).toContain('Temporary password: temp-pass-123')
+    expect(document.body.textContent).toContain('Temporary password ready')
+    expect(document.body.textContent).not.toContain('temp-pass-123')
+
+    const revealButton = document.body.querySelector('[data-testid="temporary-password-reveal"]')
+    if (!(revealButton instanceof HTMLButtonElement)) {
+      throw new Error('Temporary password reveal button not found')
+    }
+
+    revealButton.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('temp-pass-123')
+
+    const closeButton = document.body.querySelector('[data-testid="temporary-password-close"]')
+    if (!(closeButton instanceof HTMLButtonElement)) {
+      throw new Error('Temporary password close button not found')
+    }
+
+    closeButton.click()
+    await flushPromises()
+
+    expect(document.body.textContent).not.toContain('temp-pass-123')
+    expect(wrapper.text()).not.toContain('Temporary password: temp-pass-123')
   })
 
   it('requires confirmation before deactivating a user', async () => {

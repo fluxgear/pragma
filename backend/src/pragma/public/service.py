@@ -20,7 +20,7 @@ from dataclasses import asdict
 from datetime import datetime
 from html import escape, unescape
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import nh3
 from fastapi.responses import HTMLResponse
@@ -658,6 +658,12 @@ def build_seo_context(
     normalized_description = _collapse_whitespace(page_description or site.description)
     full_title = site.name if not normalized_title else f'{normalized_title} · {site.name}'
     canonical_url = _absolute_url(settings, route_path)
+    normalized_og_image = build_public_media_url(og_image)
+    if normalized_og_image is not None:
+        parsed_og_image = urlsplit(normalized_og_image)
+        if not (parsed_og_image.scheme and parsed_og_image.netloc):
+            normalized_og_image = _absolute_url(settings, normalized_og_image)
+
     return PublicSeoContext(
         title=normalized_title,
         description=normalized_description,
@@ -667,7 +673,7 @@ def build_seo_context(
         og_title=full_title,
         og_description=normalized_description,
         og_url=canonical_url,
-        og_image=og_image,
+        og_image=normalized_og_image,
     )
 
 

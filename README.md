@@ -29,7 +29,7 @@ Pragma is a **single-site, multi-user content management system** for operators 
 
 You get a modern administration workspace, a REST API under `/api/v1`, local image media, filesystem themes, trusted backend modules, optional semantic search, and backend-rendered public pages from the same deployment.
 
-Pragma release copy is currently aligned to **v1.0.0-beta.8**. The backend Python package uses the PEP 440-compatible version **1.0.0b8**, and the admin package uses the semver prerelease **1.0.0-beta.8**.
+Pragma release copy is currently aligned to **v1.0.0-rc.1**. The backend Python package uses the PEP 440-compatible version **1.0.0rc1**, and the admin package uses the semver prerelease **1.0.0-rc.1**.
 
 ---
 
@@ -241,7 +241,7 @@ Optional smoke validation, with real secrets and available ports:
 PRAGMA_VALIDATE_SMOKE=1 ./docker/validate-production.sh docker/prod.env
 ```
 
-Production Docker supports raw env secrets or file-secret variants for the database password and JWT secret. Configure exactly one source per secret. See [Deployment](docs/deployment.md) and [Configuration](docs/configuration.md#docker-secret-file-variables).
+Production Docker supports raw env secrets or file-secret variants for the database password, JWT secret, and setup bootstrap secret (`PRAGMA_SETUP_SECRET_FILE`). Configure exactly one source per secret. See [Deployment](docs/deployment.md) and [Configuration](docs/configuration.md#docker-secret-file-variables).
 
 ---
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-rc.1 — 2026-05-04
+
+### Fixed
+- Hardened AI provider failure handling for non-2xx responses and authority URLs with explicit ports.
+- Fixed public media authorization for absolute URLs referenced by published content and made SEO image URLs absolute for public rendering.
+- Completed admin release-candidate cleanup for one-time temporary passwords, module administration, and durable UI copy.
+- Cleaned deployment/testing documentation and audit process guidance while validating expanded backend and admin regression coverage.
+
 ## v1.0.0-beta.8 — 2026-05-04
 
 ### Fixed

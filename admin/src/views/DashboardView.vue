@@ -2,7 +2,7 @@
   <div class="page">
     <div class="page__header">
       <h1>Dashboard</h1>
-      <p class="muted">Authenticated workbench for roles, permissions, and operational status.</p>
+      <p class="muted">Authenticated workbench for roles, modules, permissions, and operational status.</p>
     </div>
 
     <Message v-if="requiresPasswordChange" severity="warn" :closable="false">
@@ -67,7 +67,7 @@
       </Card>
 
       <Card>
-        <template #title>M11 security posture</template>
+        <template #title>Administration access</template>
         <template #content>
           <div class="status-list">
             <div class="status-row">
@@ -83,8 +83,8 @@
               <Tag :severity="authStore.hasPermission('modules.manage') ? 'success' : 'secondary'" :value="authStore.hasPermission('modules.manage') ? 'Available' : 'Not assigned'" />
             </div>
             <div class="status-row">
-              <span>Next milestone target</span>
-              <Tag severity="info" value="M12 realtime" />
+              <span>Realtime updates</span>
+              <Tag severity="info" value="Live when connected" />
             </div>
           </div>
         </template>

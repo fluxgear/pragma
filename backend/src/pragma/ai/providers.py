@@ -276,7 +276,7 @@ class _DirectHTTPConnection(http.client.HTTPConnection):
     """HTTP connection bound to a prevalidated socket target.
 
     Args:
-        host: Original provider hostname for request metadata.
+        host: Original provider request authority for Host metadata.
         family: Address family to connect with.
         sockaddr: Concrete resolved socket target tuple.
         timeout: Network timeout in seconds.
@@ -322,7 +322,8 @@ class _DirectHTTPSConnection(http.client.HTTPSConnection):
     """HTTPS connection bound to a prevalidated socket target.
 
     Args:
-        host: Original provider hostname for SNI and certificate validation.
+        host: Original provider request authority for SNI, certificate
+            validation, and Host metadata.
         family: Address family to connect with.
         sockaddr: Concrete resolved socket target tuple.
         timeout: Network timeout in seconds.
@@ -410,25 +411,31 @@ def _open_embedding_request(
 
     Raises:
         error.URLError: If all validated targets fail to connect.
-        SearchError: If a provider redirect is attempted.
+        SearchError: If the provider returns a redirect or non-success status.
     """
 
     path = parsed_url.path or '/'
     if parsed_url.query:
         path = f'{path}?{parsed_url.query}'
 
+    connection_host = parsed_url.hostname or ''
+    if parsed_url.port is not None:
+        if ':' in connection_host and not connection_host.startswith('['):
+            connection_host = f'[{connection_host}]'
+        connection_host = f'{connection_host}:{parsed_url.port}'
+
     last_error: OSError | None = None
     for family, sockaddr in resolved_targets:
         if parsed_url.scheme == 'https':
             connection = _DirectHTTPSConnection(
-                parsed_url.hostname or '',
+                connection_host,
                 family=family,
                 sockaddr=sockaddr,
                 timeout=timeout,
             )
         else:
             connection = _DirectHTTPConnection(
-                parsed_url.hostname or '',
+                connection_host,
                 family=family,
                 sockaddr=sockaddr,
                 timeout=timeout,
@@ -441,12 +448,17 @@ def _open_embedding_request(
                 headers=dict(http_request.header_items()),
             )
             response = connection.getresponse()
-            if 300 <= response.status < 400:
-                response.read()
+            if not 200 <= response.status < 300:
                 connection.close()
+                if 300 <= response.status < 400:
+                    raise SearchError(
+                        detail='Embedding provider redirects are not allowed',
+                        code='SEARCH_EMBEDDING_PROVIDER_INVALID',
+                        status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
                 raise SearchError(
-                    detail='Embedding provider redirects are not allowed',
-                    code='SEARCH_EMBEDDING_PROVIDER_INVALID',
+                    detail='Embedding provider rejected the request',
+                    code='SEARCH_EMBEDDING_PROVIDER_REJECTED',
                     status_code=HTTPStatus.SERVICE_UNAVAILABLE,
                 )
             return _BoundResponse(connection, response)

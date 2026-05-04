@@ -2,13 +2,13 @@
 
 ## Backend test command
 
-Run backend tests from the repo root:
+Run backend tests from the repo root with the shipped helper:
 
 ```bash
-(cd backend && uv run pytest -n 32 --dist loadscope tests)
+./scripts/run-backend-tests.sh
 ```
 
-This runs pytest through `uv` with the project xdist defaults.
+The script runs backend pytest through `uv` with defaults `-n 32 --dist loadscope`, prevents concurrent backend pytest runs with a lock, and accepts optional targets/flags (for example `./scripts/run-backend-tests.sh tests/test_public.py`).
 
 ## Admin test and build commands
 
@@ -22,16 +22,13 @@ npm run build
 
 ## Pre-commit-equivalent gate
 
-No repo-level pre-commit helper script is currently shipped. Run the checks directly from the repo root:
+Run the shipped repo-level helper from the repo root:
 
 ```bash
-(cd backend && uv run ruff check .)
-(cd backend && uv run pytest -n 32 --dist loadscope tests)
-(cd admin && npm run test)
-(cd admin && npm run build)
+./scripts/pre-commit-checks.sh
 ```
 
-This runs backend Ruff, the backend pytest suite, admin Vitest, and the admin production build.
+This runs backend Ruff, backend pytest via `scripts/run-backend-tests.sh`, admin Vitest, and the admin production build (when `admin/` exists).
 
 ## Docker config validation
 

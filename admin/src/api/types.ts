@@ -308,6 +308,26 @@ export interface AISearchEmbeddingRebuildResponse {
   failed_entry_ids: string[]
 }
 
+export interface ModuleStateResponse {
+  module_id: string
+  name: string
+  version: string
+  order: number
+  enabled: boolean
+  loaded: boolean
+  hooks: string[]
+  error_code: string | null
+}
+
+export interface ModuleListResponse {
+  items: ModuleStateResponse[]
+  total: number
+}
+
+export interface ModuleStateUpdateRequest {
+  enabled: boolean
+}
+
 
 export interface RealtimeTicketResponse {
   ticket: string

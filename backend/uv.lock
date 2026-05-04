@@ -344,7 +344,7 @@ wheels = [
 
 [[package]]
 name = "pragma-backend"
-version = "1.0.0b8"
+version = "1.0.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },

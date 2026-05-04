@@ -283,6 +283,10 @@ def get_public_media_by_id(connection: Connection, media_id: UUID) -> dict[str, 
     absolute_api_variant_pattern = (
         f'^https?://[^/]+/api/v1/media/assets/{media_id_text}/variants/[A-Za-z0-9_-]+$'
     )
+    absolute_public_content_pattern = f'^https?://[^/]+/media/{media_id_text}/content$'
+    absolute_public_variant_pattern = (
+        f'^https?://[^/]+/media/{media_id_text}/variants/[A-Za-z0-9_-]+$'
+    )
 
     return connection.execute(
         """
@@ -317,9 +321,13 @@ def get_public_media_by_id(connection: Connection, media_id: UUID) -> dict[str, 
                     OR entry.payload->>'featured_image_url' LIKE %s
                     OR entry.payload->>'featured_image_url' ~ %s
                     OR entry.payload->>'featured_image_url' ~ %s
+                    OR entry.payload->>'featured_image_url' ~ %s
+                    OR entry.payload->>'featured_image_url' ~ %s
                     OR entry.payload #>> '{featured_image,content_url}' IN (%s, %s)
                     OR entry.payload #>> '{featured_image,content_url}' LIKE %s
                     OR entry.payload #>> '{featured_image,content_url}' LIKE %s
+                    OR entry.payload #>> '{featured_image,content_url}' ~ %s
+                    OR entry.payload #>> '{featured_image,content_url}' ~ %s
                     OR entry.payload #>> '{featured_image,content_url}' ~ %s
                     OR entry.payload #>> '{featured_image,content_url}' ~ %s
                 )
@@ -337,12 +345,16 @@ def get_public_media_by_id(connection: Connection, media_id: UUID) -> dict[str, 
             public_variant_pattern,
             absolute_api_content_pattern,
             absolute_api_variant_pattern,
+            absolute_public_content_pattern,
+            absolute_public_variant_pattern,
             api_content_url,
             public_content_url,
             api_variant_pattern,
             public_variant_pattern,
             absolute_api_content_pattern,
             absolute_api_variant_pattern,
+            absolute_public_content_pattern,
+            absolute_public_variant_pattern,
         ),
     ).fetchone()
 

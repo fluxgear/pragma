@@ -15,7 +15,7 @@ const MediaLibraryView = () => import('@/views/MediaLibraryView.vue')
 const NotFoundView = () => import('@/views/NotFoundView.vue')
 const SetupWizardView = () => import('@/views/SetupWizardView.vue')
 const UsersView = () => import('@/views/UsersView.vue')
-
+const ModulesView = () => import('@/views/ModulesView.vue')
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -95,6 +95,12 @@ export const router = createRouter({
           name: 'users',
           component: UsersView,
           meta: { requiresAuth: true, requiresPermission: 'users.manage', title: 'Users' },
+        },
+        {
+          path: 'modules',
+          name: 'modules',
+          component: ModulesView,
+          meta: { requiresAuth: true, requiresPermission: 'modules.manage', title: 'Modules' },
         },
         {
           path: 'account',

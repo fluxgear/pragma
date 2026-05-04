@@ -3,8 +3,8 @@
     <Card class="auth-layout__panel">
       <template #content>
         <div class="auth-layout__header">
-          <Tag severity="contrast" value="Pragma M3" />
-          <h1>Admin shell + setup wizard</h1>
+          <Tag severity="contrast" value="Pragma Admin" />
+          <h1>Admin setup</h1>
           <p class="muted">
             Install-aware onboarding and authenticated admin routing for Pragma.
           </p>

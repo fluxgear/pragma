@@ -14,9 +14,6 @@
     <Message v-if="pageErrorMessage" severity="error" :closable="false">
       {{ pageErrorMessage }}
     </Message>
-    <Message v-if="temporaryPasswordMessage" severity="warn" :closable="false">
-      {{ temporaryPasswordMessage }}
-    </Message>
 
     <Card>
       <template #title>Accounts</template>
@@ -174,11 +171,59 @@
         </div>
       </div>
     </Dialog>
+
+    <Dialog
+      v-model:visible="temporaryPasswordDialogVisible"
+      modal
+      :draggable="false"
+      :closable="false"
+      :style="{ width: 'min(34rem, 95vw)' }"
+      header="Temporary password ready"
+    >
+      <div class="form-stack">
+        <Message severity="warn" :closable="false">
+          This temporary password is stored only in this dialog. It clears when closed, when the timer expires, or when you leave this page.
+        </Message>
+        <p class="muted">
+          Copy the credential now or reveal it once for secure transfer. It will not remain in a page banner.
+        </p>
+        <div v-if="temporaryPasswordRevealed" class="form-stack" style="gap: 0.5rem;">
+          <span class="muted">Temporary password</span>
+          <code data-testid="temporary-password-value" class="code-chip">{{ temporaryPasswordSecret }}</code>
+        </div>
+        <Message v-if="temporaryPasswordCopyMessage" severity="info" :closable="false">
+          {{ temporaryPasswordCopyMessage }}
+        </Message>
+        <div class="inline-actions">
+          <Button
+            v-if="!temporaryPasswordRevealed"
+            label="Reveal one time"
+            severity="secondary"
+            variant="outlined"
+            data-testid="temporary-password-reveal"
+            @click="revealTemporaryPassword"
+          />
+          <Button
+            label="Copy password"
+            severity="secondary"
+            variant="outlined"
+            data-testid="temporary-password-copy"
+            @click="copyTemporaryPassword"
+          />
+          <Button
+            label="Close and clear"
+            severity="warn"
+            data-testid="temporary-password-close"
+            @click="clearTemporaryPassword"
+          />
+        </div>
+      </div>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Checkbox from 'primevue/checkbox'
@@ -204,7 +249,11 @@ const usersOffset = ref(0)
 const roles = ref<RoleResponse[]>([])
 const loading = ref(false)
 const pageErrorMessage = ref<string | null>(null)
-const temporaryPasswordMessage = ref<string | null>(null)
+const temporaryPasswordDialogVisible = ref(false)
+const temporaryPasswordSecret = ref<string | null>(null)
+const temporaryPasswordRevealed = ref(false)
+const temporaryPasswordCopyMessage = ref<string | null>(null)
+let temporaryPasswordClearTimer: ReturnType<typeof setTimeout> | null = null
 const dialogErrorMessage = ref<string | null>(null)
 const dialogSubmitting = ref(false)
 const createDialogVisible = ref(false)
@@ -284,8 +333,6 @@ function resetDialogState(): void {
 async function loadData(): Promise<void> {
   loading.value = true
   pageErrorMessage.value = null
-  temporaryPasswordMessage.value = null
-
   try {
     const [usersResponse, rolesResponse] = await Promise.all([
       listUsers({ limit: usersLimit.value, offset: usersOffset.value }),
@@ -335,7 +382,7 @@ function openRolesDialog(user: AdminUserResponse): void {
 function openActiveDialog(user: AdminUserResponse): void {
   resetDialogState()
   pageErrorMessage.value = null
-  temporaryPasswordMessage.value = null
+  clearTemporaryPassword()
   selectedActionUser.value = user
   pendingUserAction.value = 'toggle-active'
   userActionDialogVisible.value = true
@@ -344,7 +391,7 @@ function openActiveDialog(user: AdminUserResponse): void {
 function openPasswordResetDialog(user: AdminUserResponse): void {
   resetDialogState()
   pageErrorMessage.value = null
-  temporaryPasswordMessage.value = null
+  clearTemporaryPassword()
   selectedActionUser.value = user
   pendingUserAction.value = 'reset-password'
   userActionDialogVisible.value = true
@@ -425,17 +472,65 @@ async function toggleActive(user: AdminUserResponse): Promise<void> {
 
 async function resetPassword(userId: string): Promise<void> {
   pageErrorMessage.value = null
-  temporaryPasswordMessage.value = null
+  clearTemporaryPassword()
   try {
     const response = await resetUserPassword(userId)
     await loadData()
-    temporaryPasswordMessage.value = `Temporary password: ${response.temporary_password}`
+    temporaryPasswordSecret.value = response.temporary_password
+    temporaryPasswordRevealed.value = false
+    temporaryPasswordCopyMessage.value = null
+    temporaryPasswordDialogVisible.value = true
+    scheduleTemporaryPasswordClear()
   } catch (error) {
     pageErrorMessage.value = asUserMessage(error)
   }
 }
 
+function scheduleTemporaryPasswordClear(): void {
+  if (temporaryPasswordClearTimer !== null) {
+    clearTimeout(temporaryPasswordClearTimer)
+  }
+  temporaryPasswordClearTimer = setTimeout(() => {
+    clearTemporaryPassword()
+  }, 60_000)
+}
+
+function clearTemporaryPassword(): void {
+  if (temporaryPasswordClearTimer !== null) {
+    clearTimeout(temporaryPasswordClearTimer)
+    temporaryPasswordClearTimer = null
+  }
+  temporaryPasswordDialogVisible.value = false
+  temporaryPasswordSecret.value = null
+  temporaryPasswordRevealed.value = false
+  temporaryPasswordCopyMessage.value = null
+}
+
+function revealTemporaryPassword(): void {
+  if (temporaryPasswordSecret.value === null) {
+    return
+  }
+  temporaryPasswordRevealed.value = true
+}
+
+async function copyTemporaryPassword(): Promise<void> {
+  if (temporaryPasswordSecret.value === null) {
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(temporaryPasswordSecret.value)
+    temporaryPasswordCopyMessage.value = 'Temporary password copied. Close this dialog when you are done.'
+  } catch {
+    temporaryPasswordCopyMessage.value = 'Copy unavailable in this browser. Reveal the password and transfer it securely.'
+  }
+}
+
 onMounted(async () => {
   await loadData()
+})
+
+onUnmounted(() => {
+  clearTemporaryPassword()
 })
 </script>

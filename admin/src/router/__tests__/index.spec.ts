@@ -14,6 +14,13 @@ describe('admin router routes', () => {
     expect(resolved.redirectedFrom).toBeUndefined()
   })
 
+
+  it('routes module administration through the authenticated app shell', () => {
+    const resolved = router.resolve('/app/modules')
+
+    expect(resolved.name).toBe('modules')
+    expect(resolved.meta.requiresPermission).toBe('modules.manage')
+  })
   it('keeps in-shell unknown app URLs on the authenticated app not-found route', () => {
     expect(router.resolve('/app/missing-section').name).toBe('app-not-found')
   })

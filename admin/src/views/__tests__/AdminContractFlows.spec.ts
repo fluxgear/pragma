@@ -239,7 +239,17 @@ describe('admin backend contract flows', () => {
     const resetRequest = requests.find((request) => request.path === '/api/v1/users/user-1/password-reset')
     expect(resetRequest?.init?.method).toBe('POST')
     expect(headerValue(resetRequest?.init, 'Authorization')).toBe('Bearer token-123')
-    expect(wrapper.text()).toContain('Temporary password: temp-pass-123')
+    expect(document.body.textContent).toContain('Temporary password ready')
+    expect(document.body.textContent).not.toContain('temp-pass-123')
+
+    const revealButton = document.body.querySelector('[data-testid="temporary-password-reveal"]')
+    if (!(revealButton instanceof HTMLButtonElement)) {
+      throw new Error('Temporary password reveal button not found')
+    }
+    revealButton.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('temp-pass-123')
     expect(requests.filter((request) => request.path === '/api/v1/users?limit=50&offset=0')).toHaveLength(2)
   })
 })

@@ -70,7 +70,7 @@ mkdir -p docker/secrets
 chmod 600 docker/secrets/pragma_database_password docker/secrets/pragma_jwt_secret_key docker/secrets/pragma_setup_secret
 ```
 
-Then leave `PRAGMA_DATABASE_PASSWORD` and `PRAGMA_JWT_SECRET_KEY` empty in `docker/prod.env` and set the host source paths relative to the compose file directory (`docker/`):
+Then leave `PRAGMA_DATABASE_PASSWORD`, `PRAGMA_JWT_SECRET_KEY`, and `PRAGMA_SETUP_SECRET` empty in `docker/prod.env` so only the `*_FILE` variants are set, then set the host source paths relative to the compose file directory (`docker/`):
 
 ```env
 PRAGMA_DATABASE_PASSWORD_FILE=/run/secrets/pragma_database_password
@@ -142,6 +142,74 @@ PRAGMA_VALIDATE_SMOKE=1 ./docker/validate-production.sh docker/prod.env
 ```
 
 Smoke validation builds and boots the stack, checks DB extension state, verifies `/healthz`, `/readyz`, `/api/v1/system/health`, `/login`, and `/app`, then cleans up the smoke stack.
+
+## Backup, restore, upgrade, and rollback runbook
+
+### Backup scope
+
+Treat these as the production state set and back them up together:
+
+- `db-data` volume (PostgreSQL data directory)
+- `media` volume (uploaded files)
+- `modules` volume (trusted installed module code)
+- `docker/prod.env` (or your external secret/config source), excluding plaintext secret exports to shared storage
+
+### Backup procedure
+
+1. Confirm stack health before backup (`/readyz`, `/api/v1/system/ready`).
+2. Create a PostgreSQL dump from the running `db` service and store it with a timestamped name:
+
+   ```bash
+   ts=$(date -u +%Y%m%dT%H%M%SZ)
+   mkdir -p backups/$ts
+   docker compose -f docker/docker-compose.yml --env-file docker/prod.env exec -T db \
+     pg_dump -U "$PRAGMA_DATABASE_USER" -d "$PRAGMA_DATABASE_NAME" -Fc > backups/$ts/database.dump
+   ```
+
+3. Archive `media` and `modules` volume contents in the same backup set. Determine the concrete Docker volume names first (`docker volume ls`), then archive each volume:
+
+   ```bash
+   docker run --rm -v <media_volume_name>:/src -v "$PWD/backups/$ts":/backup alpine \
+     sh -c 'cd /src && tar -czf /backup/media.tar.gz .'
+   docker run --rm -v <modules_volume_name>:/src -v "$PWD/backups/$ts":/backup alpine \
+     sh -c 'cd /src && tar -czf /backup/modules.tar.gz .'
+   ```
+
+4. Record the running image digests/tag set (`docker compose ... images`) with the backup.
+
+### Restore procedure
+
+1. Stop application services (`proxy`, `backend`, `migrate`) before data restore.
+2. Restore `db-data` from `database.dump` into PostgreSQL (empty target DB or rebuilt cluster).
+3. Restore `media` and `modules` archives back into their volumes.
+4. Bring the stack up and run migration-forward (`migrate` service / `alembic upgrade head`).
+5. Run smoke checks listed below before reopening traffic.
+
+### Upgrade order
+
+Use this order for every production upgrade:
+
+1. Take a fresh backup set (`db-data`, `media`, `modules`).
+2. Update images/configuration.
+3. Run migrations first (`db -> migrate`).
+4. Start `backend`, then `proxy`.
+5. Run smoke checks.
+
+### Rollback policy
+
+- If smoke checks fail after an upgrade, roll back as a full set: previous images/config + matching `database.dump` + matching `media`/`modules` archives.
+- Do not run downgrade migrations for emergency rollback unless the migration explicitly documents safe reversal. Default policy is restore-from-backup.
+- After rollback restore, rerun migration-forward only when redeploying a fixed build.
+
+### Post-change smoke checks
+
+After restore, upgrade, or rollback, verify at minimum:
+
+- `GET /healthz` and `GET /readyz` return success
+- `GET /api/v1/system/ready` reports schema/extensions ready
+- Admin login and `/app` load
+- Public homepage loads
+- Representative media asset and installed module behavior still work
 
 ## Non-Docker deployment notes
 

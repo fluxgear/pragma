@@ -805,7 +805,7 @@ def test_open_embedding_request_uses_prevalidated_socket_target(
     monkeypatch.setattr(ai_providers, '_DirectHTTPSConnection', _FakeConnection)
 
     http_request = ai_providers.request.Request(
-        'https://api.example.com/v1/embeddings?foo=bar',
+        'https://api.example.com:8443/v1/embeddings?foo=bar',
         data=b'{"input":"x"}',
         headers={'Content-Type': 'application/json'},
         method='POST',
@@ -815,24 +815,24 @@ def test_open_embedding_request_uses_prevalidated_socket_target(
         http_request,
         timeout=7,
         parsed_url=ai_providers.parse.urlsplit(http_request.full_url),
-        resolved_targets=((socket.AF_INET, ('93.184.216.34', 443)),),
+        resolved_targets=((socket.AF_INET, ('93.184.216.34', 8443)),),
     ) as response:
         body = ai_providers._read_limited_response_body(response)
 
     assert body == b'{"data":[{"embedding":[0.1,0.2]}]}'
-    assert captured['host'] == 'api.example.com'
+    assert captured['host'] == 'api.example.com:8443'
     assert captured['family'] == socket.AF_INET
-    assert captured['sockaddr'] == ('93.184.216.34', 443)
+    assert captured['sockaddr'] == ('93.184.216.34', 8443)
     assert captured['timeout'] == 7
     assert captured['method'] == 'POST'
     assert captured['path'] == '/v1/embeddings?foo=bar'
     assert captured['closed'] is True
 
 
-def test_open_embedding_request_rejects_redirect_status(
+def test_open_embedding_request_rejects_non_success_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify provider requests reject redirect responses without following them.
+    """Verify provider requests reject redirect and error statuses.
 
     Args:
         monkeypatch: Pytest monkeypatch fixture.
@@ -846,45 +846,66 @@ def test_open_embedding_request_rejects_redirect_status(
 
     import pragma.ai.providers as ai_providers
 
-    class _FakeConnection:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            del args, kwargs
+    def _make_fake_connection(
+        response_status: int,
+        captured: dict[str, object],
+    ) -> type[object]:
+        class _FakeConnection:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                del args, kwargs
 
-        def request(
-            self,
-            method: str,
-            path: str,
-            body: object,
-            headers: dict[str, str],
-        ) -> None:
-            del method, path, body, headers
+            def request(
+                self,
+                method: str,
+                path: str,
+                body: object,
+                headers: dict[str, str],
+            ) -> None:
+                del method, path, body, headers
 
-        def getresponse(self) -> _EmbeddingResponse:
-            response = _EmbeddingResponse(b'')
-            response.status = 302
-            return response
+            def getresponse(self) -> _EmbeddingResponse:
+                response = _EmbeddingResponse(b'{"data":[{"embedding":[0.1,0.2]}]}')
+                response.status = response_status
+                captured['response'] = response
+                return response
 
-        def close(self) -> None:
-            return None
+            def close(self) -> None:
+                captured['closed'] = True
 
-    monkeypatch.setattr(ai_providers, '_DirectHTTPSConnection', _FakeConnection)
+        return _FakeConnection
 
-    http_request = ai_providers.request.Request(
-        'https://api.example.com/v1/embeddings',
-        data=b'{}',
-        headers={'Content-Type': 'application/json'},
-        method='POST',
-    )
-
-    with pytest.raises(SearchError) as exc_info:
-        ai_providers._open_embedding_request(
-            http_request,
-            timeout=7,
-            parsed_url=ai_providers.parse.urlsplit(http_request.full_url),
-            resolved_targets=((socket.AF_INET, ('93.184.216.34', 443)),),
+    for status, expected_code in (
+        (302, 'SEARCH_EMBEDDING_PROVIDER_INVALID'),
+        (401, 'SEARCH_EMBEDDING_PROVIDER_REJECTED'),
+        (429, 'SEARCH_EMBEDDING_PROVIDER_REJECTED'),
+        (500, 'SEARCH_EMBEDDING_PROVIDER_REJECTED'),
+    ):
+        captured: dict[str, object] = {}
+        monkeypatch.setattr(
+            ai_providers,
+            '_DirectHTTPSConnection',
+            _make_fake_connection(status, captured),
         )
 
-    assert exc_info.value.code == 'SEARCH_EMBEDDING_PROVIDER_INVALID'
+        http_request = ai_providers.request.Request(
+            'https://api.example.com/v1/embeddings',
+            data=b'{}',
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+
+        with pytest.raises(SearchError) as exc_info:
+            ai_providers._open_embedding_request(
+                http_request,
+                timeout=7,
+                parsed_url=ai_providers.parse.urlsplit(http_request.full_url),
+                resolved_targets=((socket.AF_INET, ('93.184.216.34', 443)),),
+            )
+
+        assert exc_info.value.code == expected_code
+        assert captured['closed'] is True
+        assert isinstance(captured['response'], _EmbeddingResponse)
+        assert captured['response'].read_sizes == []
 
 
 def test_ai_routes_require_authentication(client: TestClient) -> None:

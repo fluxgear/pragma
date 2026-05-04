@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page__header">
-      <h2>Setup wizard · phase 1</h2>
+      <h2>Setup wizard</h2>
       <p class="muted">
         Confirm backend readiness, create the first super-admin, and transition directly into the admin shell.
       </p>
@@ -54,7 +54,7 @@
         <template #content>
           <form class="form-stack" @submit.prevent="handleSubmit">
             <Message severity="info" :closable="false">
-              Phase 1 uses the existing backend bootstrap contract. Site identity and broader onboarding settings stay deferred until a later milestone.
+              Use the backend bootstrap contract to create the first super-admin. Site identity and broader onboarding settings can be configured after setup.
             </Message>
 
             <div class="form-grid">

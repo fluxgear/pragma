@@ -123,6 +123,12 @@ const navigationItems = computed(() => [
     disabled: !authStore.hasPermission('ai.settings.manage'),
   },
   {
+    label: 'Modules',
+    icon: 'pi pi-box',
+    routeName: 'modules',
+    disabled: !authStore.hasPermission('modules.manage'),
+  },
+  {
     label: 'Users',
     icon: 'pi pi-users',
     routeName: 'users',

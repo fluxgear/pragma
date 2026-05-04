@@ -374,10 +374,22 @@ def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
             id='published-public-relative-content-draft-api-relative-content',
         ),
         pytest.param(
+            'public-absolute-content',
+            'api-relative-content',
+            'content',
+            id='published-public-absolute-content-draft-api-relative-content',
+        ),
+        pytest.param(
             'api-absolute-content',
             'public-relative-content',
             'content',
             id='published-api-absolute-content-draft-public-relative-content',
+        ),
+        pytest.param(
+            'api-absolute-content',
+            'public-absolute-content',
+            'content',
+            id='published-api-absolute-content-draft-public-absolute-content',
         ),
         pytest.param(
             'api-relative-variant',
@@ -392,10 +404,22 @@ def test_home_renders_theme_assets_and_seo_metadata(client: TestClient) -> None:
             id='published-public-relative-variant-draft-api-absolute-variant',
         ),
         pytest.param(
+            'public-absolute-variant',
+            'api-absolute-variant',
+            'variant',
+            id='published-public-absolute-variant-draft-api-absolute-variant',
+        ),
+        pytest.param(
             'api-relative-variant',
             'public-relative-variant',
             'variant',
             id='published-api-relative-variant-draft-public-relative-variant',
+        ),
+        pytest.param(
+            'api-relative-variant',
+            'public-absolute-variant',
+            'variant',
+            id='published-api-relative-variant-draft-public-absolute-variant',
         ),
     ],
 )
@@ -450,8 +474,12 @@ def test_public_media_route_serves_published_references_only(
             return thumbnail_url
         if kind == 'public-relative-content':
             return f'/media/{media_id}/content'
+        if kind == 'public-absolute-content':
+            return f'http://testserver/media/{media_id}/content'
         if kind == 'public-relative-variant':
             return f'/media/{media_id}/variants/thumbnail'
+        if kind == 'public-absolute-variant':
+            return f'http://testserver/media/{media_id}/variants/thumbnail'
 
         raise AssertionError(f'Unknown public media URL form: {kind}')
 
@@ -510,7 +538,24 @@ def test_public_media_route_serves_published_references_only(
 
     assert page_response.status_code == 200
     assert public_media_url in page_response.text
-    if published_reference_url != public_media_url:
+    published_reference_is_absolute_public = published_reference_url.startswith(
+        'http://testserver/media/'
+    )
+    expected_seo_image_url = (
+        published_reference_url
+        if published_reference_is_absolute_public
+        else f'http://testserver{public_media_url}'
+    )
+    og_image_meta = '<meta property="og:image" content="'
+    og_image_meta = f'{og_image_meta}{expected_seo_image_url}">'
+    twitter_image_meta = '<meta name="twitter:image" content="'
+    twitter_image_meta = f'{twitter_image_meta}{expected_seo_image_url}">'
+    assert og_image_meta in page_response.text
+    assert twitter_image_meta in page_response.text
+    if (
+        published_reference_url != public_media_url
+        and not published_reference_is_absolute_public
+    ):
         assert published_reference_url not in page_response.text
     assert published_media_response.status_code == 200
     if public_route_kind == 'variant':
