@@ -105,7 +105,6 @@ describe('evaluateNavigation', () => {
       }),
     ).toEqual({ name: 'dashboard' })
   })
-
   it('routes users away from routes requiring missing permissions', () => {
     expect(
       evaluateNavigation(
@@ -119,6 +118,122 @@ describe('evaluateNavigation', () => {
         },
       ),
     ).toEqual({ name: 'dashboard' })
+  })
+
+  it('requires themes.manage for theme administration', () => {
+    expect(
+      evaluateNavigation(makeRoute('themes', { requiresAuth: true, requiresPermission: 'themes.manage' }, '/app/themes'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: ['content.entries.read'],
+        forcePasswordChange: false,
+      }),
+    ).toEqual({ name: 'dashboard' })
+
+    expect(
+      evaluateNavigation(makeRoute('themes', { requiresAuth: true, requiresPermission: 'themes.manage' }, '/app/themes'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: ['themes.manage'],
+        forcePasswordChange: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('requires navigation.manage for navigation administration', () => {
+    expect(
+      evaluateNavigation(makeRoute('navigation', { requiresAuth: true, requiresPermission: 'navigation.manage' }, '/app/navigation'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: ['content.entries.read'],
+        forcePasswordChange: false,
+      }),
+    ).toEqual({ name: 'dashboard' })
+
+    expect(
+      evaluateNavigation(makeRoute('navigation', { requiresAuth: true, requiresPermission: 'navigation.manage' }, '/app/navigation'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: ['navigation.manage'],
+        forcePasswordChange: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('requires content.types.read for content model administration', () => {
+    expect(
+      evaluateNavigation(
+        makeRoute(
+          'content-models',
+          { requiresAuth: true, requiresPermission: 'content.types.read' },
+          '/app/content-models',
+        ),
+        {
+          isInstalled: true,
+          isAuthenticated: true,
+          isSuperuser: false,
+          permissions: ['content.entries.read'],
+          forcePasswordChange: false,
+        },
+      ),
+    ).toEqual({ name: 'dashboard' })
+
+    expect(
+      evaluateNavigation(
+        makeRoute(
+          'content-models',
+          { requiresAuth: true, requiresPermission: 'content.types.read' },
+          '/app/content-models',
+        ),
+        {
+          isInstalled: true,
+          isAuthenticated: true,
+          isSuperuser: false,
+          permissions: ['content.types.read'],
+          forcePasswordChange: false,
+        },
+      ),
+    ).toBe(true)
+  })
+
+  it('routes signed-in non-superusers away from roles administration without roles.manage', () => {
+    expect(
+      evaluateNavigation(makeRoute('roles', { requiresAuth: true, requiresPermission: 'roles.manage' }, '/app/roles'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: ['users.manage'],
+        forcePasswordChange: false,
+      }),
+    ).toEqual({ name: 'dashboard' })
+  })
+
+  it('allows roles administration for users with roles.manage', () => {
+    expect(
+      evaluateNavigation(makeRoute('roles', { requiresAuth: true, requiresPermission: 'roles.manage' }, '/app/roles'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: false,
+        permissions: ['roles.manage'],
+        forcePasswordChange: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('allows superusers to access roles administration without an explicit roles.manage entry', () => {
+    expect(
+      evaluateNavigation(makeRoute('roles', { requiresAuth: true, requiresPermission: 'roles.manage' }, '/app/roles'), {
+        isInstalled: true,
+        isAuthenticated: true,
+        isSuperuser: true,
+        permissions: [],
+        forcePasswordChange: false,
+      }),
+    ).toBe(true)
   })
 
   it('routes forced-password-change users to the account route', () => {

@@ -8,7 +8,9 @@
   --site-border: rgba(74, 94, 128, 0.16);
   --site-primary: #3559e6;
   --site-primary-strong: #2038a8;
-  --site-accent: #10b4d2;
+  --site-accent: #08768d;
+  --site-cta-start: #3559e6;
+  --site-cta-end: #08768d;
   --site-success: #0f9d76;
   --site-shadow: 0 24px 64px rgba(17, 32, 74, 0.12);
   --site-radius: 1.5rem;
@@ -33,6 +35,8 @@
   --site-primary: #7ea2ff;
   --site-primary-strong: #9bb7ff;
   --site-accent: #55d6f3;
+  --site-cta-start: #3559e6;
+  --site-cta-end: #08768d;
   --site-success: #42d5a3;
   --site-shadow: 0 28px 64px rgba(0, 0, 0, 0.36);
 }
@@ -233,7 +237,7 @@ p, ul, ol {
 }
 
 .button--primary {
-  background: linear-gradient(135deg, var(--site-primary), var(--site-accent));
+  background: linear-gradient(135deg, var(--site-cta-start), var(--site-cta-end));
   color: #fff;
   box-shadow: 0 18px 38px rgba(53, 89, 230, 0.2);
 }
@@ -651,4 +655,46 @@ p, ul, ol {
     transition-duration: 0ms !important;
     animation-duration: 0ms !important;
   }
+}
+
+.pragma-block-document {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.pragma-block {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.pragma-block[data-block-type='section'] {
+  padding: var(--space-4);
+  border: 1px solid var(--site-border);
+  border-radius: var(--site-radius);
+  background: var(--site-surface);
+}
+
+.pragma-block[data-block-type='columns'] {
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-3);
+}
+
+.pragma-block[data-block-type='card'] {
+  padding: var(--space-3);
+  border: 1px solid var(--site-border);
+  border-radius: var(--site-radius-sm);
+  background: var(--site-surface-strong);
+  box-shadow: var(--site-shadow);
+}
+
+.pragma-block[data-block-type='button'] a,
+.pragma-block[data-block-type='button'] button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.1rem;
+  border-radius: 999px;
+  text-decoration: none;
+  color: #fff;
+  background: linear-gradient(135deg, var(--site-cta-start), var(--site-cta-end));
 }

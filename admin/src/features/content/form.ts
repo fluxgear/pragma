@@ -1,7 +1,9 @@
 import type {
   ContentEntryResponse,
+  ContentEntrySeoMetadata,
   ContentEntryStatus,
   ContentFieldDefinition,
+  ContentSeoRobots,
   ContentTypeResponse,
 } from '@/api/types'
 
@@ -12,12 +14,32 @@ export class ContentEntryFormError extends Error {
   }
 }
 
-export type ContentEntryFormValue = boolean | number | string | null
+export type ContentEntryFormValue = boolean | number | string | null | Record<string, unknown>
+
+export interface ContentEntrySeoMetadataFormState {
+  title: string
+  description: string
+  canonical_url: string
+  robots: ContentSeoRobots
+  og_title: string
+  og_description: string
+  og_image: string
+}
 
 export interface ContentEntryFormState {
   slug: string
   status: ContentEntryStatus
   fields: Record<string, ContentEntryFormValue>
+  seo_metadata: ContentEntrySeoMetadataFormState
+  expected_version: number | null
+}
+
+export interface SerializedContentEntryFormState {
+  slug: string | null
+  status: ContentEntryStatus
+  payload: Record<string, unknown>
+  seo_metadata: ContentEntrySeoMetadata
+  expected_version?: number
 }
 
 const EMPTY_RICH_TEXT = ''
@@ -62,11 +84,54 @@ function buildInitialFieldValue(
       return toDateTimeLocalValue(value)
     case 'json':
       return value === undefined ? '' : JSON.stringify(value, null, 2)
+    case 'block_document':
+      return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null
   }
 }
 
 function requiredFieldMessage(fieldDefinition: ContentFieldDefinition): string {
   return `${fieldDefinition.label} is required.`
+}
+
+function normalizeSeoFormValue(value: string | null | undefined): string {
+  return typeof value === 'string' ? value : ''
+}
+
+export function buildContentEntrySeoMetadataFormState(
+  metadata: ContentEntrySeoMetadata | null | undefined,
+): ContentEntrySeoMetadataFormState {
+  return {
+    title: normalizeSeoFormValue(metadata?.title),
+    description: normalizeSeoFormValue(metadata?.description),
+    canonical_url: normalizeSeoFormValue(metadata?.canonical_url),
+    robots: metadata?.robots ?? 'index',
+    og_title: normalizeSeoFormValue(metadata?.og_title),
+    og_description: normalizeSeoFormValue(metadata?.og_description),
+    og_image: normalizeSeoFormValue(metadata?.og_image),
+  }
+}
+
+function serializeOptionalSeoText(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+export function serializeContentEntrySeoMetadataFormState(
+  metadata: ContentEntrySeoMetadataFormState | null | undefined,
+): ContentEntrySeoMetadata {
+  const normalized = metadata ?? buildContentEntrySeoMetadataFormState(null)
+
+  return {
+    title: serializeOptionalSeoText(normalized.title),
+    description: serializeOptionalSeoText(normalized.description),
+    canonical_url: serializeOptionalSeoText(normalized.canonical_url),
+    robots: normalized.robots,
+    og_title: serializeOptionalSeoText(normalized.og_title),
+    og_description: serializeOptionalSeoText(normalized.og_description),
+    og_image: serializeOptionalSeoText(normalized.og_image),
+  }
 }
 
 export function isRichTextEffectivelyEmpty(value: string): boolean {
@@ -94,13 +159,15 @@ export function buildContentEntryFormState(
     slug: entry?.slug ?? '',
     status: entry?.status ?? 'draft',
     fields,
+    seo_metadata: buildContentEntrySeoMetadataFormState(entry?.seo_metadata),
+    expected_version: entry?.version ?? null,
   }
 }
 
 export function serializeContentEntryFormState(
   contentType: ContentTypeResponse,
   state: ContentEntryFormState,
-): { slug: string | null; status: ContentEntryStatus; payload: Record<string, unknown> } {
+): SerializedContentEntryFormState {
   const payload: Record<string, unknown> = {}
 
   for (const fieldDefinition of contentType.field_definitions) {
@@ -185,15 +252,32 @@ export function serializeContentEntryFormState(
         } catch {
           throw new ContentEntryFormError(`${fieldDefinition.label} must contain valid JSON.`)
         }
+        continue
+      }
+      case 'block_document': {
+        if (rawValue === null || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+          if (fieldDefinition.required) {
+            throw new ContentEntryFormError(requiredFieldMessage(fieldDefinition))
+          }
+          continue
+        }
+        payload[fieldDefinition.name] = rawValue
       }
     }
   }
 
-  return {
+  const serialized: SerializedContentEntryFormState = {
     slug: state.slug.trim().length > 0 ? state.slug.trim() : null,
     status: state.status,
     payload,
+    seo_metadata: serializeContentEntrySeoMetadataFormState(state.seo_metadata),
   }
+
+  if (typeof state.expected_version === 'number') {
+    serialized.expected_version = state.expected_version
+  }
+
+  return serialized
 }
 
 export function getContentEntryDisplayTitle(entry: ContentEntryResponse): string {

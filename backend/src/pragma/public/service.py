@@ -25,6 +25,7 @@ from urllib.parse import urlencode, urlsplit
 import nh3
 from fastapi.responses import HTMLResponse
 
+from pragma.blocks.renderer import render_block_document
 from pragma.config import Settings
 from pragma.content.models import ContentStatus
 from pragma.errors import ThemeError
@@ -87,6 +88,7 @@ _PUBLIC_BODY_HTML_TAGS = frozenset(
     }
 )
 
+_BLOCK_DOCUMENT_FIELD_METADATA_KEY = '__pragma_block_document_fields'
 
 def _collapse_whitespace(value: str) -> str:
     """Collapse internal whitespace and trim the result.
@@ -197,6 +199,30 @@ def _extract_rich_text_field_names(field_definitions: list[dict[str, Any]]) -> t
     return _normalize_rich_text_field_names(rich_text_names)
 
 
+def _extract_block_document_field_names(
+    field_definitions: list[dict[str, Any]],
+) -> tuple[str, ...]:
+    """Extract declared block-document field names from a content-type schema.
+
+    Args:
+        field_definitions: Storage-layer field definition rows.
+
+    Returns:
+        tuple[str, ...]: Block-document field names declared for the content type.
+
+    Raises:
+        None.
+    """
+
+    block_document_names: list[Any] = []
+    for row in field_definitions:
+        config = row.get('config')
+        config_kind = config.get('kind') if isinstance(config, dict) else None
+        if str(row.get('field_type') or '') == 'block_document' or config_kind == 'block_document':
+            block_document_names.append(row.get('name'))
+    return _normalize_rich_text_field_names(block_document_names)
+
+
 def _load_rich_text_field_names(connection: Any, content_type_id: Any) -> tuple[str, ...]:
     """Load rich-text field names for one content type.
 
@@ -215,6 +241,26 @@ def _load_rich_text_field_names(connection: Any, content_type_id: Any) -> tuple[
 
     field_definitions = get_field_definitions(connection, content_type_id)
     return _extract_rich_text_field_names(field_definitions)
+
+
+def _load_block_document_field_names(connection: Any, content_type_id: Any) -> tuple[str, ...]:
+    """Load block-document field names for one content type.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        content_type_id: Content-type identifier.
+
+    Returns:
+        tuple[str, ...]: Block-document field names for the content type.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    from pragma.storage.queries.content import get_field_definitions
+
+    field_definitions = get_field_definitions(connection, content_type_id)
+    return _extract_block_document_field_names(field_definitions)
 
 
 def _sanitize_public_body_html(value: str) -> str:
@@ -254,6 +300,46 @@ def _escape_body_text(value: str) -> str:
     return escape(value).replace('\n', '<br>\n')
 
 
+def _extract_block_document_body_html(payload: dict[str, Any]) -> str | None:
+    """Render the first declared block-document body field in public priority order.
+
+    Args:
+        payload: Entry payload dictionary with block-document metadata.
+
+    Returns:
+        str | None: Rendered block-document HTML when available.
+
+    Raises:
+        None.
+    """
+
+    block_document_fields = _normalize_rich_text_field_names(
+        payload.get(_BLOCK_DOCUMENT_FIELD_METADATA_KEY)
+    )
+    if not block_document_fields:
+        return None
+
+    preferred_keys = tuple(
+        key
+        for key in ('body', 'content', 'body_html', 'blocks')
+        if key in block_document_fields
+    )
+    fallback_keys = tuple(
+        key for key in block_document_fields if key not in preferred_keys
+    )
+    for key in (*preferred_keys, *fallback_keys):
+        value = payload.get(key)
+        if not isinstance(value, dict):
+            continue
+        rendered = render_block_document(
+            value,
+            media_url_resolver=build_public_media_url,
+        )
+        if rendered:
+            return rendered
+    return None
+
+
 def _extract_body_html(payload: dict[str, Any]) -> str:
     """Resolve rich body HTML while avoiding unsafe raw text rendering.
 
@@ -266,6 +352,10 @@ def _extract_body_html(payload: dict[str, Any]) -> str:
     Raises:
         None.
     """
+
+    block_body_html = _extract_block_document_body_html(payload)
+    if block_body_html is not None:
+        return block_body_html
 
     rich_text_fields = set(
         _normalize_rich_text_field_names(payload.get(_RICH_TEXT_FIELD_METADATA_KEY))
@@ -605,22 +695,68 @@ def build_site_context(settings: Settings, theme_runtime: ThemeRuntime) -> Publi
         name = _DEFAULT_SITE_NAME
         description = _DEFAULT_SITE_DESCRIPTION
 
-    navigation = [
+    fallback_navigation = [
         {'label': 'Home', 'href': '/'},
         {'label': 'Archive', 'href': '/archive'},
         {'label': 'Search', 'href': '/search'},
     ]
-    footer_links = [
-        {'label': 'Home', 'href': '/'},
-        {'label': 'Archive', 'href': '/archive'},
-        {'label': 'Search', 'href': '/search'},
-    ]
+    navigation = list(fallback_navigation)
+
+    storage = getattr(theme_runtime, '_navigation_storage', None)
+    if storage is not None:
+        from psycopg import Error as PsycopgError
+        from psycopg_pool import PoolTimeout
+
+        from pragma.errors import StorageError
+        from pragma.storage.queries.navigation import (
+            PRIMARY_MENU_KEY,
+            get_navigation_menu_by_key,
+            list_navigation_menu_items,
+        )
+
+        try:
+            with storage.connection() as connection:
+                menu_row = get_navigation_menu_by_key(connection, PRIMARY_MENU_KEY)
+                menu_rows = (
+                    list_navigation_menu_items(connection, menu_row['id'])
+                    if menu_row is not None
+                    else []
+                )
+        except (StorageError, PsycopgError, PoolTimeout):
+            logger.warning('Public navigation menu unavailable', exc_info=True)
+        else:
+            if menu_row is not None:
+                navigation = []
+                for row in menu_rows:
+                    if not row.get('enabled'):
+                        continue
+                    label = str(row['label'])
+                    if str(row['link_type']) == 'custom_url':
+                        navigation.append({'label': label, 'href': str(row['custom_url'])})
+                        continue
+                    if str(row.get('entry_status')) != ContentStatus.PUBLISHED.value:
+                        continue
+                    content_type_slug = row.get('content_type_slug')
+                    entry_slug = row.get('entry_slug')
+                    if content_type_slug is None or entry_slug is None:
+                        continue
+                    navigation.append(
+                        {
+                            'label': label,
+                            'href': build_entry_url(
+                                str(content_type_slug),
+                                str(entry_slug),
+                            ),
+                        }
+                    )
+
     return PublicSiteContext(
         name=name,
         description=description,
         base_url=settings.base_url.rstrip('/'),
+        design=theme_runtime.design_settings.model_dump(),
         navigation=navigation,
-        footer_links=footer_links,
+        footer_links=list(navigation),
     )
 
 
@@ -634,6 +770,8 @@ def build_seo_context(
     robots: str,
     og_type: str = 'website',
     og_image: str | None = None,
+    entry_seo: Any = None,
+    force_noindex: bool = False,
 ) -> PublicSeoContext:
     """Build SEO context for public template rendering.
 
@@ -646,6 +784,9 @@ def build_seo_context(
         robots: Robots directive text.
         og_type: OpenGraph content type.
         og_image: Optional OpenGraph image URL.
+        entry_seo: Optional stored entry SEO/social metadata row or model.
+        force_noindex: Whether to force preview/noindex behavior regardless of
+            stored metadata.
 
     Returns:
         PublicSeoContext: SEO metadata context.
@@ -654,11 +795,56 @@ def build_seo_context(
         None.
     """
 
-    normalized_title = _collapse_whitespace(page_title)
-    normalized_description = _collapse_whitespace(page_description or site.description)
+    seo_metadata = None
+    if entry_seo is not None:
+        from pragma.content.models import ContentEntrySeoMetadata
+
+        if isinstance(entry_seo, ContentEntrySeoMetadata):
+            seo_metadata = entry_seo
+        elif isinstance(entry_seo, dict):
+            seo_metadata = ContentEntrySeoMetadata.from_record(entry_seo)
+
+    metadata_title = seo_metadata.title if seo_metadata is not None else None
+    metadata_description = (
+        seo_metadata.description if seo_metadata is not None else None
+    )
+    normalized_title = _collapse_whitespace(metadata_title or page_title)
+    normalized_description = _collapse_whitespace(
+        metadata_description or page_description or site.description
+    )
     full_title = site.name if not normalized_title else f'{normalized_title} · {site.name}'
-    canonical_url = _absolute_url(settings, route_path)
-    normalized_og_image = build_public_media_url(og_image)
+
+    metadata_canonical_url = (
+        seo_metadata.canonical_url
+        if seo_metadata is not None and not force_noindex
+        else None
+    )
+    canonical_source = metadata_canonical_url or route_path
+    parsed_canonical = urlsplit(canonical_source)
+    canonical_url = (
+        canonical_source
+        if parsed_canonical.scheme and parsed_canonical.netloc
+        else _absolute_url(settings, canonical_source)
+    )
+
+    robots_directive = robots
+    if seo_metadata is not None and str(seo_metadata.robots.value) == 'noindex':
+        robots_directive = 'noindex,follow'
+    if force_noindex:
+        robots_directive = 'noindex,nofollow'
+
+    metadata_og_title = seo_metadata.og_title if seo_metadata is not None else None
+    metadata_og_description = (
+        seo_metadata.og_description if seo_metadata is not None else None
+    )
+    metadata_og_image = seo_metadata.og_image if seo_metadata is not None else None
+    normalized_og_title = (
+        _collapse_whitespace(metadata_og_title) if metadata_og_title else full_title
+    )
+    normalized_og_description = _collapse_whitespace(
+        metadata_og_description or normalized_description
+    )
+    normalized_og_image = build_public_media_url(metadata_og_image or og_image)
     if normalized_og_image is not None:
         parsed_og_image = urlsplit(normalized_og_image)
         if not (parsed_og_image.scheme and parsed_og_image.netloc):
@@ -668,10 +854,10 @@ def build_seo_context(
         title=normalized_title,
         description=normalized_description,
         canonical_url=canonical_url,
-        robots=robots,
+        robots=robots_directive,
         og_type=og_type,
-        og_title=full_title,
-        og_description=normalized_description,
+        og_title=normalized_og_title,
+        og_description=normalized_og_description,
         og_url=canonical_url,
         og_image=normalized_og_image,
     )
@@ -696,6 +882,7 @@ def build_common_context(site: PublicSiteContext, seo: PublicSeoContext) -> dict
         'site': site_data,
         'navigation': site_data['navigation'],
         'footer_links': site_data['footer_links'],
+        'design_settings': site_data['design'],
         'theme_static': '/theme/static',
         'home_url': '/',
         'archive_url': '/archive',
@@ -733,6 +920,10 @@ def get_published_entry(
         if content_type_row is None:
             return None
         rich_text_fields = _load_rich_text_field_names(connection, content_type_row['id'])
+        block_document_fields = _load_block_document_field_names(
+            connection,
+            content_type_row['id'],
+        )
         entry_row = get_entry_by_slug(connection, content_type_row['id'], normalized_slug)
 
     if entry_row is None:
@@ -743,6 +934,42 @@ def get_published_entry(
     merged = dict(entry_row)
     merged['content_type_slug'] = str(content_type_row['slug'])
     merged['rich_text_fields'] = rich_text_fields
+    merged['block_document_fields'] = block_document_fields
+    return merged
+
+
+def get_preview_entry(storage: DatabasePool, entry_id: Any) -> dict[str, Any] | None:
+    """Return one content entry by signed-preview target identifier.
+
+    Args:
+        storage: Initialized database pool manager.
+        entry_id: Content-entry identifier from a validated preview token.
+
+    Returns:
+        dict[str, Any] | None: Entry row with content type and render metadata.
+
+    Raises:
+        StorageError: If PostgreSQL access fails.
+    """
+
+    from pragma.storage.queries.content import get_entry_by_id
+
+    with storage.connection() as connection:
+        entry_row = get_entry_by_id(connection, entry_id)
+        if entry_row is None:
+            return None
+        rich_text_fields = _load_rich_text_field_names(
+            connection,
+            entry_row['content_type_id'],
+        )
+        block_document_fields = _load_block_document_field_names(
+            connection,
+            entry_row['content_type_id'],
+        )
+
+    merged = dict(entry_row)
+    merged['rich_text_fields'] = rich_text_fields
+    merged['block_document_fields'] = block_document_fields
     return merged
 
 
@@ -777,6 +1004,10 @@ def list_published_entries(
             return [], 0
 
         rich_text_fields = _load_rich_text_field_names(connection, content_type_row['id'])
+        block_document_fields = _load_block_document_field_names(
+            connection,
+            content_type_row['id'],
+        )
         total = count_entries(
             connection=connection,
             content_type_id=content_type_row['id'],
@@ -797,6 +1028,7 @@ def list_published_entries(
     for row in rows:
         serialized_row = dict(row)
         serialized_row['rich_text_fields'] = rich_text_fields
+        serialized_row['block_document_fields'] = block_document_fields
         serialized_rows.append(serialized_row)
     return serialized_rows, total
 
@@ -818,6 +1050,11 @@ def build_public_entry_view(entry_row: dict[str, Any]) -> PublicEntryView:
     rich_text_fields = _normalize_rich_text_field_names(entry_row.get('rich_text_fields'))
     if rich_text_fields:
         payload[_RICH_TEXT_FIELD_METADATA_KEY] = rich_text_fields
+    block_document_fields = _normalize_rich_text_field_names(
+        entry_row.get('block_document_fields')
+    )
+    if block_document_fields:
+        payload[_BLOCK_DOCUMENT_FIELD_METADATA_KEY] = block_document_fields
 
     slug = str(entry_row['slug'])
     content_type_slug = str(entry_row.get('content_type_slug') or '')
@@ -864,6 +1101,11 @@ def build_public_entry_card(entry_row: dict[str, Any]) -> dict[str, str | None]:
     """
 
     payload = dict(entry_row.get('payload') or {})
+    block_document_fields = _normalize_rich_text_field_names(
+        entry_row.get('block_document_fields')
+    )
+    if block_document_fields:
+        payload[_BLOCK_DOCUMENT_FIELD_METADATA_KEY] = block_document_fields
     slug = str(entry_row['slug'])
     content_type_slug = str(entry_row.get('content_type_slug') or '')
 
@@ -871,8 +1113,12 @@ def build_public_entry_card(entry_row: dict[str, Any]) -> dict[str, str | None]:
     summary = _extract_text(payload, ('summary', 'excerpt'))
     body_text = ''
     if summary is None:
-        body_source = _extract_text(payload, ('body', 'content', 'body_html'))
-        body_text = _strip_html(body_source) if body_source else ''
+        block_body_html = _extract_block_document_body_html(payload)
+        if block_body_html is not None:
+            body_text = _strip_html(block_body_html)
+        else:
+            body_source = _extract_text(payload, ('body', 'content', 'body_html'))
+            body_text = _strip_html(body_source) if body_source else ''
         summary = _build_body_summary(body_text, title) if body_text else title
 
     reading_source = body_text or summary or title

@@ -26,6 +26,7 @@ from psycopg.rows import dict_row
 from pydantic import ValidationError
 
 from pragma.auth.admin_models import AdminUserCreateRequest, AdminUserUpdateRequest
+from pragma.auth.permissions import get_permission_definitions
 from tests.helpers import build_database_dsn
 
 
@@ -128,6 +129,97 @@ def _create_managed_user(
     return response.json()
 
 
+def _insert_custom_role(
+    migrated_database: dict[str, str],
+    *,
+    role_key: str,
+    permission_keys: list[str],
+) -> None:
+    """Insert a custom role directly for authorization-path setup.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        role_key: Stable role identifier to insert.
+        permission_keys: Permission grants for the role.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot insert the role.
+    """
+
+    timestamp = datetime.now(UTC)
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn, row_factory=dict_row) as connection, connection.transaction():
+        connection.execute(
+            """
+            INSERT INTO pragma_roles (
+                role_key,
+                name,
+                description,
+                is_system,
+                created_at,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                role_key,
+                role_key.replace('-', ' ').title(),
+                'Direct role fixture',
+                False,
+                timestamp,
+                timestamp,
+            ),
+        )
+        for permission_key in permission_keys:
+            connection.execute(
+                """
+                INSERT INTO pragma_role_permissions (role_key, permission_key, created_at)
+                VALUES (%s, %s, %s)
+                """,
+                (role_key, permission_key, timestamp),
+            )
+
+
+def _assign_custom_role(
+    migrated_database: dict[str, str],
+    *,
+    user_id: str,
+    role_key: str,
+) -> None:
+    """Assign a custom role directly without changing assignment API scope.
+
+    Args:
+        migrated_database: Environment values for the migrated test database.
+        user_id: User identifier receiving the role.
+        role_key: Role identifier to assign.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL cannot insert the assignment.
+    """
+
+    timestamp = datetime.now(UTC)
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn) as connection, connection.transaction():
+        connection.execute(
+            """
+            INSERT INTO pragma_user_roles (
+                user_id,
+                role_key,
+                assigned_by_user_id,
+                created_at
+            )
+            VALUES (%s, %s, NULL, %s)
+            """,
+            (user_id, role_key, timestamp),
+        )
+
+
 def test_user_admin_lists_roles_and_created_users(
     client: TestClient,
     bootstrap_payload: dict[str, str],
@@ -166,6 +258,11 @@ def test_user_admin_lists_roles_and_created_users(
         password='listed-password-123',
         role_keys=['viewer'],
     )
+    assert created_user['assigned_permissions'] == created_user['effective_permissions']
+    assert created_user['permissions'] == created_user['effective_permissions']
+    assert created_user['has_all_permissions'] is False
+    assert created_user['permission_source'] == 'roles'
+
     _create_managed_user(
         client,
         admin_headers,
@@ -183,6 +280,14 @@ def test_user_admin_lists_roles_and_created_users(
     assert users_payload['offset'] == 0
     assert any(item['id'] == created_user['id'] for item in users_payload['items'])
     assert all('password_hash' not in item for item in users_payload['items'])
+    canonical_permissions = {
+        definition.key for definition in get_permission_definitions()
+    }
+    root_user = next(item for item in users_payload['items'] if item['is_superuser'])
+    assert set(root_user['effective_permissions']) == canonical_permissions
+    assert set(root_user['permissions']) == canonical_permissions
+    assert root_user['has_all_permissions'] is True
+    assert root_user['permission_source'] == 'superuser'
 
     paged_response = client.get('/api/v1/users?limit=1&offset=1', headers=admin_headers)
     assert paged_response.status_code == 200
@@ -254,7 +359,12 @@ def test_role_assignment_update_changes_effective_permissions(
         json={'role_keys': ['viewer']},
     )
     assert assign_response.status_code == 200
-    assert assign_response.json()['roles'] == ['viewer']
+    assigned_user = assign_response.json()
+    assert assigned_user['roles'] == ['viewer']
+    assert assigned_user['assigned_permissions'] == assigned_user['effective_permissions']
+    assert assigned_user['permissions'] == assigned_user['effective_permissions']
+    assert assigned_user['has_all_permissions'] is False
+    assert assigned_user['permission_source'] == 'roles'
 
     viewer_payload = _login_user(
         client,
@@ -327,6 +437,201 @@ def test_role_assignment_blocks_self_users_manage_removal(
     assert response.json() == {
         'detail': 'You cannot remove your own users.manage access',
         'code': 'AUTH_SELF_USERS_MANAGE_REQUIRED',
+    }
+
+
+def test_role_assignment_blocks_non_superuser_permission_escalation(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify users.manage actors cannot assign permissions they lack.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _bootstrap_admin(client, bootstrap_payload)
+    root_payload = _login_user(
+        client,
+        identity=bootstrap_payload['email'],
+        password=bootstrap_payload['password'],
+    )
+    root_headers = _auth_headers(root_payload['access_token'])
+    limited_admin = _create_managed_user(
+        client,
+        root_headers,
+        email='limited-role-assigner@example.com',
+        username='limitedassigner',
+        password='limited-role-assigner-password',
+        role_keys=['viewer'],
+    )
+    target_user = _create_managed_user(
+        client,
+        root_headers,
+        email='limited-role-target@example.com',
+        username='limitedtarget',
+        password='limited-role-target-password',
+        role_keys=['viewer'],
+    )
+    _insert_custom_role(
+        migrated_database,
+        role_key='limited-role-assigner',
+        permission_keys=['admin.access', 'users.manage', 'roles.manage'],
+    )
+    _assign_custom_role(
+        migrated_database,
+        user_id=limited_admin['id'],
+        role_key='limited-role-assigner',
+    )
+    limited_payload = _login_user(
+        client,
+        identity='limited-role-assigner@example.com',
+        password='limited-role-assigner-password',
+    )
+    limited_headers = _auth_headers(limited_payload['access_token'])
+
+    allowed_response = client.put(
+        f"/api/v1/users/{target_user['id']}/roles",
+        headers=limited_headers,
+        json={'role_keys': ['viewer']},
+    )
+    assert allowed_response.status_code == 200
+    assert allowed_response.json()['roles'] == ['viewer']
+
+    escalation_response = client.put(
+        f"/api/v1/users/{target_user['id']}/roles",
+        headers=limited_headers,
+        json={'role_keys': ['administrator']},
+    )
+
+    assert escalation_response.status_code == 403
+    assert escalation_response.json() == {
+        'detail': 'You cannot assign roles with permissions you do not hold',
+        'code': 'AUTH_ROLE_ASSIGNMENT_ESCALATION_FORBIDDEN',
+    }
+
+
+def test_role_replacement_and_deactivation_protect_last_admin_and_roles_holders(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify last-active checks cover admin.access and roles.manage.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+        migrated_database: Environment values for the migrated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    _bootstrap_admin(client, bootstrap_payload)
+    root_payload = _login_user(
+        client,
+        identity=bootstrap_payload['email'],
+        password=bootstrap_payload['password'],
+    )
+    root_headers = _auth_headers(root_payload['access_token'])
+    users_manager = _create_managed_user(
+        client,
+        root_headers,
+        email='protected-users-manager@example.com',
+        username='protectedusersmanager',
+        password='protected-users-manager-password',
+        role_keys=['viewer'],
+    )
+    admin_access_holder = _create_managed_user(
+        client,
+        root_headers,
+        email='last-admin-access@example.com',
+        username='lastadminaccess',
+        password='last-admin-access-password',
+        role_keys=['viewer'],
+    )
+    roles_manage_holder = _create_managed_user(
+        client,
+        root_headers,
+        email='last-roles-manage@example.com',
+        username='lastrolesmanage',
+        password='last-roles-manage-password',
+        role_keys=['viewer'],
+    )
+    _insert_custom_role(
+        migrated_database,
+        role_key='users-manager-only',
+        permission_keys=['users.manage'],
+    )
+    _insert_custom_role(
+        migrated_database,
+        role_key='admin-access-only',
+        permission_keys=['admin.access'],
+    )
+    _insert_custom_role(
+        migrated_database,
+        role_key='roles-manage-only',
+        permission_keys=['roles.manage'],
+    )
+    _assign_custom_role(
+        migrated_database,
+        user_id=users_manager['id'],
+        role_key='users-manager-only',
+    )
+    _assign_custom_role(
+        migrated_database,
+        user_id=admin_access_holder['id'],
+        role_key='admin-access-only',
+    )
+    _assign_custom_role(
+        migrated_database,
+        user_id=roles_manage_holder['id'],
+        role_key='roles-manage-only',
+    )
+    _set_user_active(
+        migrated_database,
+        user_id=root_payload['user']['id'],
+        is_active=False,
+    )
+    users_manager_payload = _login_user(
+        client,
+        identity='protected-users-manager@example.com',
+        password='protected-users-manager-password',
+    )
+    users_manager_headers = _auth_headers(users_manager_payload['access_token'])
+
+    role_response = client.put(
+        f"/api/v1/users/{admin_access_holder['id']}/roles",
+        headers=users_manager_headers,
+        json={'role_keys': []},
+    )
+    assert role_response.status_code == 400
+    assert role_response.json() == {
+        'detail': 'At least one active admin.access holder is required',
+        'code': 'AUTH_LAST_ADMIN_ACCESS_REQUIRED',
+    }
+
+    deactivate_response = client.patch(
+        f"/api/v1/users/{roles_manage_holder['id']}",
+        headers=users_manager_headers,
+        json={'is_active': False},
+    )
+    assert deactivate_response.status_code == 400
+    assert deactivate_response.json() == {
+        'detail': 'At least one active roles.manage holder is required',
+        'code': 'AUTH_LAST_ROLES_MANAGER_REQUIRED',
     }
 
 

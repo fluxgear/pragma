@@ -46,7 +46,11 @@ const authPayload = {
   is_active: true,
   is_superuser: true,
   roles: ['administrator'],
-  permissions: ['users.manage', 'ai.settings.manage', 'modules.manage'],
+  assigned_permissions: [],
+  effective_permissions: [],
+  has_all_permissions: true,
+  permission_source: 'superuser' as const,
+  permissions: [],
   force_password_change: false,
 }
 
@@ -136,5 +140,15 @@ describe('DashboardView', () => {
 
     expect(systemApiMocks.fetchReadinessStatus).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('Readiness refresh failed')
+  })
+
+  it('renders superuser effective access without implying zero permissions', async () => {
+    const { wrapper } = await mountView()
+
+    expect(wrapper.text()).toContain('Superuser full access')
+    expect(wrapper.text()).toContain('No role-assigned permissions; full access via superuser')
+    expect(wrapper.text()).toContain('All permissions via superuser')
+    expect(wrapper.text()).toContain('Roles management')
+    expect(wrapper.text()).not.toContain('Permissions0')
   })
 })

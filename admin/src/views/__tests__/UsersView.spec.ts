@@ -28,6 +28,10 @@ const usersPayload = {
       is_active: true,
       is_superuser: false,
       roles: ['editor'],
+      assigned_permissions: ['content.entries.read'],
+      effective_permissions: ['content.entries.read'],
+      has_all_permissions: false,
+      permission_source: 'roles' as const,
       permissions: ['content.entries.read'],
       force_password_change: false,
       last_login_at: null,
@@ -57,8 +61,15 @@ const rolesPayload = {
       is_system: true,
       permission_keys: ['content.entries.read'],
     },
+    {
+      role_key: 'content_strategist',
+      name: 'Content Strategist',
+      description: 'Custom editorial strategy role',
+      is_system: false,
+      permission_keys: ['content.entries.read'],
+    },
   ],
-  total: 2,
+  total: 3,
 }
 
 async function mountView() {
@@ -75,6 +86,10 @@ async function mountView() {
     is_active: true,
     is_superuser: true,
     roles: ['administrator'],
+    assigned_permissions: ['users.manage'],
+    effective_permissions: ['users.manage'],
+    has_all_permissions: true,
+    permission_source: 'superuser' as const,
     permissions: ['users.manage'],
     force_password_change: false,
   }
@@ -117,6 +132,8 @@ describe('UsersView', () => {
     expect(userApiMocks.listRoles).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('Editor User')
     expect(wrapper.text()).toContain('editor@example.com')
+    expect(wrapper.text()).toContain('Assigned permissions: 1')
+    expect(wrapper.text()).toContain('Effective access: 1')
   })
 
   it('creates a new user from the dialog', async () => {
@@ -270,5 +287,48 @@ describe('UsersView', () => {
     await flushPromises()
 
     expect(userApiMocks.updateUser).toHaveBeenCalledWith('user-1', { is_active: true })
+  })
+
+  it('renders superuser access without implying zero permissions', async () => {
+    userApiMocks.listUsers.mockResolvedValueOnce({
+      ...usersPayload,
+      items: [
+        {
+          ...usersPayload.items[0],
+          id: 'root-1',
+          email: 'root@example.com',
+          username: 'root',
+          full_name: 'Root User',
+          is_superuser: true,
+          roles: ['administrator'],
+          assigned_permissions: [],
+          effective_permissions: [],
+          has_all_permissions: true,
+          permission_source: 'superuser' as const,
+          permissions: [],
+        },
+      ],
+    })
+
+    const { wrapper } = await mountView()
+
+    expect(wrapper.text()).toContain('Root User')
+    expect(wrapper.text()).toContain('Assigned permissions: none; superuser access applies')
+    expect(wrapper.text()).toContain('Effective access: all permissions (superuser)')
+  })
+
+  it('marks custom roles unavailable in assignment pickers', async () => {
+    const { wrapper } = await mountView()
+
+    const newUserButton = wrapper.findAll('button').find((button) => button.text().includes('New user'))
+    if (!newUserButton) {
+      throw new Error('New user button not found')
+    }
+
+    await newUserButton.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('Custom roles are not assignable here yet')
+    expect(document.body.textContent).toContain('Content Strategist (content_strategist)')
   })
 })

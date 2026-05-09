@@ -28,8 +28,11 @@ from pragma.auth.admin_models import (
     AdminUserResponse,
     AdminUserUpdateRequest,
     PasswordResetResponse,
+    PermissionDefinitionResponse,
+    RoleCreateRequest,
     RoleListResponse,
     RoleResponse,
+    RolesAdminListResponse,
     UserRoleAssignmentRequest,
 )
 from pragma.auth.permissions import (
@@ -79,6 +82,179 @@ def _require_user_id(current_user: dict[str, object]) -> UUID:
             status_code=HTTPStatus.UNAUTHORIZED,
         )
     return candidate
+
+
+_PROTECTED_LAST_ACTIVE_PERMISSION_ERRORS: tuple[tuple[str, str, str], ...] = (
+    (
+        PERMISSION_USERS_MANAGE,
+        'At least one active users.manage administrator is required',
+        'AUTH_LAST_USERS_MANAGER_REQUIRED',
+    ),
+    (
+        'admin.access',
+        'At least one active admin.access holder is required',
+        'AUTH_LAST_ADMIN_ACCESS_REQUIRED',
+    ),
+    (
+        'roles.manage',
+        'At least one active roles.manage holder is required',
+        'AUTH_LAST_ROLES_MANAGER_REQUIRED',
+    ),
+)
+
+
+def _permissions_for_role_keys(role_keys: list[str]) -> set[str]:
+    """Return effective permission keys granted by built-in role assignments.
+
+    Args:
+        role_keys: Normalized built-in role keys.
+
+    Returns:
+        set[str]: Permission keys granted by the requested built-in roles.
+
+    Raises:
+        None.
+    """
+
+    from pragma.auth.permissions import ROLE_DEFINITION_BY_KEY
+
+    permission_keys: set[str] = set()
+    for role_key in role_keys:
+        permission_keys.update(ROLE_DEFINITION_BY_KEY[role_key].permissions)
+    return permission_keys
+
+
+def _record_permission_keys(user: dict[str, object]) -> set[str]:
+    """Return permission keys carried on a user record.
+
+    Args:
+        user: User record or authenticated user context.
+
+    Returns:
+        set[str]: Permission keys from the record.
+
+    Raises:
+        None.
+    """
+
+    permissions = user.get('permissions')
+    if not isinstance(permissions, list):
+        return set()
+    return {value for value in permissions if isinstance(value, str)}
+
+
+def _user_has_effective_permission(
+    user: dict[str, object], permission_key: str
+) -> bool:
+    """Return whether a user record effectively holds a permission.
+
+    Args:
+        user: User record or authenticated user context.
+        permission_key: Permission key to inspect.
+
+    Returns:
+        bool: True when the user is superuser or has the permission key.
+
+    Raises:
+        None.
+    """
+
+    return bool(user.get('is_superuser')) or permission_key in _record_permission_keys(user)
+
+
+def _require_role_assignment_not_escalating(
+    normalized_roles: list[str], current_user: dict[str, object]
+) -> None:
+    """Reject role assignments that grant permissions the actor lacks.
+
+    Args:
+        normalized_roles: Normalized built-in role keys requested for assignment.
+        current_user: Authenticated administrator context.
+
+    Returns:
+        None.
+
+    Raises:
+        AuthError: If a non-superuser actor assigns permissions they lack.
+    """
+
+    if bool(current_user.get('is_superuser')):
+        return
+
+    requested_permissions = _permissions_for_role_keys(normalized_roles)
+    actor_permissions = _record_permission_keys(current_user)
+    if requested_permissions.issubset(actor_permissions):
+        return
+
+    raise AuthError(
+        detail='You cannot assign roles with permissions you do not hold',
+        code='AUTH_ROLE_ASSIGNMENT_ESCALATION_FORBIDDEN',
+        status_code=HTTPStatus.FORBIDDEN,
+    )
+
+
+def _ensure_last_active_protected_permissions(
+    connection: Any,
+    existing_user: dict[str, object],
+    *,
+    next_permission_keys: set[str],
+    next_is_active: bool,
+) -> None:
+    """Prevent removing the final active holder of protected permissions.
+
+    Args:
+        connection: Open PostgreSQL connection inside a transaction.
+        existing_user: Current target user record.
+        next_permission_keys: Permission keys the user will hold after mutation.
+        next_is_active: Whether the user remains active after mutation.
+
+    Returns:
+        None.
+
+    Raises:
+        AuthError: If the mutation removes the final active protected holder.
+        ConfigError: If the target user disappears while locks are acquired.
+    """
+
+    from pragma.storage.queries.roles import lock_active_users_with_permission
+
+    if not bool(existing_user['is_active']):
+        return
+
+    user_id = existing_user['id']
+    for permission_key, detail, code in _PROTECTED_LAST_ACTIVE_PERMISSION_ERRORS:
+        if not _user_has_effective_permission(existing_user, permission_key):
+            continue
+        next_has_permission = next_is_active and (
+            bool(existing_user['is_superuser']) or permission_key in next_permission_keys
+        )
+        if next_has_permission:
+            continue
+
+        lock_active_users_with_permission(connection, permission_key)
+        refreshed_user = get_user_by_id(connection, user_id)
+        if refreshed_user is None:
+            raise ConfigError(
+                detail='User account not found',
+                code='USER_NOT_FOUND',
+                status_code=HTTPStatus.NOT_FOUND,
+            )
+        existing_user = refreshed_user
+        if not bool(existing_user['is_active']):
+            continue
+        if not _user_has_effective_permission(existing_user, permission_key):
+            continue
+        next_has_permission = next_is_active and (
+            bool(existing_user['is_superuser']) or permission_key in next_permission_keys
+        )
+        if next_has_permission:
+            continue
+        if count_active_users_with_permission(connection, permission_key) <= 1:
+            raise AuthError(
+                detail=detail,
+                code=code,
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
 
 
 def list_user_records(
@@ -142,6 +318,166 @@ def list_role_catalog(storage: DatabasePool) -> RoleListResponse:
     return RoleListResponse(items=items, total=len(items))
 
 
+def list_roles_admin_catalog(storage: DatabasePool) -> RolesAdminListResponse:
+    """Return DB-backed roles with canonical permission metadata.
+
+    Args:
+        storage: Initialized database pool manager.
+
+    Returns:
+        RolesAdminListResponse: Ordered role catalog plus permission metadata.
+
+    Raises:
+        StorageError: If PostgreSQL access fails.
+    """
+
+    from pragma.auth.permissions import get_permission_definitions
+
+    try:
+        with storage.connection() as connection:
+            rows = list_roles(connection)
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load role catalog',
+            code='ROLE_LIST_FAILED',
+        ) from exc
+
+    items = [RoleResponse.from_record(row) for row in rows]
+    permission_definitions = [
+        PermissionDefinitionResponse.from_definition(definition)
+        for definition in get_permission_definitions()
+    ]
+    return RolesAdminListResponse(
+        items=items,
+        total=len(items),
+        permission_definitions=permission_definitions,
+    )
+
+
+def _normalize_role_permission_keys(permission_keys: list[str]) -> list[str]:
+    """Validate requested role permissions against the runtime registry.
+
+    Args:
+        permission_keys: Requested canonical permission keys.
+
+    Returns:
+        list[str]: Ordered unique permission keys.
+
+    Raises:
+        ConfigError: If any permission key is not a canonical registry key.
+    """
+
+    from pragma.auth.permissions import get_permission_definitions
+
+    canonical_keys = {definition.key for definition in get_permission_definitions()}
+    normalized: list[str] = []
+    invalid: list[str] = []
+    seen: set[str] = set()
+    for permission_key in permission_keys:
+        if permission_key not in canonical_keys:
+            invalid.append(permission_key)
+            continue
+        if permission_key not in seen:
+            normalized.append(permission_key)
+            seen.add(permission_key)
+
+    if invalid:
+        invalid_permissions = ', '.join(
+            sorted({'<blank>' if value == '' else value for value in invalid})
+        )
+        raise ConfigError(
+            detail=f'Unknown permission requested: {invalid_permissions}',
+            code='ROLE_PERMISSION_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    return normalized
+
+
+def create_role_record(
+    storage: DatabasePool,
+    payload: RoleCreateRequest,
+    current_user: dict[str, object],
+) -> RoleResponse:
+    """Create a custom DB-backed role with validated permission grants.
+
+    Args:
+        storage: Initialized database pool manager.
+        payload: Custom role creation payload.
+        current_user: Authenticated role administrator context.
+
+    Returns:
+        RoleResponse: Created custom role payload.
+
+    Raises:
+        AuthError: If the authenticated user context is invalid.
+        ConfigError: If the role key or permission grants are invalid.
+        StorageError: If PostgreSQL access fails.
+    """
+
+    from pragma.auth.permissions import ROLE_DEFINITION_BY_KEY
+    from pragma.storage.queries.roles import (
+        create_role,
+        get_role_by_key,
+        replace_role_permissions,
+    )
+
+    _require_user_id(current_user)
+    role_key = payload.role_key
+    if role_key in ROLE_DEFINITION_BY_KEY:
+        raise ConfigError(
+            detail='Role key conflicts with a built-in system role',
+            code='ROLE_SYSTEM_KEY_CONFLICT',
+            status_code=HTTPStatus.CONFLICT,
+        )
+    permission_keys = _normalize_role_permission_keys(payload.permission_keys)
+    timestamp = utc_now()
+
+    try:
+        with storage.connection() as connection, connection.transaction():
+            existing_role = get_role_by_key(connection, role_key)
+            if existing_role is not None:
+                raise ConfigError(
+                    detail='Role key already exists',
+                    code='ROLE_KEY_CONFLICT',
+                    status_code=HTTPStatus.CONFLICT,
+                )
+            create_role(
+                connection,
+                role_key=role_key,
+                name=payload.name,
+                description=payload.description,
+                is_system=False,
+                created_at=timestamp,
+            )
+            replace_role_permissions(
+                connection,
+                role_key=role_key,
+                permission_keys=permission_keys,
+                created_at=timestamp,
+            )
+            stored_role = get_role_by_key(connection, role_key)
+    except ConfigError:
+        raise
+    except IntegrityError as exc:
+        raise ConfigError(
+            detail='Role key already exists',
+            code='ROLE_KEY_CONFLICT',
+            status_code=HTTPStatus.CONFLICT,
+        ) from exc
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to create role',
+            code='ROLE_CREATE_FAILED',
+        ) from exc
+
+    if stored_role is None:
+        raise StorageError(
+            detail='Unable to reload created role',
+            code='ROLE_RELOAD_FAILED',
+        )
+    return RoleResponse.from_record(stored_role)
+
+
 def create_user_record(
     storage: DatabasePool,
     payload: AdminUserCreateRequest,
@@ -158,6 +494,7 @@ def create_user_record(
         AdminUserResponse: Created administrative user payload.
 
     Raises:
+        AuthError: If the actor tries to assign roles with permissions they lack.
         ConfigError: If the create request conflicts with existing users or roles.
         StorageError: If PostgreSQL access fails.
     """
@@ -173,6 +510,7 @@ def create_user_record(
             code='ROLE_ASSIGNMENT_INVALID',
             status_code=HTTPStatus.BAD_REQUEST,
         ) from exc
+    _require_role_assignment_not_escalating(normalized_roles, current_user)
 
     try:
         with storage.connection() as connection, connection.transaction():
@@ -234,7 +572,7 @@ def update_user_record(
         AdminUserResponse: Updated administrative user payload.
 
     Raises:
-        AuthError: If the requested lifecycle change would lock out the current administrator.
+        AuthError: If the requested lifecycle change would lock out administrators.
         ConfigError: If the user does not exist or profile values conflict.
         StorageError: If PostgreSQL access fails.
     """
@@ -280,6 +618,13 @@ def update_user_record(
                         code='AUTH_LAST_SUPERUSER_REQUIRED',
                         status_code=HTTPStatus.BAD_REQUEST,
                     )
+            if next_is_active is False:
+                _ensure_last_active_protected_permissions(
+                    connection,
+                    existing_user,
+                    next_permission_keys=set(),
+                    next_is_active=False,
+                )
 
             full_name_provided = 'full_name' in payload.model_fields_set
             full_name = (
@@ -347,12 +692,10 @@ def replace_user_role_assignments(
         AdminUserResponse: Updated administrative user payload.
 
     Raises:
-        AuthError: If the assignment would remove required users.manage access.
+        AuthError: If the assignment would escalate or remove protected access.
         ConfigError: If the target user or role assignment is invalid.
         StorageError: If PostgreSQL access fails.
     """
-
-    from pragma.storage.queries.roles import lock_active_users_with_permission
 
     actor_user_id = _require_user_id(current_user)
     assigned_at = utc_now()
@@ -365,6 +708,8 @@ def replace_user_role_assignments(
             code='ROLE_ASSIGNMENT_INVALID',
             status_code=HTTPStatus.BAD_REQUEST,
         ) from exc
+    _require_role_assignment_not_escalating(normalized_roles, current_user)
+    next_permission_keys = _permissions_for_role_keys(normalized_roles)
 
     try:
         with storage.connection() as connection, connection.transaction():
@@ -376,14 +721,9 @@ def replace_user_role_assignments(
                     status_code=HTTPStatus.NOT_FOUND,
                 )
 
-            next_has_users_manage = ROLE_ADMINISTRATOR in normalized_roles
-            current_permissions = existing_user.get('permissions')
-            current_has_users_manage = (
+            next_has_users_manage = (
                 bool(existing_user['is_superuser'])
-                or (
-                    isinstance(current_permissions, list)
-                    and PERMISSION_USERS_MANAGE in current_permissions
-                )
+                or PERMISSION_USERS_MANAGE in next_permission_keys
             )
             if (
                 user_id == actor_user_id
@@ -395,43 +735,12 @@ def replace_user_role_assignments(
                     code='AUTH_SELF_USERS_MANAGE_REQUIRED',
                     status_code=HTTPStatus.BAD_REQUEST,
                 )
-            if (
-                bool(existing_user['is_active'])
-                and not bool(existing_user['is_superuser'])
-                and current_has_users_manage
-                and not next_has_users_manage
-            ):
-                lock_active_users_with_permission(connection, PERMISSION_USERS_MANAGE)
-                existing_user = get_user_by_id(connection, user_id)
-                if existing_user is None:
-                    raise ConfigError(
-                        detail='User account not found',
-                        code='USER_NOT_FOUND',
-                        status_code=HTTPStatus.NOT_FOUND,
-                    )
-                current_permissions = existing_user.get('permissions')
-                current_has_users_manage = (
-                    bool(existing_user['is_superuser'])
-                    or (
-                        isinstance(current_permissions, list)
-                        and PERMISSION_USERS_MANAGE in current_permissions
-                    )
-                )
-                if (
-                    bool(existing_user['is_active'])
-                    and not bool(existing_user['is_superuser'])
-                    and current_has_users_manage
-                    and count_active_users_with_permission(
-                        connection,
-                        PERMISSION_USERS_MANAGE,
-                    )
-                    <= 1
-                ):
-                    raise AuthError(
-                        detail='At least one active users.manage administrator is required',
-                        code='AUTH_LAST_USERS_MANAGER_REQUIRED',
-                        status_code=HTTPStatus.BAD_REQUEST,
-                    )
+            _ensure_last_active_protected_permissions(
+                connection,
+                existing_user,
+                next_permission_keys=next_permission_keys,
+                next_is_active=True,
+            )
 
             replace_user_roles(
                 connection,

@@ -25,6 +25,7 @@ class PublicSiteContext:
         description: Public site description.
         base_url: Canonical base URL for SEO metadata.
         lang: Public site language tag.
+        design: Sanitized public design settings for theme templates.
         navigation: Primary navigation link entries.
         footer_links: Footer navigation link entries.
 
@@ -39,6 +40,7 @@ class PublicSiteContext:
     description: str
     base_url: str
     lang: str = 'en'
+    design: dict[str, object] = field(default_factory=dict)
     navigation: list[dict[str, str]] = field(default_factory=list)
     footer_links: list[dict[str, str]] = field(default_factory=list)
 

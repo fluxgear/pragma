@@ -53,6 +53,127 @@ def list_roles(connection: Connection) -> list[dict[str, Any]]:
     ).fetchall()
 
 
+def get_role_by_key(connection: Connection, role_key: str) -> dict[str, Any] | None:
+    """Return a single role row with aggregated permission assignments.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        role_key: Stable role identifier.
+
+    Returns:
+        dict[str, Any] | None: Role row when found, otherwise None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    return connection.execute(
+        """
+        SELECT
+            r.role_key,
+            r.name,
+            r.description,
+            r.is_system,
+            COALESCE(
+                ARRAY_AGG(rp.permission_key ORDER BY rp.permission_key)
+                FILTER (WHERE rp.permission_key IS NOT NULL),
+                ARRAY[]::text[]
+            ) AS permission_keys
+        FROM pragma_roles AS r
+        LEFT JOIN pragma_role_permissions AS rp ON rp.role_key = r.role_key
+        WHERE r.role_key = %s
+        GROUP BY r.role_key, r.name, r.description, r.is_system
+        """,
+        (role_key,),
+    ).fetchone()
+
+
+def create_role(
+    connection: Connection,
+    *,
+    role_key: str,
+    name: str,
+    description: str | None,
+    is_system: bool,
+    created_at: datetime,
+) -> None:
+    """Insert a role definition row.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        role_key: Stable role identifier.
+        name: Human-readable role name.
+        description: Optional role description.
+        is_system: Whether the role is a protected system role.
+        created_at: Creation timestamp.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    connection.execute(
+        """
+        INSERT INTO pragma_roles (
+            role_key,
+            name,
+            description,
+            is_system,
+            created_at,
+            updated_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (role_key, name, description, is_system, created_at, created_at),
+    )
+
+
+def replace_role_permissions(
+    connection: Connection,
+    *,
+    role_key: str,
+    permission_keys: list[str],
+    created_at: datetime,
+) -> None:
+    """Replace all role-permission grants for a role.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        role_key: Stable role identifier.
+        permission_keys: Complete set of desired permission identifiers.
+        created_at: Grant creation timestamp.
+
+    Returns:
+        None.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    connection.execute(
+        """
+        DELETE FROM pragma_role_permissions
+        WHERE role_key = %s
+        """,
+        (role_key,),
+    )
+
+    for permission_key in permission_keys:
+        connection.execute(
+            """
+            INSERT INTO pragma_role_permissions (
+                role_key,
+                permission_key,
+                created_at
+            )
+            VALUES (%s, %s, %s)
+            """,
+            (role_key, permission_key, created_at),
+        )
+
+
 def count_active_users_with_permission(connection: Connection, permission_key: str) -> int:
     """Return active users with an effective permission.
 

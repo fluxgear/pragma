@@ -260,6 +260,121 @@ def _create_entry(
     return response.json()
 
 
+def _valid_public_block_document() -> dict[str, object]:
+    """Return a valid public-render block document covering baseline blocks."""
+
+    return {
+        'version': 1,
+        'root': {
+            'type': 'section',
+            'settings': {'background': 'none', 'width': 'wide'},
+            'children': [
+                {
+                    'type': 'container',
+                    'children': [
+                        {'type': 'heading', 'props': {'text': 'Block Hero', 'level': 2}},
+                        {
+                            'type': 'paragraph',
+                            'props': {'html': '<p>Public <strong>block</strong> copy.</p>'},
+                        },
+                        {
+                            'type': 'image',
+                            'props': {
+                                'media_id': '11111111-1111-1111-1111-111111111111',
+                                'alt': 'Block image alt',
+                                'caption': 'Block image caption',
+                            },
+                        },
+                        {
+                            'type': 'button',
+                            'props': {'label': 'Start now', 'href': '/start'},
+                            'settings': {'variant': 'primary'},
+                        },
+                        {
+                            'type': 'list',
+                            'props': {
+                                'style': 'unordered',
+                                'items': ['First item', 'Second item'],
+                            },
+                        },
+                        {
+                            'type': 'card',
+                            'settings': {'variant': 'outlined'},
+                            'children': [
+                                {
+                                    'type': 'heading',
+                                    'props': {'text': 'Card title', 'level': 3},
+                                },
+                                {
+                                    'type': 'paragraph',
+                                    'props': {'html': '<p>Card body text.</p>'},
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def _create_block_page_type(
+    client: TestClient,
+    headers: dict[str, str],
+) -> dict[str, object]:
+    """Create a page content type with a block-document body field."""
+
+    response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json={
+            'name': 'Pages',
+            'slug': 'page',
+            'field_definitions': [
+                {
+                    'name': 'title',
+                    'label': 'Title',
+                    'kind': 'text',
+                    'required': True,
+                    'min_length': 1,
+                    'max_length': 200,
+                },
+                {
+                    'name': 'body',
+                    'label': 'Body',
+                    'kind': 'block_document',
+                    'required': True,
+                },
+            ],
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def _create_block_page_entry(
+    client: TestClient,
+    headers: dict[str, str],
+    content_type_id: str,
+    *,
+    title: str,
+    body: dict[str, object],
+) -> dict[str, object]:
+    """Create a published page entry with block-document body payload."""
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type_id,
+            'status': 'published',
+            'payload': {'title': title, 'body': body},
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def _overwrite_entry_payload(
     migrated_database: dict[str, str],
     entry_id: str,
@@ -603,6 +718,143 @@ def test_published_page_renders_body_title_and_canonical(
     assert f'/pages/{page_entry["slug"]}' in response.text
 
 
+def test_published_page_with_block_document_renders_baseline_blocks(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify public page rendering supports safe baseline block documents."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    page_type = _create_block_page_type(client, headers)
+    page_entry = _create_block_page_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Block Landing Page',
+        body=_valid_public_block_document(),
+    )
+
+    response = client.get(f"/pages/{page_entry['slug']}")
+
+    assert response.status_code == 200
+    assert 'Block Landing Page' in response.text
+    assert '<h2 class="pragma-block pragma-block--heading">Block Hero</h2>' in response.text
+    assert '<strong>block</strong>' in response.text
+    assert 'src="/media/11111111-1111-1111-1111-111111111111/content"' in response.text
+    assert 'alt="Block image alt"' in response.text
+    button_html = (
+        '<a class="pragma-block pragma-block--button pragma-block--button-primary" '
+        'href="/start">Start now</a>'
+    )
+    assert button_html in response.text
+    assert '<li>First item</li>' in response.text
+    card_html = (
+        '<article class="pragma-block pragma-block--card '
+        'pragma-block--card-outlined">'
+    )
+    assert card_html in response.text
+    assert 'Card body text.' in response.text
+
+
+def test_malicious_stored_block_document_is_safely_rendered(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify legacy/future stored block payloads cannot emit executable HTML."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    page_type = _create_block_page_type(client, headers)
+    page_entry = _create_block_page_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Stored Malicious Blocks',
+        body=_valid_public_block_document(),
+    )
+    malicious_body = {
+        'version': 1,
+        'root': {
+            'type': 'section',
+            'children': [
+                {'type': 'heading', 'props': {'text': '<img src=x onerror=alert(1)>', 'level': 2}},
+                {
+                    'type': 'paragraph',
+                    'props': {
+                        'html': '<p onclick="alert(1)">Safe text</p><script>alert(2)</script>',
+                    },
+                },
+                {
+                    'type': 'button',
+                    'props': {'label': 'Bad Link', 'href': 'javascript:alert(3)'},
+                },
+                {
+                    'type': 'image',
+                    'props': {'src': 'javascript:alert(4)', 'alt': 'Bad image'},
+                },
+            ],
+        },
+    }
+    _overwrite_entry_payload(
+        migrated_database,
+        str(page_entry['id']),
+        {'title': 'Stored Malicious Blocks', 'body': malicious_body},
+    )
+
+    response = client.get(f"/pages/{page_entry['slug']}")
+
+    assert response.status_code == 200
+    assert 'Stored Malicious Blocks' in response.text
+    assert 'Safe text' in response.text
+    assert 'alert(2)' not in response.text
+    assert 'onclick=' not in response.text
+    assert 'onerror=' not in response.text
+    assert 'javascript:alert' not in response.text
+    assert '<span class="pragma-block pragma-block--button">Bad Link</span>' in response.text
+    assert '<img src="javascript:' not in response.text
+
+
+def test_unknown_future_block_document_type_does_not_crash_public_rendering(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify unknown stored block types are safely omitted on read."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    page_type = _create_block_page_type(client, headers)
+    page_entry = _create_block_page_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Future Blocks Page',
+        body=_valid_public_block_document(),
+    )
+    future_body = {
+        'version': 1,
+        'root': {
+            'type': 'section',
+            'children': [
+                {'type': 'future-widget', 'props': {'html': '<script>alert(1)</script>'}},
+                {'type': 'heading', 'props': {'text': 'Known block still renders', 'level': 2}},
+            ],
+        },
+    }
+    _overwrite_entry_payload(
+        migrated_database,
+        str(page_entry['id']),
+        {'title': 'Future Blocks Page', 'body': future_body},
+    )
+
+    response = client.get(f"/pages/{page_entry['slug']}")
+
+    assert response.status_code == 200
+    assert 'Future Blocks Page' in response.text
+    assert 'Known block still renders' in response.text
+    assert 'future-widget' not in response.text
+    assert 'alert(1)' not in response.text
+
+
 def test_published_page_renders_rich_text_markup_without_escaping(
     client: TestClient,
     bootstrap_payload: dict[str, str],
@@ -898,6 +1150,106 @@ def test_draft_and_archived_slugs_render_themed_404_without_content_leaks(
     assert '<meta name="robots" content="noindex,follow">' in archived_response.text
     assert 'Secret' not in draft_response.text
     assert 'Secret' not in archived_response.text
+
+
+def test_public_preview_renders_draft_only_with_valid_token_and_noindexes(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify signed preview tokens render drafts without public slug leaks."""
+
+    from uuid import UUID
+
+    from pragma.config import get_settings
+    from pragma.content.service import create_content_entry_preview_token
+
+    headers = _auth_headers(client, bootstrap_payload)
+    page_type = _create_content_type(client, headers, name='Pages', slug='page')
+    draft_entry = _create_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Preview Only Draft',
+        body='<p>Private draft preview body</p>',
+        status='draft',
+    )
+
+    public_response = client.get(f"/pages/{draft_entry['slug']}")
+    token_response = client.post(
+        f"/api/v1/content/entries/{draft_entry['id']}/preview",
+        headers=headers,
+    )
+    assert token_response.status_code == 200
+    preview_url = str(token_response.json()['preview_url'])
+    preview_path = preview_url.removeprefix('http://testserver')
+
+    preview_response = client.get(preview_path)
+    invalid_response = client.get('/preview/content/not-a-token')
+    tampered_response = client.get(f'{preview_path}x')
+    expired_token, _ = create_content_entry_preview_token(
+        get_settings(),
+        entry_id=UUID(str(draft_entry['id'])),
+        ttl_seconds=-60,
+    )
+    expired_response = client.get(f'/preview/content/{expired_token}')
+
+    assert public_response.status_code == 404
+    assert 'Preview Only Draft' not in public_response.text
+    assert preview_response.status_code == 200
+    assert 'Preview Only Draft' in preview_response.text
+    assert 'Private draft preview body' in preview_response.text
+    assert '<meta name="robots" content="noindex,nofollow">' in preview_response.text
+    assert '<link rel="canonical" href="http://testserver/preview/content/' in preview_response.text
+    assert f'http://testserver/pages/{draft_entry["slug"]}' not in preview_response.text
+    for response in (invalid_response, tampered_response, expired_response):
+        assert response.status_code == 404
+        assert 'Preview Only Draft' not in response.text
+        assert 'Private draft preview body' not in response.text
+
+
+def test_published_page_renders_authorable_seo_metadata(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify B1 SEO metadata is rendered into published public pages."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    page_type = _create_content_type(client, headers, name='Pages', slug='page')
+    entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': page_type['id'],
+            'status': 'published',
+            'payload': {
+                'title': 'Visible Page Title',
+                'body': '<p>Published SEO page body</p>',
+            },
+            'seo_metadata': {
+                'title': 'SEO Render Title',
+                'description': 'SEO render description.',
+                'canonical_url': '/custom-seo-canonical',
+                'og_title': 'Social Render Title',
+                'og_description': 'Social render description.',
+                'og_image': 'https://cdn.example.test/social.png',
+            },
+        },
+    )
+    assert entry_response.status_code == 201
+    entry = entry_response.json()
+
+    response = client.get(f"/pages/{entry['slug']}")
+
+    assert response.status_code == 200
+    assert '<title>SEO Render Title ·' in response.text
+    assert '<meta name="description" content="SEO render description.">' in response.text
+    assert '<link rel="canonical" href="http://testserver/custom-seo-canonical">' in response.text
+    assert '<meta property="og:title" content="Social Render Title">' in response.text
+    assert '<meta property="og:description" content="Social render description.">' in response.text
+    og_image_meta = (
+        '<meta property="og:image" content="https://cdn.example.test/social.png">'
+    )
+    assert og_image_meta in response.text
 
 
 def test_published_post_renders_metadata_and_related_posts_without_draft_leaks(
@@ -1467,3 +1819,175 @@ def test_theme_render_failure_returns_visitor_safe_500_response(
     assert response.status_code == 500
     assert 'temporarily unavailable' in response.text.lower()
     assert 'Internal template details should never leak' not in response.text
+
+
+def test_themes_api_requires_authentication(client: TestClient) -> None:
+    """Verify theme administration API is protected."""
+
+    response = client.get('/api/v1/themes')
+
+    assert response.status_code == 401
+
+
+def test_themes_api_requires_themes_manage_permission(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify authenticated users without themes.manage cannot administer themes.
+
+    Args:
+        client: FastAPI test client.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    admin_headers = _auth_headers(client, bootstrap_payload)
+    create_response = client.post(
+        '/api/v1/users',
+        headers=admin_headers,
+        json={
+            'email': 'theme-viewer@example.com',
+            'username': 'themeviewer',
+            'password': 'theme-viewer-password',
+            'full_name': 'Theme Viewer',
+            'is_active': True,
+            'role_keys': ['viewer'],
+            'force_password_change': False,
+        },
+    )
+    assert create_response.status_code == 201
+    login_response = client.post(
+        '/api/v1/auth/login',
+        json={
+            'identity': 'theme-viewer@example.com',
+            'password': 'theme-viewer-password',
+        },
+    )
+    assert login_response.status_code == 200
+    viewer_headers = {'Authorization': f"Bearer {login_response.json()['access_token']}"}
+
+    list_response = client.get('/api/v1/themes', headers=viewer_headers)
+    update_response = client.put(
+        '/api/v1/themes/settings',
+        headers=viewer_headers,
+        json={'design_settings': {'primary_color': '#123abc'}},
+    )
+    reset_response = client.post(
+        '/api/v1/themes/settings/reset',
+        headers=viewer_headers,
+    )
+
+    for response in (list_response, update_response, reset_response):
+        assert response.status_code == 403
+        assert response.json() == {
+            'detail': 'Permission themes.manage is required',
+            'code': 'AUTH_PERMISSION_DENIED',
+        }
+
+
+def test_themes_api_updates_design_settings_and_public_context(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify safe design settings persist and flow into public template context."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+
+    list_response = client.get('/api/v1/themes', headers=headers)
+    update_response = client.put(
+        '/api/v1/themes/settings',
+        headers=headers,
+        json={
+            'design_settings': {
+                'primary_color': '#123abc',
+                'accent_color': '#654321',
+                'typography_preset': 'serif',
+                'spacing_scale': 'spacious',
+                'radius_scale': 'large',
+            },
+        },
+    )
+
+    assert list_response.status_code == 200
+    assert update_response.status_code == 200
+    payload = update_response.json()
+    assert payload['design_settings']['primary_color'] == '#123abc'
+    assert payload['design_settings']['typography_preset'] == 'serif'
+    assert payload['current_theme_id'] == 'default'
+
+    rendered_response = client.get('/')
+    assert rendered_response.status_code == 200
+    assert '<style id="pragma-design-settings">' in rendered_response.text
+    assert '--site-primary: #123abc;' in rendered_response.text
+    assert '--site-accent: #654321;' in rendered_response.text
+    assert '--site-cta-start: #123abc;' in rendered_response.text
+    assert '--site-cta-end: #654321;' in rendered_response.text
+    assert '/theme/static/css/main.css' in rendered_response.text
+
+    captured_context: dict[str, object] = {}
+
+    def _capture_render(template_name: str, context: dict[str, object] | None = None) -> str:
+        _ = template_name
+        assert context is not None
+        captured_context.update(context)
+        return '<html><body>captured</body></html>'
+
+    monkeypatch.setattr(client.app.state.theme_runtime, 'render_template', _capture_render)
+
+    response = client.get('/')
+
+    assert response.status_code == 200
+    assert captured_context['design_settings']['primary_color'] == '#123abc'
+    assert captured_context['site']['design']['typography_preset'] == 'serif'
+
+
+def test_themes_api_rejects_invalid_activation_and_design_values(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify invalid theme ids and unsafe design values fail closed."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+
+    missing_response = client.put(
+        '/api/v1/themes/settings',
+        headers=headers,
+        json={'active_theme_id': 'missing-theme'},
+    )
+    unsafe_response = client.put(
+        '/api/v1/themes/settings',
+        headers=headers,
+        json={'design_settings': {'primary_color': 'expression(alert(1))'}},
+    )
+
+    assert missing_response.status_code == 400
+    assert missing_response.json()['code'] == 'THEME_ACTIVE_NOT_FOUND'
+    assert unsafe_response.status_code == 422
+
+
+def test_themes_api_reset_restores_environment_defaults(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify reset deletes persisted state and returns env/default behavior."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    update_response = client.put(
+        '/api/v1/themes/settings',
+        headers=headers,
+        json={'design_settings': {'primary_color': '#123abc'}},
+    )
+    reset_response = client.post('/api/v1/themes/settings/reset', headers=headers)
+
+    assert update_response.status_code == 200
+    assert reset_response.status_code == 200
+    payload = reset_response.json()
+    assert payload['persisted_active_theme_id'] is None
+    assert payload['active_theme_id'] == 'default'
+    assert payload['design_settings']['primary_color'] == '#2563eb'

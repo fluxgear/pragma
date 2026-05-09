@@ -4,8 +4,10 @@ import type { ContentEntryResponse, ContentTypeResponse } from '@/api/types'
 import {
   ContentEntryFormError,
   buildContentEntryFormState,
+  buildContentEntrySeoMetadataFormState,
   isRichTextEffectivelyEmpty,
   serializeContentEntryFormState,
+  serializeContentEntrySeoMetadataFormState,
 } from '@/features/content/form'
 
 const contentType: ContentTypeResponse = {
@@ -13,6 +15,8 @@ const contentType: ContentTypeResponse = {
   name: 'Articles',
   slug: 'articles',
   description: 'Article content',
+  entry_count: 1,
+  can_delete: false,
   field_definitions: [
     {
       name: 'title',
@@ -55,6 +59,17 @@ const existingEntry: ContentEntryResponse = {
       featured: true,
     },
   },
+  seo_metadata: {
+    title: 'SEO Hello',
+    description: 'SEO description',
+    canonical_url: '/hello-world',
+    robots: 'noindex',
+    og_title: 'OG Hello',
+    og_description: 'OG description',
+    og_image: '/media/og.png',
+  },
+  version: 3,
+  revision_number: 2,
   published_at: null,
   created_by_user_id: null,
   updated_by_user_id: null,
@@ -71,6 +86,63 @@ describe('content form helpers', () => {
     expect(serialized.slug).toBe('hello-world')
     expect(serialized.payload.body).toBe(existingEntry.payload.body)
     expect(serialized.payload.meta).toEqual({ featured: true })
+  })
+
+  it('deserializes and serializes SEO metadata and expected version fields', () => {
+    const state = buildContentEntryFormState(contentType, existingEntry)
+
+    expect(state.seo_metadata).toEqual({
+      title: 'SEO Hello',
+      description: 'SEO description',
+      canonical_url: '/hello-world',
+      robots: 'noindex',
+      og_title: 'OG Hello',
+      og_description: 'OG description',
+      og_image: '/media/og.png',
+    })
+    expect(state.expected_version).toBe(3)
+
+    state.seo_metadata.title = '  Updated SEO  '
+    state.seo_metadata.description = ''
+    state.seo_metadata.canonical_url = '  /updated  '
+    state.seo_metadata.robots = 'index'
+    state.seo_metadata.og_image = ''
+
+    const serialized = serializeContentEntryFormState(contentType, state)
+
+    expect(serialized.seo_metadata).toEqual({
+      title: 'Updated SEO',
+      description: null,
+      canonical_url: '/updated',
+      robots: 'index',
+      og_title: 'OG Hello',
+      og_description: 'OG description',
+      og_image: null,
+    })
+    expect(serialized.expected_version).toBe(3)
+  })
+
+  it('normalizes empty SEO metadata form fields to backend nulls', () => {
+    const state = buildContentEntrySeoMetadataFormState(null)
+
+    expect(state).toEqual({
+      title: '',
+      description: '',
+      canonical_url: '',
+      robots: 'index',
+      og_title: '',
+      og_description: '',
+      og_image: '',
+    })
+    expect(serializeContentEntrySeoMetadataFormState(state)).toEqual({
+      title: null,
+      description: null,
+      canonical_url: null,
+      robots: 'index',
+      og_title: null,
+      og_description: null,
+      og_image: null,
+    })
   })
 
   it('rejects malformed JSON input before submission', () => {

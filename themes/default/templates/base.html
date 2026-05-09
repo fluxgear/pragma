@@ -2,6 +2,7 @@
 {% set seo = seo|default({}, true) %}
 {% set site_name = site.name|default('Pragma', true) %}
 {% set theme_static = theme_static|default('/themes/default/static', true) %}
+{% set design_settings = design_settings|default(site.design|default({}, true), true) %}
 {% set theme_mode = theme_mode|default('light', true) %}
 {% set page_title = page_title|default(seo.title|default('', true), true) %}
 {% set page_description = page_description|default(seo.description|default('Commercial-grade publishing and presentation for modern teams.', true), true) %}
@@ -32,6 +33,18 @@
     <meta name="twitter:title" content="{{ og_title }}">
     <meta name="twitter:description" content="{{ og_description }}">
     {% if og_image %}<meta name="twitter:image" content="{{ og_image }}">{% endif %}
+    <style id="pragma-design-settings">
+        :root {
+            --site-bg: {{ design_settings.background_color|default('#f5f7fb', true) }};
+            --site-surface-strong: {{ design_settings.background_color|default('#ffffff', true) }};
+            --site-text: {{ design_settings.text_color|default('#162033', true) }};
+            --site-primary: {{ design_settings.primary_color|default('#3559e6', true) }};
+            --site-primary-strong: {{ design_settings.primary_color|default('#2038a8', true) }};
+            --site-accent: {{ design_settings.accent_color|default('#08768d', true) }};
+            --site-cta-start: {{ design_settings.primary_color|default('#3559e6', true) }};
+            --site-cta-end: {{ design_settings.accent_color|default('#08768d', true) }};
+        }
+    </style>
     <link rel="stylesheet" href="{{ theme_static }}/css/main.css">
 </head>
 <body class="site-shell">

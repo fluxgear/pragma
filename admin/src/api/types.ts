@@ -19,6 +19,8 @@ export interface ReadinessResponse {
   capabilities: Record<string, CapabilityStatus>
 }
 
+export type PermissionSource = 'roles' | 'superuser'
+
 export interface UserResponse {
   id: string
   email: string
@@ -27,6 +29,11 @@ export interface UserResponse {
   is_active: boolean
   is_superuser: boolean
   roles: string[]
+  assigned_permissions: string[]
+  effective_permissions: string[]
+  has_all_permissions: boolean
+  permission_source: PermissionSource
+  /** Backend aliases permissions to the effective permission set for guards. */
   permissions: string[]
   force_password_change: boolean
 }
@@ -78,6 +85,26 @@ export interface RoleListResponse {
   total: number
 }
 
+export interface PermissionDefinitionResponse {
+  key: string
+  name: string
+  description: string | null
+  domain: string
+}
+
+export interface RolesAdminListResponse {
+  items: RoleResponse[]
+  total: number
+  permission_definitions: PermissionDefinitionResponse[]
+}
+
+export interface RoleCreateRequest {
+  role_key: string
+  name: string
+  description?: string | null
+  permission_keys: string[]
+}
+
 export interface AdminUserResponse extends UserResponse {
   last_login_at: string | null
   password_changed_at: string | null
@@ -121,6 +148,8 @@ interface ContentFieldDefinitionBase {
   name: string
   label: string
   required: boolean
+  help_text?: string | null
+  default_value?: unknown
 }
 
 export interface TextFieldDefinition extends ContentFieldDefinitionBase {
@@ -157,6 +186,22 @@ export interface JsonFieldDefinition extends ContentFieldDefinitionBase {
   kind: 'json'
 }
 
+export interface BlockDocumentFieldDefinition extends ContentFieldDefinitionBase {
+  kind: 'block_document'
+}
+
+export interface BlockNode {
+  type: string
+  props: Record<string, unknown>
+  settings: Record<string, unknown>
+  children: BlockNode[]
+}
+
+export interface BlockDocument {
+  version: 1
+  root: BlockNode
+}
+
 export type ContentFieldDefinition =
   | TextFieldDefinition
   | IntegerFieldDefinition
@@ -165,6 +210,7 @@ export type ContentFieldDefinition =
   | DateFieldDefinition
   | DateTimeFieldDefinition
   | JsonFieldDefinition
+  | BlockDocumentFieldDefinition
 
 export interface ContentTypeResponse {
   id: string
@@ -172,6 +218,8 @@ export interface ContentTypeResponse {
   slug: string
   description: string | null
   field_definitions: ContentFieldDefinition[]
+  entry_count: number
+  can_delete: boolean
   created_by_user_id: string | null
   updated_by_user_id: string | null
   created_at: string
@@ -185,7 +233,33 @@ export interface ContentTypeListResponse {
   offset: number
 }
 
+export interface ContentTypeCreateRequest {
+  name: string
+  slug?: string | null
+  description?: string | null
+  field_definitions: ContentFieldDefinition[]
+}
+
+export interface ContentTypeUpdateRequest {
+  name: string
+  slug?: string | null
+  description?: string | null
+  field_definitions: ContentFieldDefinition[]
+}
+
 export type ContentEntryStatus = 'draft' | 'published' | 'archived'
+
+export type ContentSeoRobots = 'index' | 'noindex'
+
+export interface ContentEntrySeoMetadata {
+  title: string | null
+  description: string | null
+  canonical_url: string | null
+  robots: ContentSeoRobots
+  og_title: string | null
+  og_description: string | null
+  og_image: string | null
+}
 
 export interface ContentEntryResponse {
   id: string
@@ -194,6 +268,9 @@ export interface ContentEntryResponse {
   slug: string
   status: ContentEntryStatus
   payload: Record<string, unknown>
+  seo_metadata: ContentEntrySeoMetadata
+  version: number
+  revision_number: number | null
   published_at: string | null
   created_by_user_id: string | null
   updated_by_user_id: string | null
@@ -213,12 +290,51 @@ export interface ContentEntryCreateRequest {
   slug: string | null
   status: ContentEntryStatus
   payload: Record<string, unknown>
+  seo_metadata?: ContentEntrySeoMetadata
 }
 
 export interface ContentEntryUpdateRequest {
   slug: string | null
   status: ContentEntryStatus
   payload: Record<string, unknown>
+  seo_metadata?: ContentEntrySeoMetadata
+  expected_version?: number | null
+}
+
+export type ContentEntryRevisionAction = 'create' | 'update' | 'publish' | 'unpublish' | 'restore'
+
+export interface ContentEntryRevisionResponse {
+  id: string
+  entry_id: string
+  revision_number: number
+  action: ContentEntryRevisionAction
+  slug: string
+  status: ContentEntryStatus
+  payload: Record<string, unknown>
+  seo_metadata: ContentEntrySeoMetadata
+  published_at: string | null
+  created_by_user_id: string | null
+  created_at: string
+  restore_source_revision_id: string | null
+}
+
+export interface ContentEntryRevisionListResponse {
+  items: ContentEntryRevisionResponse[]
+}
+
+export interface ContentEntryWorkflowRequest {
+  expected_version?: number | null
+}
+
+export type ContentEntryTransitionRequest = ContentEntryWorkflowRequest
+
+export type ContentEntryRevisionRestoreRequest = ContentEntryWorkflowRequest
+
+export interface ContentEntryPreviewResponse {
+  entry_id: string
+  token: string
+  preview_url: string
+  expires_at: string
 }
 
 export interface MediaSelection {
@@ -259,16 +375,45 @@ export interface MediaAssetListResponse {
   offset: number
 }
 
-export type AIProviderKind = 'voyage' | 'openai_compatible'
+export type AIProviderKind = 'voyage' | 'openai' | 'openai_compatible'
+
+export type AIProviderApiMode = 'responses' | 'chat_completions'
+
+export type AIProviderAuthMode = 'api_key' | 'oauth'
+
+export type AICapability =
+  | 'text_generation'
+  | 'editor_assist'
+  | 'seo_assist'
+  | 'embeddings'
+  | 'image_generation'
+  | 'streaming'
+  | 'tool_calling'
+
+export interface AIProviderSecretStatus {
+  configured: boolean
+  auth_mode: AIProviderAuthMode
+  last4: string | null
+  updated_at: string | null
+}
 
 export interface AIProviderSettingsResponse {
   enabled: boolean
   provider: AIProviderKind | null
+  display_name: string | null
+  api_mode: AIProviderApiMode
+  auth_mode: AIProviderAuthMode
   base_url: string | null
   embedding_model: string | null
   embedding_dimensions: number | null
+  generation_model: string | null
+  capabilities: AICapability[]
   request_timeout_seconds: number | null
   api_key_configured: boolean
+  api_key_status: AIProviderSecretStatus
+  oauth_connected: boolean
+  last_test_status: string | null
+  last_tested_at: string | null
   updated_at: string | null
   embeddings_rebuild_required: boolean
 }
@@ -276,9 +421,16 @@ export interface AIProviderSettingsResponse {
 export interface AIProviderSettingsUpdateRequest {
   enabled: boolean
   provider: AIProviderKind | null
+  display_name?: string | null
+  api_mode: AIProviderApiMode
+  auth_mode: AIProviderAuthMode
   base_url: string | null
   embedding_model: string | null
   embedding_dimensions: number | null
+  generation_model?: string | null
+  text_generation_enabled: boolean
+  editor_assist_enabled: boolean
+  seo_assist_enabled: boolean
   request_timeout_seconds: number
   api_key?: string | null
   retain_existing_api_key?: boolean
@@ -294,6 +446,49 @@ export interface AIProviderTestResponse {
   embedding_dimensions: number
 }
 
+export type AIGenerationScope = 'editor' | 'seo'
+
+export type AIGenerationMessageRole = 'system' | 'developer' | 'user' | 'assistant'
+
+export interface AIGenerationMessage {
+  role: AIGenerationMessageRole
+  content: string
+}
+
+export interface AIGenerationRequest {
+  scope: AIGenerationScope
+  input: string
+  instructions?: string | null
+  messages?: AIGenerationMessage[]
+  model?: string | null
+  temperature?: number | null
+  max_output_tokens?: number | null
+}
+
+export interface AIGenerationResponse {
+  provider: AIProviderKind
+  api_mode: AIProviderApiMode
+  model: string
+  text: string
+  finish_reason: string | null
+  usage: Record<string, number> | null
+}
+
+export interface AIOAuthStatusResponse {
+  provider: AIProviderKind | null
+  supported: boolean
+  connected: boolean
+  auth_mode: AIProviderAuthMode | null
+  reason: string
+}
+
+export interface AIOAuthStartResponse {
+  supported: boolean
+  authorization_url: string | null
+  state: string | null
+  reason: string
+}
+
 export interface AISearchEmbeddingRebuildRequest {
   batch_size: number
   max_documents: number
@@ -306,6 +501,51 @@ export interface AISearchEmbeddingRebuildResponse {
   embedded: number
   failed: number
   failed_entry_ids: string[]
+}
+
+export type ThemeTypographyPreset = 'system' | 'serif' | 'editorial'
+
+export type ThemeSpacingScale = 'compact' | 'comfortable' | 'spacious'
+
+export type ThemeRadiusScale = 'none' | 'small' | 'medium' | 'large'
+
+export interface ThemeDesignSettings {
+  primary_color: string
+  accent_color: string
+  background_color: string
+  text_color: string
+  typography_preset: ThemeTypographyPreset
+  spacing_scale: ThemeSpacingScale
+  radius_scale: ThemeRadiusScale
+}
+
+export type ThemeDesignSettingsUpdate = Partial<ThemeDesignSettings>
+
+export interface ThemeManifestResponse {
+  id: string
+  name: string
+  version: string
+  description: string | null
+  author: string | null
+  active: boolean
+  default: boolean
+  current: boolean
+  available: boolean
+}
+
+export interface ThemeSettingsResponse {
+  active_theme_id: string
+  default_theme_id: string
+  current_theme_id: string | null
+  persisted_active_theme_id: string | null
+  design_settings: ThemeDesignSettings
+  design_warnings: string[]
+  themes: ThemeManifestResponse[]
+}
+
+export interface ThemeSettingsUpdateRequest {
+  active_theme_id?: string | null
+  design_settings?: ThemeDesignSettingsUpdate | null
 }
 
 export interface ModuleStateResponse {

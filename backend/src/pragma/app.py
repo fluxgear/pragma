@@ -100,14 +100,17 @@ def build_lifespan(settings: Settings) -> Callable[[FastAPI], AsyncIterator[None
         app.state.realtime_listener = realtime_listener
         storage.open()
         app.state.storage = storage
+        theme_runtime._navigation_storage = storage
         set_active_module_runtime(module_runtime)
         set_active_realtime_publisher(realtime_publisher)
 
         try:
             module_runtime.refresh(storage)
+            theme_runtime.refresh(storage)
             await realtime_listener.start()
             yield
         finally:
+            theme_runtime._navigation_storage = None
             set_active_realtime_publisher(None)
             set_active_module_runtime(None)
             await realtime_listener.stop()
@@ -176,10 +179,13 @@ def create_app() -> FastAPI:
 
     from pragma.ai.router import router as ai_router
     from pragma.auth.admin_router import router as users_router
+    from pragma.auth.roles_router import router as roles_router
     from pragma.modules.router import router as modules_router
+    from pragma.navigation.router import router as navigation_router
     from pragma.public.router import router as public_router
     from pragma.realtime.router import router as realtime_router
     from pragma.search.router import router as search_router
+    from pragma.themes.router import router as themes_router
 
     settings = get_settings()
     _configure_logging(settings)
@@ -199,7 +205,10 @@ def create_app() -> FastAPI:
     app.include_router(search_router, prefix='/api/v1')
     app.include_router(ai_router, prefix='/api/v1')
     app.include_router(modules_router, prefix='/api/v1')
+    app.include_router(themes_router, prefix='/api/v1')
+    app.include_router(navigation_router, prefix='/api/v1')
     app.include_router(users_router, prefix='/api/v1')
+    app.include_router(roles_router, prefix='/api/v1')
     app.include_router(realtime_router, prefix='/api/v1')
     app.include_router(public_router)
     return app

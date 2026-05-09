@@ -17,6 +17,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from pragma.auth import permissions as auth_permissions
+
 
 def _bootstrap_admin(client: TestClient, bootstrap_payload: dict[str, str]) -> None:
     """Create the first super-admin for permission tests.
@@ -204,7 +206,7 @@ def test_viewer_role_can_read_but_not_manage_content_types(
         password=bootstrap_payload['password'],
     )
     admin_headers = _auth_headers(admin_payload['access_token'])
-    _create_content_type(client, admin_headers)
+    content_type = _create_content_type(client, admin_headers)
 
     _create_managed_user(
         client,
@@ -225,6 +227,13 @@ def test_viewer_role_can_read_but_not_manage_content_types(
     assert list_response.status_code == 200
     assert list_response.json()['total'] == 1
 
+    get_response = client.get(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=viewer_headers,
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()['id'] == content_type['id']
+
     create_response = client.post(
         '/api/v1/content/types',
         headers=viewer_headers,
@@ -236,23 +245,33 @@ def test_viewer_role_can_read_but_not_manage_content_types(
         'code': 'AUTH_PERMISSION_DENIED',
     }
 
+    update_response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=viewer_headers,
+        json=_content_type_payload(),
+    )
+    assert update_response.status_code == 403
+    assert update_response.json() == {
+        'detail': 'Permission content.types.manage is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
+
+    delete_response = client.delete(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=viewer_headers,
+    )
+    assert delete_response.status_code == 403
+    assert delete_response.json() == {
+        'detail': 'Permission content.types.manage is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
+
 
 def test_author_role_cannot_publish_entries(
     client: TestClient,
     bootstrap_payload: dict[str, str],
 ) -> None:
-    """Verify author role can draft content but cannot publish entries.
-
-    Args:
-        client: FastAPI test client.
-        bootstrap_payload: Bootstrap request payload.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-    """
+    """Verify author role can draft content but cannot publish entries."""
 
     _bootstrap_admin(client, bootstrap_payload)
     admin_payload = _login_user(
@@ -291,6 +310,17 @@ def test_author_role_cannot_publish_entries(
     assert draft_response.status_code == 201
     assert draft_response.json()['status'] == 'draft'
 
+    explicit_publish_response = client.post(
+        f"/api/v1/content/entries/{draft_response.json()['id']}/publish",
+        headers=author_headers,
+        json={'expected_version': draft_response.json()['version']},
+    )
+    assert explicit_publish_response.status_code == 403
+    assert explicit_publish_response.json() == {
+        'detail': 'Permission content.entries.publish is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
+
     publish_response = client.post(
         '/api/v1/content/entries',
         headers=author_headers,
@@ -319,6 +349,34 @@ def test_author_role_cannot_publish_entries(
     )
     assert published_entry_response.status_code == 201
     published_entry = published_entry_response.json()
+
+    explicit_unpublish_response = client.post(
+        f"/api/v1/content/entries/{published_entry['id']}/unpublish",
+        headers=author_headers,
+        json={'expected_version': published_entry['version']},
+    )
+    assert explicit_unpublish_response.status_code == 403
+    assert explicit_unpublish_response.json() == {
+        'detail': 'Permission content.entries.publish is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
+
+    revisions_response = client.get(
+        f"/api/v1/content/entries/{published_entry['id']}/revisions",
+        headers=admin_headers,
+    )
+    assert revisions_response.status_code == 200
+    published_revision_id = revisions_response.json()['items'][0]['id']
+    restore_published_response = client.post(
+        f"/api/v1/content/entries/{published_entry['id']}/revisions/{published_revision_id}/restore",
+        headers=author_headers,
+        json={'expected_version': published_entry['version']},
+    )
+    assert restore_published_response.status_code == 403
+    assert restore_published_response.json() == {
+        'detail': 'Permission content.entries.publish is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
 
     update_published_response = client.put(
         f"/api/v1/content/entries/{published_entry['id']}",
@@ -521,3 +579,55 @@ def test_force_password_change_blocks_protected_routes_until_password_rotates(
         headers=_auth_headers(rotated_payload['access_token']),
     )
     assert allowed_response.status_code == 200
+
+
+def test_permission_registry_includes_c2_exact_keys_and_administrator_access() -> None:
+    """Verify C2 registry keys and administrator permissions.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    c2_permission_keys = {
+        auth_permissions.PERMISSION_ADMIN_ACCESS,
+        auth_permissions.PERMISSION_ROLES_MANAGE,
+        auth_permissions.PERMISSION_THEMES_MANAGE,
+        auth_permissions.PERMISSION_SETTINGS_MANAGE,
+        auth_permissions.PERMISSION_PAGE_BUILDER_USE,
+        auth_permissions.PERMISSION_PAGE_BUILDER_DESIGN,
+        auth_permissions.PERMISSION_NAVIGATION_MANAGE,
+        auth_permissions.PERMISSION_AI_EDITOR_ASSIST,
+        auth_permissions.PERMISSION_AI_SEO_ASSIST,
+        auth_permissions.PERMISSION_AI_OAUTH_MANAGE,
+    }
+    assert c2_permission_keys == {
+        'admin.access',
+        'roles.manage',
+        'themes.manage',
+        'settings.manage',
+        'page_builder.use',
+        'page_builder.design',
+        'navigation.manage',
+        'ai.editor_assist',
+        'ai.seo_assist',
+        'ai.oauth.manage',
+    }
+
+    permission_definitions = auth_permissions.get_permission_definitions()
+    permission_keys = {definition.key for definition in permission_definitions}
+    assert c2_permission_keys <= permission_keys
+    assert len(permission_keys) == len(permission_definitions)
+    assert all('*' not in permission_key for permission_key in permission_keys)
+
+    administrator_role = next(
+        role
+        for role in auth_permissions.get_role_definitions()
+        if role.key == auth_permissions.ROLE_ADMINISTRATOR
+    )
+    assert set(administrator_role.permissions) == permission_keys

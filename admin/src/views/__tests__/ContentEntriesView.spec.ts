@@ -5,19 +5,29 @@ import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
+import { ApiClientError } from '@/api/errors'
 import type {
+  BlockDocument,
   ContentEntryResponse,
+  ContentEntryRevisionResponse,
+  ContentEntrySeoMetadata,
   ContentTypeResponse,
   RealtimeEventEnvelope,
 } from '@/api/types'
+import BlockEditorShell from '@/components/content/blocks/BlockEditorShell.vue'
 import ContentEntryForm from '@/components/content/ContentEntryForm.vue'
 import { useAuthStore } from '@/stores/auth'
 import ContentEntriesView from '@/views/ContentEntriesView.vue'
 
 const contentApiMocks = vi.hoisted(() => ({
   createContentEntry: vi.fn(),
+  createContentEntryPreview: vi.fn(),
   listContentEntries: vi.fn(),
+  listContentEntryRevisions: vi.fn(),
   listContentTypes: vi.fn(),
+  publishContentEntry: vi.fn(),
+  restoreContentEntryRevision: vi.fn(),
+  unpublishContentEntry: vi.fn(),
   updateContentEntry: vi.fn(),
 }))
 
@@ -80,6 +90,8 @@ const contentType: ContentTypeResponse = {
   name: 'Articles',
   slug: 'articles',
   description: 'Article content',
+  entry_count: 1,
+  can_delete: false,
   field_definitions: [
     {
       name: 'title',
@@ -103,6 +115,16 @@ const contentType: ContentTypeResponse = {
   updated_at: '2026-04-21T00:00:00Z',
 }
 
+const defaultSeoMetadata: ContentEntrySeoMetadata = {
+  title: null,
+  description: null,
+  canonical_url: null,
+  robots: 'index',
+  og_title: null,
+  og_description: null,
+  og_image: null,
+}
+
 const existingEntry: ContentEntryResponse = {
   id: 'entry-1',
   content_type_id: 'type-1',
@@ -113,6 +135,9 @@ const existingEntry: ContentEntryResponse = {
     title: 'Hello World',
     body: '<p>Hello</p>',
   },
+  seo_metadata: defaultSeoMetadata,
+  version: 4,
+  revision_number: 3,
   published_at: null,
   created_by_user_id: null,
   updated_by_user_id: null,
@@ -120,11 +145,83 @@ const existingEntry: ContentEntryResponse = {
   updated_at: '2026-04-21T00:00:00Z',
 }
 
+const blockDocument: BlockDocument = {
+  version: 1,
+  root: {
+    type: 'section',
+    props: {},
+    settings: {},
+    children: [
+      {
+        type: 'container',
+        props: {},
+        settings: {},
+        children: [
+          { type: 'heading', props: { text: 'Block page', level: 2 }, settings: {}, children: [] },
+        ],
+      },
+    ],
+  },
+}
+
+const blockContentType: ContentTypeResponse = {
+  ...contentType,
+  id: 'type-block',
+  name: 'Pages',
+  slug: 'pages',
+  description: 'Composable pages',
+  field_definitions: [
+    {
+      name: 'title',
+      label: 'Title',
+      kind: 'text',
+      required: true,
+      min_length: 1,
+      max_length: 120,
+    },
+    {
+      name: 'body',
+      label: 'Body',
+      kind: 'block_document',
+      required: false,
+      help_text: 'Block page body.',
+    },
+  ],
+}
+
+const blockEntry: ContentEntryResponse = {
+  ...existingEntry,
+  id: 'entry-block',
+  content_type_id: 'type-block',
+  content_type_slug: 'pages',
+  slug: 'home',
+  payload: {
+    title: 'Home',
+    body: blockDocument,
+  },
+}
+
+const revisionRecord: ContentEntryRevisionResponse = {
+  id: 'revision-3',
+  entry_id: 'entry-1',
+  revision_number: 3,
+  action: 'update',
+  slug: 'hello-world',
+  status: 'draft',
+  payload: existingEntry.payload,
+  seo_metadata: defaultSeoMetadata,
+  published_at: null,
+  created_by_user_id: null,
+  created_at: '2026-04-21T00:05:00Z',
+  restore_source_revision_id: null,
+}
+
 function createTestRouter() {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/app/content', name: 'content', component: ContentEntriesView },
+      { path: '/app/content-models', name: 'content-models', component: { template: '<div>Content models</div>' } },
     ],
   })
 }
@@ -133,7 +230,8 @@ async function mountView(permissions = [
   'content.entries.read',
   'content.entries.write',
   'content.entries.publish',
-]) {
+  'content.types.read',
+], initialRoute = '/app/content') {
   const pinia = createPinia()
   setActivePinia(pinia)
 
@@ -152,7 +250,7 @@ async function mountView(permissions = [
   }
 
   const router = createTestRouter()
-  await router.push('/app/content')
+  await router.push(initialRoute)
   await router.isReady()
 
   const wrapper = mount(ContentEntriesView, {
@@ -164,7 +262,7 @@ async function mountView(permissions = [
   await flushPromises()
   await flushPromises()
 
-  return { wrapper }
+  return { wrapper, router }
 }
 
 describe('ContentEntriesView', () => {
@@ -183,8 +281,18 @@ describe('ContentEntriesView', () => {
       limit: 50,
       offset: 0,
     })
+    contentApiMocks.listContentEntryRevisions.mockResolvedValue({ items: [revisionRecord] })
     contentApiMocks.createContentEntry.mockResolvedValue(existingEntry)
     contentApiMocks.updateContentEntry.mockResolvedValue(existingEntry)
+    contentApiMocks.publishContentEntry.mockResolvedValue({ ...existingEntry, status: 'published', version: 5, revision_number: 4 })
+    contentApiMocks.unpublishContentEntry.mockResolvedValue({ ...existingEntry, status: 'draft', version: 6, revision_number: 5 })
+    contentApiMocks.restoreContentEntryRevision.mockResolvedValue({ ...existingEntry, version: 7, revision_number: 6 })
+    contentApiMocks.createContentEntryPreview.mockResolvedValue({
+      entry_id: 'entry-1',
+      token: 'preview-token',
+      preview_url: '/preview/content/preview-token',
+      expires_at: '2026-04-21T00:15:00Z',
+    })
   })
 
   afterEach(() => {
@@ -210,6 +318,78 @@ describe('ContentEntriesView', () => {
     expect(wrapper.text()).toContain('Hello World')
   })
 
+  it('links to content models when no models exist and the user can read models', async () => {
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper, router } = await mountView(['content.entries.read', 'content.types.read'])
+
+    expect(wrapper.text()).toContain('No content models exist yet')
+    expect(wrapper.text()).toContain('Create a content model before authoring entries')
+    expect(wrapper.text()).not.toContain('content API first')
+    expect(contentApiMocks.listContentEntries).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="open-content-models"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/app/content-models')
+  })
+
+  it('shows no-permission guidance when no models exist and the user cannot read models', async () => {
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper } = await mountView(['content.entries.read'])
+
+    expect(wrapper.text()).toContain('Content entries need a content model')
+    expect(wrapper.text()).toContain('Ask an administrator with content model access')
+    expect(wrapper.text()).not.toContain('content API first')
+    expect(wrapper.find('[data-testid="open-content-models"]').exists()).toBe(false)
+  })
+
+  it('auto-selects the contentTypeId query parameter after content types load', async () => {
+    const secondContentType: ContentTypeResponse = {
+      ...contentType,
+      id: 'type-2',
+      name: 'Pages',
+      slug: 'pages',
+      description: 'Page content',
+      entry_count: 0,
+      can_delete: true,
+    }
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [contentType, secondContentType],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    })
+    contentApiMocks.listContentEntries.mockResolvedValueOnce({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper } = await mountView(undefined, '/app/content?contentTypeId=type-2')
+
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledWith({
+      content_type_id: 'type-2',
+      limit: 50,
+      offset: 0,
+      order_by: 'updated_at',
+    })
+    expect(wrapper.text()).toContain('Pages')
+    expect(wrapper.text()).toContain('Page content')
+  })
+
   it('creates a new entry from the dialog form payload and reloads the list', async () => {
     const { wrapper } = await mountView()
 
@@ -229,6 +409,7 @@ describe('ContentEntriesView', () => {
         title: 'Created from dialog',
         body: '<p>Created</p>',
       },
+      seo_metadata: { ...defaultSeoMetadata, title: 'Created SEO' },
     })
     await flushPromises()
 
@@ -240,6 +421,7 @@ describe('ContentEntriesView', () => {
         title: 'Created from dialog',
         body: '<p>Created</p>',
       },
+      seo_metadata: { ...defaultSeoMetadata, title: 'Created SEO' },
     })
     expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(2)
   })
@@ -263,6 +445,8 @@ describe('ContentEntriesView', () => {
         title: 'Hello World',
         body: '<blockquote><p>Archived</p></blockquote>',
       },
+      seo_metadata: { ...defaultSeoMetadata, description: 'Archived description' },
+      expected_version: 4,
     })
     await flushPromises()
 
@@ -273,7 +457,271 @@ describe('ContentEntriesView', () => {
         title: 'Hello World',
         body: '<blockquote><p>Archived</p></blockquote>',
       },
+      seo_metadata: { ...defaultSeoMetadata, description: 'Archived description' },
+      expected_version: 4,
     })
+  })
+
+  it('opens the block editor shell for block-document content types and stores route state', async () => {
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [blockContentType],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    contentApiMocks.listContentEntries.mockResolvedValueOnce({
+      items: [blockEntry],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper, router } = await mountView()
+
+    await wrapper.get('[data-testid="entry-edit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(ContentEntryForm).exists()).toBe(false)
+    expect(wrapper.getComponent(BlockEditorShell).text()).toContain('Editing home')
+    expect(wrapper.text()).toContain('Draft suggestion assistant')
+    expect(wrapper.text()).toContain('backend /ai/generate editor scope')
+    expect(router.currentRoute.value.query.blockEditor).toBe('entry-block')
+  })
+
+  it('opens a new-entry block editor shell without saving for block-document content types', async () => {
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [blockContentType],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    contentApiMocks.listContentEntries.mockResolvedValueOnce({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper, router } = await mountView()
+
+    const newEntryButton = wrapper.findAll('button').find((button) => button.text().includes('New entry'))
+    if (!newEntryButton) {
+      throw new Error('New entry button not found')
+    }
+
+    await newEntryButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(ContentEntryForm).exists()).toBe(false)
+    expect(wrapper.getComponent(BlockEditorShell).text()).toContain('New Pages block entry')
+    expect(wrapper.text()).toContain('No block document content yet')
+    expect(router.currentRoute.value.query.blockEditor).toBe('new')
+    expect(contentApiMocks.createContentEntry).not.toHaveBeenCalled()
+  })
+
+  it('guards block editor close when editable draft changes may be unsaved', async () => {
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [blockContentType],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    contentApiMocks.listContentEntries.mockResolvedValueOnce({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+
+    const { wrapper, router } = await mountView()
+
+    const newEntryButton = wrapper.findAll('button').find((button) => button.text().includes('New entry'))
+    if (!newEntryButton) {
+      throw new Error('New entry button not found')
+    }
+
+    await newEntryButton.trigger('click')
+    await flushPromises()
+
+    wrapper.getComponent(BlockEditorShell).vm.$emit('close')
+    await flushPromises()
+
+    expect(confirmSpy).toHaveBeenCalledWith('You have unsaved content changes. Leave without saving?')
+    expect(wrapper.findComponent(BlockEditorShell).exists()).toBe(true)
+    expect(router.currentRoute.value.query.blockEditor).toBe('new')
+
+    wrapper.getComponent(BlockEditorShell).vm.$emit('close')
+    await flushPromises()
+
+    expect(wrapper.findComponent(BlockEditorShell).exists()).toBe(false)
+    expect(router.currentRoute.value.query.blockEditor).toBeUndefined()
+  })
+
+  it('creates a draft block-document entry, updates route state, and reloads the saved document', async () => {
+    const createdEntry: ContentEntryResponse = {
+      ...blockEntry,
+      id: 'entry-created',
+      slug: 'created-page',
+      payload: {
+        title: 'Untitled Pages',
+        body: {
+          version: 1,
+          root: {
+            type: 'section',
+            props: {},
+            settings: {},
+            children: [
+              { type: 'heading', props: { text: 'Saved page', level: 2 }, settings: {}, children: [] },
+            ],
+          },
+        },
+      },
+    }
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [blockContentType],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    contentApiMocks.listContentEntries
+      .mockResolvedValueOnce({
+        items: [],
+        total: 0,
+        limit: 50,
+        offset: 0,
+      })
+      .mockResolvedValueOnce({
+        items: [createdEntry],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      })
+    contentApiMocks.createContentEntry.mockResolvedValueOnce(createdEntry)
+
+    const { wrapper, router } = await mountView()
+
+    const newEntryButton = wrapper.findAll('button').find((button) => button.text().includes('New entry'))
+    if (!newEntryButton) {
+      throw new Error('New entry button not found')
+    }
+
+    await newEntryButton.trigger('click')
+    await flushPromises()
+
+    const shell = wrapper.getComponent(BlockEditorShell)
+    shell.vm.$emit('save', createdEntry.payload.body as BlockDocument)
+    await flushPromises()
+    await flushPromises()
+
+    expect(contentApiMocks.createContentEntry).toHaveBeenCalledWith({
+      content_type_id: 'type-block',
+      slug: null,
+      status: 'draft',
+      payload: {
+        title: 'Untitled Pages',
+        body: createdEntry.payload.body,
+      },
+    })
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(2)
+    expect(router.currentRoute.value.query.blockEditor).toBe('entry-created')
+    expect(wrapper.getComponent(BlockEditorShell).text()).toContain('Editing created-page')
+    expect(wrapper.getComponent(BlockEditorShell).text()).toContain('Saved page')
+  })
+
+  it('updates an existing block-document entry and reloads modified block payload', async () => {
+    const updatedDocument: BlockDocument = {
+      version: 1,
+      root: {
+        type: 'section',
+        props: {},
+        settings: {},
+        children: [
+          { type: 'heading', props: { text: 'Reloaded heading', level: 2 }, settings: {}, children: [] },
+        ],
+      },
+    }
+    const updatedEntry: ContentEntryResponse = {
+      ...blockEntry,
+      payload: {
+        ...blockEntry.payload,
+        body: updatedDocument,
+      },
+    }
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [blockContentType],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    contentApiMocks.listContentEntries
+      .mockResolvedValueOnce({
+        items: [blockEntry],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      })
+      .mockResolvedValueOnce({
+        items: [updatedEntry],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      })
+    contentApiMocks.updateContentEntry.mockResolvedValueOnce(updatedEntry)
+
+    const { wrapper, router } = await mountView()
+
+    await wrapper.get('[data-testid="entry-edit"]').trigger('click')
+    await flushPromises()
+
+    wrapper.getComponent(BlockEditorShell).vm.$emit('save', updatedDocument)
+    await flushPromises()
+    await flushPromises()
+
+    expect(contentApiMocks.updateContentEntry).toHaveBeenCalledWith('entry-block', {
+      slug: 'home',
+      status: 'draft',
+      payload: {
+        title: 'Home',
+        body: updatedDocument,
+      },
+      seo_metadata: defaultSeoMetadata,
+      expected_version: 4,
+    })
+    expect(contentApiMocks.listContentEntries).toHaveBeenCalledTimes(2)
+    expect(router.currentRoute.value.query.blockEditor).toBe('entry-block')
+    expect(wrapper.getComponent(BlockEditorShell).text()).toContain('Reloaded heading')
+  })
+
+  it('opens existing block documents read-only when the user cannot write and blocks save', async () => {
+    contentApiMocks.listContentTypes.mockResolvedValueOnce({
+      items: [blockContentType],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    contentApiMocks.listContentEntries.mockResolvedValueOnce({
+      items: [blockEntry],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper } = await mountView(['content.entries.read', 'content.types.read'])
+
+    await wrapper.get('[data-testid="entry-edit"]').trigger('click')
+    await flushPromises()
+
+    const shell = wrapper.getComponent(BlockEditorShell)
+    expect(shell.props('readOnly')).toBe(true)
+    expect(shell.text()).toContain('Read-only preview')
+    expect(shell.get('[data-testid="block-editor-save"]').attributes('disabled')).toBeDefined()
+
+    shell.vm.$emit('save', blockDocument)
+    await flushPromises()
+
+    expect(contentApiMocks.updateContentEntry).not.toHaveBeenCalled()
+    expect(shell.text()).toContain('You do not have permission to save this block document')
   })
 
   it('coalesces matching realtime entry event bursts into one delayed reload', async () => {
@@ -426,6 +874,86 @@ describe('ContentEntriesView', () => {
     })
   })
 
+
+  it('creates and opens preview URLs from the workflow panel', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const { wrapper } = await mountView()
+
+    await wrapper.get('[data-testid="workflow-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.createContentEntryPreview).toHaveBeenCalledWith('entry-1')
+    expect(openSpy).toHaveBeenCalledWith('/preview/content/preview-token', '_blank', 'noopener,noreferrer')
+    expect(wrapper.get('[data-testid="workflow-preview-link"]').attributes('href')).toBe('/preview/content/preview-token')
+  })
+
+  it('publishes and unpublishes with the current expected_version', async () => {
+    const publishedEntry: ContentEntryResponse = {
+      ...existingEntry,
+      status: 'published',
+      published_at: '2026-04-21T00:10:00Z',
+    }
+    contentApiMocks.listContentEntries.mockResolvedValueOnce({
+      items: [existingEntry],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    }).mockResolvedValueOnce({
+      items: [publishedEntry],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper } = await mountView()
+
+    await wrapper.get('[data-testid="workflow-publish"]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.publishContentEntry).toHaveBeenCalledWith('entry-1', { expected_version: 4 })
+
+    await wrapper.get('[data-testid="workflow-unpublish"]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.unpublishContentEntry).toHaveBeenCalledWith('entry-1', { expected_version: 4 })
+  })
+
+  it('restores a revision only after confirmation and includes expected_version', async () => {
+    const { wrapper } = await mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="revision-restore"]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.restoreContentEntryRevision).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="revision-restore-confirm"]').text()).toContain('expected_version 4')
+
+    await wrapper.get('[data-testid="revision-restore-confirm-button"]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.restoreContentEntryRevision).toHaveBeenCalledWith('entry-1', 'revision-3', { expected_version: 4 })
+  })
+
+  it('surfaces version conflict and permission denial workflow errors', async () => {
+    contentApiMocks.publishContentEntry.mockRejectedValueOnce(
+      new ApiClientError(409, 'Entry has changed.', 'CONTENT_ENTRY_VERSION_CONFLICT'),
+    )
+    const { wrapper } = await mountView()
+
+    await wrapper.get('[data-testid="workflow-publish"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="workflow-error"]').text()).toContain('Version conflict')
+
+    contentApiMocks.createContentEntryPreview.mockRejectedValueOnce(
+      new ApiClientError(403, 'Missing permission: content.entries.write', 'PERMISSION_DENIED'),
+    )
+    await wrapper.get('[data-testid="workflow-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="workflow-error"]').text()).toContain('Permission denied')
+  })
+
   it('disables create and edit controls for read-only users', async () => {
     const { wrapper } = await mountView(['content.entries.read'])
 
@@ -468,6 +996,7 @@ describe('ContentEntriesView', () => {
         title: 'Blocked publish',
         body: '<p>Blocked</p>',
       },
+      seo_metadata: defaultSeoMetadata,
     })
     await flushPromises()
 

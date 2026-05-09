@@ -27,7 +27,14 @@ from psycopg import Connection
 from psycopg import Error as PsycopgError
 
 from pragma.ai.models import (
+    AIGenerationRequest,
+    AIGenerationResponse,
+    AIGenerationScope,
+    AIOAuthStartResponse,
+    AIOAuthStatusResponse,
     AIProvider,
+    AIProviderAPIMode,
+    AIProviderAuthMode,
     AIProviderSettingsResponse,
     AIProviderSettingsUpdateRequest,
     AIProviderTestRequest,
@@ -35,7 +42,13 @@ from pragma.ai.models import (
     AISearchEmbeddingRebuildRequest,
     AISearchEmbeddingRebuildResponse,
 )
-from pragma.ai.providers import EmbeddingProviderConfig, request_embedding
+from pragma.ai.providers import (
+    EmbeddingProviderConfig,
+    GenerationProviderConfig,
+    GenerationRequest,
+    request_embedding,
+    request_generation,
+)
 from pragma.config import Settings
 from pragma.errors import AuthError, ConfigError, SearchError, StorageError
 from pragma.storage.pool import DatabasePool
@@ -253,6 +266,95 @@ def _provider_config_from_row(
     )
 
 
+def _generation_config_from_row(
+    settings_row: dict[str, object] | None,
+    *,
+    scope: AIGenerationScope,
+    allow_private_base_urls: bool = False,
+) -> GenerationProviderConfig:
+    """Build provider runtime configuration for text generation."""
+
+    if settings_row is None or not bool(settings_row['enabled']):
+        raise ConfigError(
+            detail='AI provider is disabled',
+            code='AI_SETTINGS_DISABLED',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if not bool(settings_row.get('text_generation_enabled')):
+        raise ConfigError(
+            detail='AI text generation is not enabled',
+            code='AI_GENERATION_DISABLED',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if scope is AIGenerationScope.EDITOR and not bool(settings_row.get('editor_assist_enabled')):
+        raise ConfigError(
+            detail='AI editor assist is not enabled',
+            code='AI_GENERATION_DISABLED',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if scope is AIGenerationScope.SEO and not bool(settings_row.get('seo_assist_enabled')):
+        raise ConfigError(
+            detail='AI SEO assist is not enabled',
+            code='AI_GENERATION_DISABLED',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+
+    provider_value = str(settings_row['provider'] or '').strip()
+    base_url = str(settings_row['base_url'] or '').strip()
+    api_key = str(settings_row['api_key'] or '').strip()
+    generation_model = str(settings_row.get('generation_model') or '').strip()
+    auth_mode_value = str(settings_row.get('auth_mode') or 'api_key').strip()
+    api_mode_value = str(settings_row.get('api_mode') or 'chat_completions').strip()
+    timeout_value = settings_row['request_timeout_seconds']
+    if not provider_value or not base_url or not generation_model:
+        raise ConfigError(
+            detail='AI generation settings are incomplete',
+            code='AI_GENERATION_SETTINGS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if not api_key:
+        raise ConfigError(
+            detail='AI generation requires a configured provider credential',
+            code='AI_SETTINGS_API_KEY_REQUIRED',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    try:
+        provider = AIProvider(provider_value)
+        api_mode = AIProviderAPIMode(api_mode_value)
+        auth_mode = AIProviderAuthMode(auth_mode_value)
+    except ValueError as exc:
+        raise ConfigError(
+            detail='AI generation settings are invalid',
+            code='AI_GENERATION_SETTINGS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        ) from exc
+    if auth_mode is not AIProviderAuthMode.API_KEY:
+        raise ConfigError(
+            detail='AI OAuth generation is not supported without provider OAuth metadata',
+            code='AI_OAUTH_UNSUPPORTED',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    timeout_seconds = int(timeout_value) if timeout_value is not None else 15
+    if timeout_seconds < 1:
+        raise ConfigError(
+            detail='AI provider timeout must be at least one second',
+            code='AI_SETTINGS_INVALID',
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    return GenerationProviderConfig(
+        provider=provider,
+        base_url=_validate_provider_base_url(
+            base_url,
+            allow_private_base_urls=allow_private_base_urls,
+        ),
+        api_key=api_key,
+        api_mode=api_mode,
+        generation_model=generation_model,
+        request_timeout_seconds=timeout_seconds,
+        allow_private_base_urls=allow_private_base_urls,
+    )
+
+
 def _vector_literal(values: list[float]) -> str:
     """Build a pgvector literal from Python float values.
 
@@ -374,22 +476,7 @@ def update_ai_provider_settings_snapshot(
     payload: AIProviderSettingsUpdateRequest,
     current_user: Mapping[str, object],
 ) -> AIProviderSettingsResponse:
-    """Persist updated AI-provider settings and return the new snapshot.
-
-    Args:
-        storage: Initialized database pool manager.
-        settings: Application settings controlling provider URL hardening.
-        payload: Provider settings update payload.
-        current_user: Authenticated user context.
-
-    Returns:
-        AIProviderSettingsResponse: Updated provider settings snapshot.
-
-    Raises:
-        ConfigError: If the requested settings are invalid.
-        StorageError: If PostgreSQL access fails.
-        AuthError: If the authenticated user context is invalid.
-    """
+    """Persist updated AI-provider settings and return the new snapshot."""
 
     timestamp = datetime.now(UTC)
     user_id = _require_user_id(current_user)
@@ -399,10 +486,16 @@ def update_ai_provider_settings_snapshot(
         with storage.connection() as connection, connection.transaction():
             existing_row = get_ai_provider_settings(connection)
             provider = payload.provider.value if payload.provider is not None else None
+            display_name = payload.display_name.strip() if payload.display_name else None
             base_url = payload.base_url.strip() if payload.base_url is not None else None
             embedding_model = (
                 payload.embedding_model.strip()
                 if payload.embedding_model is not None
+                else None
+            )
+            generation_model = (
+                payload.generation_model.strip()
+                if payload.generation_model is not None
                 else None
             )
             embedding_dimensions = payload.embedding_dimensions
@@ -432,7 +525,28 @@ def update_ai_provider_settings_snapshot(
                     code='AI_SETTINGS_INVALID',
                     status_code=HTTPStatus.BAD_REQUEST,
                 )
-
+            generation_requested = (
+                payload.text_generation_enabled
+                or payload.editor_assist_enabled
+                or payload.seo_assist_enabled
+            )
+            if generation_requested and (
+                not payload.enabled
+                or provider is None
+                or base_url is None
+                or generation_model is None
+            ):
+                raise ConfigError(
+                    detail='AI generation settings are incomplete',
+                    code='AI_GENERATION_SETTINGS_INVALID',
+                    status_code=HTTPStatus.BAD_REQUEST,
+                )
+            if payload.auth_mode is AIProviderAuthMode.OAUTH and generation_requested:
+                raise ConfigError(
+                    detail='AI OAuth is unsupported until provider OAuth metadata is configured',
+                    code='AI_OAUTH_UNSUPPORTED',
+                    status_code=HTTPStatus.BAD_REQUEST,
+                )
             if payload.enabled and not api_key:
                 raise ConfigError(
                     detail='Enabled AI provider settings require an API key',
@@ -460,10 +574,17 @@ def update_ai_provider_settings_snapshot(
                 connection,
                 enabled=payload.enabled,
                 provider=provider,
+                display_name=display_name,
+                api_mode=payload.api_mode.value,
+                auth_mode=payload.auth_mode.value,
                 base_url=base_url,
                 api_key=api_key,
                 embedding_model=embedding_model,
                 embedding_dimensions=embedding_dimensions,
+                generation_model=generation_model,
+                text_generation_enabled=payload.text_generation_enabled,
+                editor_assist_enabled=payload.editor_assist_enabled,
+                seo_assist_enabled=payload.seo_assist_enabled,
                 request_timeout_seconds=payload.request_timeout_seconds,
                 updated_by_user_id=user_id,
                 updated_at=timestamp,
@@ -474,15 +595,12 @@ def update_ai_provider_settings_snapshot(
                 from pragma.storage.queries.search import (
                     ensure_search_embedding_column_dimensions,
                 )
-
                 schema_changed = ensure_search_embedding_column_dimensions(
                     connection,
                     embedding_dimensions=embedding_dimensions,
                 )
-
             if semantic_contract_changed and search_embedding_column_exists(connection):
                 clear_search_document_embeddings(connection)
-
             embeddings_rebuild_required = payload.enabled and (
                 semantic_contract_changed or schema_changed
             )
@@ -580,6 +698,94 @@ def test_ai_provider_connection(
         embedding_model=provider_config.embedding_model,
         embedding_dimensions=provider_config.embedding_dimensions,
     )
+
+
+def generate_ai_text(
+    storage: DatabasePool,
+    settings: Settings,
+    payload: AIGenerationRequest,
+) -> AIGenerationResponse:
+    """Generate text through the configured backend provider adapter."""
+
+    try:
+        with storage.connection() as connection:
+            settings_row = get_ai_provider_settings(connection)
+            provider_config = _generation_config_from_row(
+                settings_row,
+                scope=payload.scope,
+                allow_private_base_urls=settings.ai_allow_private_base_urls,
+            )
+    except ConfigError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load AI generation settings',
+            code='AI_SETTINGS_LOAD_FAILED',
+        ) from exc
+
+    request_payload = GenerationRequest(
+        input=payload.input,
+        instructions=payload.instructions,
+        messages=tuple((message.role.value, message.content) for message in payload.messages),
+        temperature=payload.temperature,
+        max_output_tokens=payload.max_output_tokens,
+    )
+    if payload.model is not None:
+        provider_config = GenerationProviderConfig(
+            provider=provider_config.provider,
+            base_url=provider_config.base_url,
+            api_key=provider_config.api_key,
+            api_mode=provider_config.api_mode,
+            generation_model=payload.model,
+            request_timeout_seconds=provider_config.request_timeout_seconds,
+            allow_private_base_urls=provider_config.allow_private_base_urls,
+        )
+    result = request_generation(provider_config, request_payload)
+    return AIGenerationResponse(
+        provider=provider_config.provider,
+        api_mode=provider_config.api_mode,
+        model=provider_config.generation_model,
+        text=result.text,
+        finish_reason=result.finish_reason,
+        usage=result.usage,
+    )
+
+
+def get_ai_oauth_status(storage: DatabasePool) -> AIOAuthStatusResponse:
+    """Return deterministic OAuth unsupported status without exposing tokens."""
+
+    try:
+        with storage.connection() as connection:
+            settings_row = get_ai_provider_settings(connection)
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load AI OAuth status',
+            code='AI_SETTINGS_LOAD_FAILED',
+        ) from exc
+    if settings_row is None:
+        return AIOAuthStatusResponse(reason='AI provider OAuth is not configured')
+    return AIOAuthStatusResponse(
+        provider=(
+            AIProvider(str(settings_row['provider'])) if settings_row.get('provider') else None
+        ),
+        auth_mode=AIProviderAuthMode(str(settings_row.get('auth_mode') or 'api_key')),
+        reason='Provider OAuth requires external provider metadata and is not configured',
+    )
+
+
+def start_ai_oauth(storage: DatabasePool) -> AIOAuthStartResponse:
+    """Return deterministic unsupported OAuth start state."""
+
+    _ = get_ai_oauth_status(storage)
+    return AIOAuthStartResponse(
+        reason='Provider OAuth requires external provider metadata and is not configured'
+    )
+
+
+def disconnect_ai_oauth(storage: DatabasePool) -> AIOAuthStatusResponse:
+    """Return deterministic unsupported OAuth disconnect state."""
+
+    return get_ai_oauth_status(storage)
 
 
 def rebuild_search_embeddings(

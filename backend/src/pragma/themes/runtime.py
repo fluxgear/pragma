@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -27,15 +28,21 @@ from jinja2 import (
     TemplateSyntaxError,
     select_autoescape,
 )
+from psycopg import Error as PsycopgError
 
 from pragma.config import Settings
 from pragma.errors import ThemeError
+from pragma.storage.queries.themes import get_theme_settings
 from pragma.themes.loader import (
     DiscoveredTheme,
     discover_themes,
     resolve_theme_relative_path,
 )
 from pragma.themes.manifest import ThemeManifest
+from pragma.themes.models import (
+    ThemeDesignSettings,
+    design_settings_from_mapping,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +84,8 @@ class ThemeRuntime:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._themes = discover_themes(settings.theme_root_path)
+        self._active_theme_id_override: str | None = None
+        self._design_settings = ThemeDesignSettings()
         self._environment = Environment(
             loader=_ThemeTemplateLoader(self),
             autoescape=select_autoescape(enabled_extensions=('html', 'xml')),
@@ -100,6 +109,72 @@ class ThemeRuntime:
         """
 
         return self._environment
+
+    @property
+    def configured_active_theme_id(self) -> str:
+        """Return persisted active theme id or environment active theme id."""
+
+        return self._active_theme_id_override or self._settings.theme_active_id
+
+    @property
+    def persisted_active_theme_id(self) -> str | None:
+        """Return the persisted active theme id override, if any."""
+
+        return self._active_theme_id_override
+
+    @property
+    def default_theme_id(self) -> str:
+        """Return the environment/default theme id."""
+
+        return self._settings.theme_default_id
+
+    @property
+    def design_settings(self) -> ThemeDesignSettings:
+        """Return safe public design settings for templates."""
+
+        return ThemeDesignSettings(**deepcopy(self._design_settings.model_dump()))
+
+    def has_theme(self, theme_id: str) -> bool:
+        """Return whether the supplied theme id is discoverable."""
+
+        return theme_id in self._themes
+
+    def apply_settings(
+        self,
+        *,
+        active_theme_id: str | None,
+        design_settings: ThemeDesignSettings,
+    ) -> None:
+        """Apply persisted theme settings to the in-memory runtime."""
+
+        self._active_theme_id_override = active_theme_id
+        self._design_settings = design_settings
+        self._environment_overlays.clear()
+
+    def refresh(self, storage: Any) -> None:
+        """Refresh persisted singleton settings when storage is available."""
+
+        try:
+            with storage.connection() as connection:
+                row = get_theme_settings(connection)
+        except PsycopgError:
+            logger.warning('Unable to refresh persisted theme settings', exc_info=True)
+            return
+
+        if row is None:
+            self.apply_settings(active_theme_id=None, design_settings=ThemeDesignSettings())
+            return
+
+        try:
+            design_settings = design_settings_from_mapping(row.get('design_settings'))
+        except ValueError:
+            logger.warning('Ignoring invalid persisted theme design settings', exc_info=True)
+            design_settings = ThemeDesignSettings()
+        active_theme_id = row.get('active_theme_id')
+        self.apply_settings(
+            active_theme_id=str(active_theme_id) if active_theme_id else None,
+            design_settings=design_settings,
+        )
 
     def list_themes(self) -> tuple[ThemeManifest, ...]:
         """Return discovered theme manifests.
@@ -534,7 +609,7 @@ class ThemeRuntime:
             ThemeError: If no usable active/default theme exists.
         """
 
-        active_theme = self._themes.get(self._settings.theme_active_id)
+        active_theme = self._themes.get(self.configured_active_theme_id)
         default_theme = self._themes.get(self._settings.theme_default_id)
         ordered: list[DiscoveredTheme] = []
         if active_theme is not None:

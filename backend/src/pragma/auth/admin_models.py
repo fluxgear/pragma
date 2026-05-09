@@ -21,7 +21,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from pragma.auth.models import UserResponse
+from pragma.auth.models import UserResponse, user_access_payload_from_record
 
 EmailField = typing.Annotated[
     str,
@@ -87,6 +87,172 @@ class RoleListResponse(BaseModel):
     total: int = Field(ge=0)
 
 
+class PermissionDefinitionResponse(BaseModel):
+    """Permission catalog metadata for role administration.
+
+    Args:
+        BaseModel: Pydantic model base class.
+
+    Returns:
+        None.
+
+    Raises:
+        ValidationError: If response values are invalid.
+    """
+
+    key: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    domain: str = Field(min_length=1, max_length=64)
+
+    @classmethod
+    def from_definition(cls, definition: Any) -> PermissionDefinitionResponse:
+        """Build permission metadata from the runtime registry definition.
+
+        Args:
+            definition: Runtime permission definition.
+
+        Returns:
+            PermissionDefinitionResponse: Serialized permission metadata.
+
+        Raises:
+            ValidationError: If definition fields are invalid.
+        """
+
+        key = str(definition.key)
+        return cls(
+            key=key,
+            name=str(definition.name),
+            description=definition.description,
+            domain=key.split('.', maxsplit=1)[0],
+        )
+
+
+class RolesAdminListResponse(BaseModel):
+    """Dedicated roles-admin list payload with permission metadata.
+
+    Args:
+        BaseModel: Pydantic model base class.
+
+    Returns:
+        None.
+
+    Raises:
+        ValidationError: If response values are invalid.
+    """
+
+    items: list[RoleResponse] = Field(default_factory=list)
+    total: int = Field(ge=0)
+    permission_definitions: list[PermissionDefinitionResponse] = Field(default_factory=list)
+
+
+class RoleCreateRequest(BaseModel):
+    """Payload for creating a custom DB-backed role.
+
+    Args:
+        BaseModel: Pydantic model base class.
+
+    Returns:
+        None.
+
+    Raises:
+        ValidationError: If request values are invalid.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    role_key: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+    )
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    permission_keys: list[str] = Field(default_factory=list)
+
+    @field_validator("role_key", mode="before")
+    @classmethod
+    def normalize_role_key(cls, value: object) -> object:
+        """Normalize a custom role identifier before validation.
+
+        Args:
+            value: Raw role identifier input.
+
+        Returns:
+            object: Lowercase stripped string for string input; original value otherwise.
+
+        Raises:
+            None.
+        """
+
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_role_name(cls, value: object) -> object:
+        """Strip a custom role name before validation.
+
+        Args:
+            value: Raw role name input.
+
+        Returns:
+            object: Stripped string for string input; original value otherwise.
+
+        Raises:
+            None.
+        """
+
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_description(cls, value: object) -> object:
+        """Strip an optional role description before validation.
+
+        Args:
+            value: Raw description input.
+
+        Returns:
+            object: Stripped string, None for blank strings, or original value otherwise.
+
+        Raises:
+            None.
+        """
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("permission_keys")
+    @classmethod
+    def normalize_permission_keys(cls, value: list[str]) -> list[str]:
+        """Strip and de-duplicate requested permission keys.
+
+        Args:
+            value: Raw permission key list.
+
+        Returns:
+            list[str]: Ordered unique stripped permission keys.
+
+        Raises:
+            None.
+        """
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for permission_key in value:
+            candidate = permission_key.strip()
+            if candidate not in seen:
+                normalized.append(candidate)
+                seen.add(candidate)
+        return normalized
+
+
 class AdminUserResponse(UserResponse):
     """Administrative user payload with lifecycle timestamps.
 
@@ -127,12 +293,12 @@ class AdminUserResponse(UserResponse):
             is_active=bool(record['is_active']),
             is_superuser=bool(record['is_superuser']),
             roles=[str(value) for value in record.get('roles', [])],
-            permissions=[str(value) for value in record.get('permissions', [])],
             force_password_change=bool(record.get('force_password_change', False)),
             last_login_at=record.get('last_login_at'),
             password_changed_at=record.get('password_changed_at'),
             created_at=record['created_at'],
             updated_at=record['updated_at'],
+            **user_access_payload_from_record(record),
         )
 
 

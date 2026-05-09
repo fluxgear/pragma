@@ -287,17 +287,7 @@ def _ai_client(
 def test_ai_migration_creates_provider_settings_and_embedding_metadata(
     migrated_database: dict[str, str]
 ) -> None:
-    """Verify M9+ AI migrations create provider settings and embedding schema.
-
-    Args:
-        migrated_database: Environment values for the migrated test database.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-    """
+    """Verify M9+ AI migrations create provider settings and embedding schema."""
 
     database_dsn = build_database_dsn(
         migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
@@ -307,6 +297,7 @@ def test_ai_migration_creates_provider_settings_and_embedding_metadata(
             """
             SELECT
                 to_regclass('public.pragma_ai_provider_settings') AS provider_settings_table,
+                to_regclass('public.pragma_ai_provider_secrets') AS provider_secrets_table,
                 to_regclass('public.ix_pragma_search_documents_embedding_metadata')
                     AS embedding_metadata_index,
                 EXISTS (
@@ -341,17 +332,42 @@ def test_ai_migration_creates_provider_settings_and_embedding_metadata(
                     SELECT 1
                     FROM pg_constraint
                     WHERE conname = 'ck_pragma_ai_provider_settings_embedding_dimensions'
-                ) AS has_embedding_dimensions_check
+                ) AS has_embedding_dimensions_check,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_ai_provider_settings'
+                      AND column_name = 'api_mode'
+                ) AS has_api_mode,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_ai_provider_settings'
+                      AND column_name = 'generation_model'
+                ) AS has_generation_model,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'pragma_ai_provider_settings'
+                      AND column_name = 'api_key'
+                ) AS has_legacy_api_key_column
             """
         ).fetchone()
 
     assert row[0] == 'pragma_ai_provider_settings'
-    assert row[1] == 'ix_pragma_search_documents_embedding_metadata'
-    assert row[2] is True
+    assert row[1] == 'pragma_ai_provider_secrets'
+    assert row[2] == 'ix_pragma_search_documents_embedding_metadata'
     assert row[3] is True
     assert row[4] is True
     assert row[5] is True
     assert row[6] is True
+    assert row[7] is True
+    assert row[8] is True
+    assert row[9] is True
+    assert row[10] is True
 
 
 class _EmbeddingResponse:
@@ -908,6 +924,97 @@ def test_open_embedding_request_rejects_non_success_status(
         assert captured['response'].read_sizes == []
 
 
+def test_request_generation_normalizes_chat_completion_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify chat-completions generation responses are normalized."""
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider, AIProviderAPIMode
+    from pragma.ai.providers import (
+        GenerationProviderConfig,
+        GenerationRequest,
+        request_generation,
+    )
+
+    response = _EmbeddingResponse(
+        b'{"choices":[{"message":{"content":"Draft heading"},'
+        b'"finish_reason":"stop"}],"usage":{"prompt_tokens":2,'
+        b'"completion_tokens":3,"total_tokens":5}}'
+    )
+
+    def _open_request(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+        return response
+
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _public_getaddrinfo)
+    monkeypatch.setattr(ai_providers, '_open_embedding_request', _open_request)
+
+    result = request_generation(
+        GenerationProviderConfig(
+            provider=AIProvider.OPENAI_COMPATIBLE,
+            base_url='https://api.example.com/v1',
+            api_key='test-ai-key',
+            api_mode=AIProviderAPIMode.CHAT_COMPLETIONS,
+            generation_model='gpt-compatible',
+            request_timeout_seconds=1,
+        ),
+        GenerationRequest(input='Draft a heading', instructions='Be concise'),
+    )
+
+    assert result.text == 'Draft heading'
+    assert result.finish_reason == 'stop'
+    assert result.usage == {
+        'input_tokens': 2,
+        'output_tokens': 3,
+        'total_tokens': 5,
+    }
+
+
+def test_request_generation_normalizes_responses_api_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify Responses API generation responses are normalized."""
+
+    import pragma.ai.providers as ai_providers
+    from pragma.ai.models import AIProvider, AIProviderAPIMode
+    from pragma.ai.providers import (
+        GenerationProviderConfig,
+        GenerationRequest,
+        request_generation,
+    )
+
+    response = _EmbeddingResponse(
+        b'{"output_text":"Draft meta description","status":"completed",'
+        b'"usage":{"input_tokens":4,"output_tokens":5,"total_tokens":9}}'
+    )
+
+    def _open_request(*_args: object, **_kwargs: object) -> _EmbeddingResponse:
+        return response
+
+    monkeypatch.setattr(ai_providers.socket, 'getaddrinfo', _public_getaddrinfo)
+    monkeypatch.setattr(ai_providers, '_open_embedding_request', _open_request)
+
+    result = request_generation(
+        GenerationProviderConfig(
+            provider=AIProvider.OPENAI,
+            base_url='https://api.openai.com/v1',
+            api_key='test-ai-key',
+            api_mode=AIProviderAPIMode.RESPONSES,
+            generation_model='gpt-5.2',
+            request_timeout_seconds=1,
+        ),
+        GenerationRequest(input='Draft SEO copy'),
+    )
+
+    assert result.text == 'Draft meta description'
+    assert result.finish_reason == 'completed'
+    assert result.usage == {
+        'input_tokens': 4,
+        'output_tokens': 5,
+        'total_tokens': 9,
+    }
+
+
 def test_ai_routes_require_authentication(client: TestClient) -> None:
     """Verify authenticated AI routes reject anonymous requests.
 
@@ -1077,8 +1184,74 @@ def test_ai_settings_round_trip_masks_api_key(
     assert response.json()['provider'] == 'voyage'
     assert response.json()['embedding_dimensions'] == 2
     assert response.json()['api_key_configured'] is True
+    assert response.json()['api_key_status'] == {
+        'configured': True,
+        'auth_mode': 'api_key',
+        'last4': '-key',
+        'updated_at': response.json()['updated_at'],
+    }
     assert response.json()['embeddings_rebuild_required'] is False
     assert 'api_key' not in response.json()
+
+
+def test_ai_settings_store_secret_in_dedicated_table(
+    client: TestClient,
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify provider API keys persist in the dedicated secrets table only."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    _update_ai_settings(client, headers)
+
+    database_dsn = build_database_dsn(
+        migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
+    )
+    with psycopg.connect(database_dsn) as connection:
+        row = connection.execute(
+            """
+            SELECT
+                settings.api_key AS legacy_api_key,
+                secrets.api_key AS secret_api_key
+            FROM pragma_ai_provider_settings AS settings
+            LEFT JOIN pragma_ai_provider_secrets AS secrets
+                ON secrets.settings_id = settings.id
+            WHERE settings.id = 1
+            """
+        ).fetchone()
+
+    assert row[0] is None
+    assert row[1] == 'test-ai-key'
+
+
+def test_ai_settings_legacy_api_key_fallback_without_secret_row(
+    client: TestClient,
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify settings fallback to legacy api_key only when no secret row exists."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    _update_ai_settings(client, headers)
+
+    database_dsn = build_database_dsn(
+        migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
+    )
+    with psycopg.connect(database_dsn) as connection, connection.transaction():
+        connection.execute('DELETE FROM pragma_ai_provider_secrets WHERE settings_id = 1')
+        connection.execute(
+            """
+            UPDATE pragma_ai_provider_settings
+            SET api_key = 'legacy-fallback-key'
+            WHERE id = 1
+            """
+        )
+
+    response = client.get('/api/v1/ai/settings', headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()['api_key_configured'] is True
+    assert response.json()['api_key_status']['last4'] == '-key'
 
 
 def test_ai_settings_reject_private_or_plain_http_base_urls_by_default(
@@ -1233,11 +1406,25 @@ def test_disabled_ai_settings_can_clear_optional_provider_fields(
     assert response.json() == {
         'enabled': False,
         'provider': None,
+        'display_name': None,
+        'api_mode': 'chat_completions',
+        'auth_mode': 'api_key',
         'base_url': None,
         'embedding_model': None,
         'embedding_dimensions': None,
+        'generation_model': None,
+        'capabilities': [],
         'request_timeout_seconds': 15,
         'api_key_configured': False,
+        'api_key_status': {
+            'configured': False,
+            'auth_mode': 'api_key',
+            'last4': None,
+            'updated_at': response.json()['updated_at'],
+        },
+        'oauth_connected': False,
+        'last_test_status': None,
+        'last_tested_at': None,
         'updated_at': response.json()['updated_at'],
         'embeddings_rebuild_required': False,
     }
@@ -1287,6 +1474,194 @@ def test_ai_settings_test_uses_mocked_provider(
         'embedding_dimensions': 2,
     }
     assert calls == [('voyage', 'query')]
+
+
+def test_ai_generate_enforces_editor_permission(
+    client: TestClient,
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify generation endpoint denies users without assist permission."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    database_dsn = build_database_dsn(
+        migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
+    )
+    with psycopg.connect(database_dsn) as connection, connection.transaction():
+        connection.execute(
+            """
+            UPDATE pragma_users
+            SET is_superuser = FALSE
+            WHERE email = %s
+            """,
+            (bootstrap_payload['email'],),
+        )
+        connection.execute(
+            """
+            DELETE FROM pragma_user_roles
+            WHERE user_id = (
+                SELECT id
+                FROM pragma_users
+                WHERE email = %s
+            )
+            """,
+            (bootstrap_payload['email'],),
+        )
+
+    response = client.post(
+        '/api/v1/ai/generate',
+        headers=headers,
+        json={'scope': 'editor', 'input': 'Draft a heading'},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        'detail': 'Permission ai.editor_assist is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
+
+
+def test_ai_generate_enforces_seo_permission(
+    client: TestClient,
+    migrated_database: dict[str, str],
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify SEO generation denies users without SEO assist permission.
+
+    Args:
+        client: FastAPI test client.
+        migrated_database: Environment values for the migrated test database.
+        bootstrap_payload: Bootstrap request payload.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    headers = _auth_headers(client, bootstrap_payload)
+    database_dsn = build_database_dsn(
+        migrated_database, migrated_database['PRAGMA_DATABASE_NAME']
+    )
+    with psycopg.connect(database_dsn) as connection, connection.transaction():
+        connection.execute(
+            """
+            UPDATE pragma_users
+            SET is_superuser = FALSE
+            WHERE email = %s
+            """,
+            (bootstrap_payload['email'],),
+        )
+        connection.execute(
+            """
+            DELETE FROM pragma_user_roles
+            WHERE user_id = (
+                SELECT id
+                FROM pragma_users
+                WHERE email = %s
+            )
+            """,
+            (bootstrap_payload['email'],),
+        )
+
+    response = client.post(
+        '/api/v1/ai/generate',
+        headers=headers,
+        json={'scope': 'seo', 'input': 'Draft a meta description'},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        'detail': 'Permission ai.seo_assist is required',
+        'code': 'AUTH_PERMISSION_DENIED',
+    }
+
+
+def test_ai_generate_uses_backend_provider_adapter(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify generation route calls service adapter and normalizes response."""
+
+    import pragma.ai.service as ai_service
+    from pragma.ai.providers import GenerationResult
+
+    headers = _auth_headers(client, bootstrap_payload)
+
+    def _mock_request_generation(config, payload) -> GenerationResult:
+        assert config.api_key == 'test-ai-key'
+        assert config.api_mode.value == 'chat_completions'
+        assert payload.input == 'Draft a heading'
+        return GenerationResult(
+            text='Generated heading',
+            finish_reason='stop',
+            usage={'input_tokens': 1, 'output_tokens': 2, 'total_tokens': 3},
+        )
+
+    monkeypatch.setattr(ai_service, 'request_generation', _mock_request_generation)
+    settings_response = client.put(
+        '/api/v1/ai/settings',
+        headers=headers,
+        json={
+            'enabled': True,
+            'provider': 'openai_compatible',
+            'display_name': 'Compatible Provider',
+            'api_mode': 'chat_completions',
+            'auth_mode': 'api_key',
+            'base_url': 'https://api.example.com/v1',
+            'embedding_model': 'text-embedding-3-small',
+            'embedding_dimensions': 2,
+            'generation_model': 'gpt-compatible',
+            'text_generation_enabled': True,
+            'editor_assist_enabled': True,
+            'seo_assist_enabled': True,
+            'request_timeout_seconds': 5,
+            'api_key': 'test-ai-key',
+        },
+    )
+    response = client.post(
+        '/api/v1/ai/generate',
+        headers=headers,
+        json={'scope': 'editor', 'input': 'Draft a heading'},
+    )
+
+    assert settings_response.status_code == 200
+    assert settings_response.json()['api_key_configured'] is True
+    assert 'api_key' not in settings_response.json()
+    assert response.status_code == 200
+    assert response.json() == {
+        'provider': 'openai_compatible',
+        'api_mode': 'chat_completions',
+        'model': 'gpt-compatible',
+        'text': 'Generated heading',
+        'finish_reason': 'stop',
+        'usage': {'input_tokens': 1, 'output_tokens': 2, 'total_tokens': 3},
+    }
+
+
+def test_ai_oauth_routes_return_unsupported_without_tokens(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify OAuth stubs are deterministic and token-free."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+
+    status_response = client.get('/api/v1/ai/oauth/status', headers=headers)
+    start_response = client.post('/api/v1/ai/oauth/start', headers=headers)
+    disconnect_response = client.delete('/api/v1/ai/oauth', headers=headers)
+
+    assert status_response.status_code == 200
+    assert status_response.json()['supported'] is False
+    assert status_response.json()['connected'] is False
+    assert 'token' not in str(status_response.json()).lower()
+    assert start_response.status_code == 200
+    assert start_response.json()['supported'] is False
+    assert start_response.json()['authorization_url'] is None
+    assert disconnect_response.status_code == 200
+    assert disconnect_response.json()['supported'] is False
 
 
 def test_search_auto_embedding_uses_provider_when_available(

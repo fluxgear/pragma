@@ -30,6 +30,16 @@ PERMISSION_MEDIA_ASSETS_DELETE = 'media.assets.delete'
 PERMISSION_AI_SETTINGS_MANAGE = 'ai.settings.manage'
 PERMISSION_MODULES_MANAGE = 'modules.manage'
 PERMISSION_USERS_MANAGE = 'users.manage'
+PERMISSION_ADMIN_ACCESS = 'admin.access'
+PERMISSION_ROLES_MANAGE = 'roles.manage'
+PERMISSION_THEMES_MANAGE = 'themes.manage'
+PERMISSION_SETTINGS_MANAGE = 'settings.manage'
+PERMISSION_PAGE_BUILDER_USE = 'page_builder.use'
+PERMISSION_PAGE_BUILDER_DESIGN = 'page_builder.design'
+PERMISSION_NAVIGATION_MANAGE = 'navigation.manage'
+PERMISSION_AI_EDITOR_ASSIST = 'ai.editor_assist'
+PERMISSION_AI_SEO_ASSIST = 'ai.seo_assist'
+PERMISSION_AI_OAUTH_MANAGE = 'ai.oauth.manage'
 
 ROLE_ADMINISTRATOR = 'administrator'
 ROLE_EDITOR = 'editor'
@@ -141,6 +151,56 @@ _PERMISSION_DEFINITIONS = (
         key=PERMISSION_USERS_MANAGE,
         name='Manage users',
         description='Create, update, and administer user accounts and role assignments.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_ADMIN_ACCESS,
+        name='Access admin',
+        description='Access the administrative interface.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_ROLES_MANAGE,
+        name='Manage roles',
+        description='Create, update, and administer role definitions and permissions.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_THEMES_MANAGE,
+        name='Manage themes',
+        description='Configure and administer themes.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_SETTINGS_MANAGE,
+        name='Manage settings',
+        description='Configure site and product settings.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_PAGE_BUILDER_USE,
+        name='Use page builder',
+        description='Use the page builder to assemble pages.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_PAGE_BUILDER_DESIGN,
+        name='Design with page builder',
+        description='Design page builder layouts and reusable page patterns.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_NAVIGATION_MANAGE,
+        name='Manage navigation',
+        description='Configure site navigation menus and structure.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_AI_EDITOR_ASSIST,
+        name='Use AI editor assist',
+        description='Use AI-assisted editing features.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_AI_SEO_ASSIST,
+        name='Use AI SEO assist',
+        description='Use AI-assisted SEO metadata generation.',
+    ),
+    PermissionDefinition(
+        key=PERMISSION_AI_OAUTH_MANAGE,
+        name='Manage AI OAuth',
+        description='Manage AI provider OAuth authorization.',
     ),
 )
 

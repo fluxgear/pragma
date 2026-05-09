@@ -30,14 +30,18 @@
 
           <Column header="Roles">
             <template #body="slotProps">
-              <div class="content-workspace__field-summary">
-                <Tag
-                  v-for="role in slotProps.data.roles"
-                  :key="`${slotProps.data.id}-${role}`"
-                  severity="secondary"
-                  :value="role"
-                />
-                <Tag v-if="slotProps.data.is_superuser" severity="info" value="super-admin" />
+              <div class="form-stack" style="gap: 0.5rem;">
+                <div class="content-workspace__field-summary">
+                  <Tag
+                    v-for="role in slotProps.data.roles"
+                    :key="`${slotProps.data.id}-${role}`"
+                    :severity="isSystemRoleKey(role) ? 'secondary' : 'warn'"
+                    :value="roleTagLabel(role)"
+                  />
+                  <Tag v-if="slotProps.data.is_superuser" severity="info" value="super-admin" />
+                </div>
+                <span class="muted">{{ assignedPermissionsLabel(slotProps.data) }}</span>
+                <span class="muted">{{ effectiveAccessLabel(slotProps.data) }}</span>
               </div>
             </template>
           </Column>
@@ -113,6 +117,9 @@
         <div class="field">
           <label for="create-roles">Roles</label>
           <MultiSelect id="create-roles" v-model="createForm.roleKeys" :options="roleOptions" optionLabel="label" optionValue="value" display="chip" />
+          <Message v-if="unavailableRoles.length > 0" severity="info" :closable="false">
+            Custom roles are not assignable here yet: {{ unavailableRoleNames }}. Use built-in roles until backend user-role assignment supports custom roles.
+          </Message>
         </div>
         <div class="field field__checkbox-row">
           <Checkbox id="create-force-change" v-model="createForm.forcePasswordChange" :binary="true" />
@@ -134,10 +141,16 @@
         <div class="field">
           <label for="role-assignment">Roles</label>
           <MultiSelect id="role-assignment" v-model="rolesForm.roleKeys" :options="roleOptions" optionLabel="label" optionValue="value" display="chip" />
+          <Message v-if="unavailableRoles.length > 0" severity="info" :closable="false">
+            Custom roles are not assignable here yet: {{ unavailableRoleNames }}. Use built-in roles until backend user-role assignment supports custom roles.
+          </Message>
+          <Message v-if="selectedUserHasUnassignableRoles" severity="warn" :closable="false">
+            This user has custom roles that cannot be changed from this dialog: {{ selectedUserUnassignableRoleLabels }}. Role updates are disabled to avoid dropping them.
+          </Message>
         </div>
         <Message v-if="dialogErrorMessage" severity="error" :closable="false">{{ dialogErrorMessage }}</Message>
         <div class="inline-actions">
-          <Button label="Save roles" icon="pi pi-save" type="submit" :loading="dialogSubmitting" />
+          <Button label="Save roles" icon="pi pi-save" type="submit" :loading="dialogSubmitting" :disabled="selectedUserHasUnassignableRoles" />
         </div>
       </form>
     </Dialog>
@@ -277,12 +290,16 @@ const rolesForm = reactive({
   roleKeys: [] as string[],
 })
 
+const assignableRoles = computed(() => roles.value.filter((role) => role.is_system))
+const unavailableRoles = computed(() => roles.value.filter((role) => !role.is_system))
+const assignableRoleKeys = computed(() => new Set(assignableRoles.value.map((role) => role.role_key)))
 const roleOptions = computed(() =>
-  roles.value.map((role) => ({
+  assignableRoles.value.map((role) => ({
     label: role.name,
     value: role.role_key,
   })),
 )
+const unavailableRoleNames = computed(() => unavailableRoles.value.map((role) => `${role.name} (${role.role_key})`).join(', '))
 const pageStart = computed(() => (usersTotal.value === 0 ? 0 : usersOffset.value + 1))
 const pageEnd = computed(() => Math.min(usersOffset.value + users.value.length, usersTotal.value))
 const canGoPrevious = computed(() => usersOffset.value > 0)
@@ -324,6 +341,49 @@ const userActionConfirmLabel = computed(() => {
 const userActionConfirmSeverity = computed(() => (
   pendingUserAction.value === 'toggle-active' && selectedActionUser.value?.is_active ? 'danger' : 'warn'
 ))
+const selectedUserUnassignableRoleLabels = computed(() => {
+  if (selectedUser.value === null) {
+    return ''
+  }
+  return unassignableRoleKeysFor(selectedUser.value).map(roleTagLabel).join(', ')
+})
+const selectedUserHasUnassignableRoles = computed(() => selectedUserUnassignableRoleLabels.value.length > 0)
+
+function roleRecord(roleKey: string): RoleResponse | undefined {
+  return roles.value.find((role) => role.role_key === roleKey)
+}
+
+function isSystemRoleKey(roleKey: string): boolean {
+  return roleRecord(roleKey)?.is_system !== false
+}
+
+function roleTagLabel(roleKey: string): string {
+  const role = roleRecord(roleKey)
+  return role?.is_system === false ? `${roleKey} (custom)` : roleKey
+}
+
+function hasFullAccess(user: AdminUserResponse): boolean {
+  return user.has_all_permissions || user.permission_source === 'superuser' || user.is_superuser
+}
+
+function assignedPermissionsLabel(user: AdminUserResponse): string {
+  const count = user.assigned_permissions.length
+  if (hasFullAccess(user) && count === 0) {
+    return 'Assigned permissions: none; superuser access applies'
+  }
+  return `Assigned permissions: ${count}`
+}
+
+function effectiveAccessLabel(user: AdminUserResponse): string {
+  if (hasFullAccess(user)) {
+    return 'Effective access: all permissions (superuser)'
+  }
+  return `Effective access: ${user.effective_permissions.length}`
+}
+
+function unassignableRoleKeysFor(user: AdminUserResponse): string[] {
+  return user.roles.filter((roleKey) => roleRecord(roleKey)?.is_system === false)
+}
 
 function resetDialogState(): void {
   dialogErrorMessage.value = null
@@ -375,7 +435,7 @@ function openCreateDialog(): void {
 function openRolesDialog(user: AdminUserResponse): void {
   resetDialogState()
   selectedUser.value = user
-  rolesForm.roleKeys = [...user.roles]
+  rolesForm.roleKeys = user.roles.filter((roleKey) => assignableRoleKeys.value.has(roleKey))
   rolesDialogVisible.value = true
 }
 
@@ -443,7 +503,7 @@ async function submitCreateUser(): Promise<void> {
 }
 
 async function submitRoleUpdate(): Promise<void> {
-  if (selectedUser.value === null) {
+  if (selectedUser.value === null || selectedUserHasUnassignableRoles.value) {
     return
   }
 

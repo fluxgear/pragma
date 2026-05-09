@@ -1,0 +1,215 @@
+# Copyright (c) 2026 Marc Mironescu / FluxGear. MIT License.
+"""Navigation menu application service."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from http import HTTPStatus
+from typing import Any
+from uuid import UUID
+
+from psycopg import Error as PsycopgError
+
+from pragma.content.models import ContentStatus
+from pragma.errors import PragmaError, StorageError
+from pragma.navigation.models import (
+    NavigationLinkType,
+    NavigationMenuItemRequest,
+    NavigationMenuItemResponse,
+    NavigationMenuReplaceRequest,
+    NavigationMenuResponse,
+    NavigationWarningResponse,
+)
+from pragma.storage.pool import DatabasePool
+from pragma.storage.queries.content import get_entry_by_id
+from pragma.storage.queries.navigation import (
+    PRIMARY_MENU_KEY,
+    get_navigation_menu_by_key,
+    list_navigation_menu_items,
+    replace_navigation_menu_items,
+    upsert_navigation_menu,
+)
+
+
+def _utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp."""
+
+    return datetime.now(UTC)
+
+
+def _require_user_id(current_user: Mapping[str, object]) -> UUID:
+    """Return the authenticated user id from dependency context."""
+
+    user_id = current_user.get('id')
+    if not isinstance(user_id, UUID):
+        raise PragmaError(
+            detail='Authenticated user context is invalid',
+            code='NAVIGATION_AUTH_CONTEXT_INVALID',
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+    return user_id
+
+
+def _build_entry_href(content_type_slug: str, slug: str) -> str:
+    """Return the public route for a linked content entry."""
+
+    if content_type_slug == 'page':
+        return f'/pages/{slug}'
+    if content_type_slug == 'post':
+        return f'/posts/{slug}'
+    return f'/archive?content_type={content_type_slug}'
+
+
+def _build_item_response(row: dict[str, Any]) -> NavigationMenuItemResponse:
+    """Map one storage row to an API item projection."""
+
+    link_type = str(row['link_type'])
+    content_type_slug = (
+        str(row['content_type_slug']) if row.get('content_type_slug') is not None else None
+    )
+    entry_slug = str(row['entry_slug']) if row.get('entry_slug') is not None else None
+    href = None
+    url = None
+    if link_type == NavigationLinkType.CUSTOM_URL.value:
+        url = str(row['custom_url']) if row.get('custom_url') is not None else None
+        href = url
+    elif content_type_slug and entry_slug:
+        href = _build_entry_href(content_type_slug, entry_slug)
+
+    return NavigationMenuItemResponse(
+        id=row['id'],
+        position=int(row['position']),
+        label=str(row['label']),
+        link_type=NavigationLinkType(link_type),
+        enabled=bool(row['enabled']),
+        content_entry_id=row.get('content_entry_id'),
+        url=url,
+        href=href,
+        content_type_slug=content_type_slug,
+        entry_slug=entry_slug,
+        entry_status=str(row['entry_status']) if row.get('entry_status') is not None else None,
+    )
+
+
+def _build_warnings(rows: list[dict[str, Any]]) -> list[NavigationWarningResponse]:
+    """Build non-blocking warnings for stored menu targets."""
+
+    warnings: list[NavigationWarningResponse] = []
+    for row in rows:
+        if str(row['link_type']) != NavigationLinkType.CONTENT_ENTRY.value:
+            continue
+        if str(row.get('entry_status')) == ContentStatus.PUBLISHED.value:
+            continue
+        warnings.append(
+            NavigationWarningResponse(
+                code='NAVIGATION_TARGET_NOT_PUBLISHED',
+                detail='Internal navigation target is not currently published.',
+                item_position=int(row['position']),
+                item_label=str(row['label']),
+                content_entry_id=row.get('content_entry_id'),
+            )
+        )
+    return warnings
+
+
+def _build_menu_response(rows: list[dict[str, Any]]) -> NavigationMenuResponse:
+    """Build the API response for the primary menu."""
+
+    return NavigationMenuResponse(
+        key=PRIMARY_MENU_KEY,
+        items=[_build_item_response(row) for row in rows],
+        warnings=_build_warnings(rows),
+    )
+
+
+def get_primary_menu_snapshot(storage: DatabasePool) -> NavigationMenuResponse:
+    """Return the current primary navigation menu, if configured."""
+
+    try:
+        with storage.connection() as connection:
+            menu_row = get_navigation_menu_by_key(connection, PRIMARY_MENU_KEY)
+            rows = (
+                list_navigation_menu_items(connection, menu_row['id'])
+                if menu_row is not None
+                else []
+            )
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load navigation menu',
+            code='NAVIGATION_MENU_LOAD_FAILED',
+        ) from exc
+
+    return _build_menu_response(rows)
+
+
+def _serialize_request_item(
+    item: NavigationMenuItemRequest,
+    *,
+    position: int,
+) -> dict[str, Any]:
+    """Convert a validated request item into storage values."""
+
+    link_type = str(item.link_type)
+    return {
+        'position': position,
+        'label': item.label,
+        'link_type': link_type,
+        'content_entry_id': (
+            item.content_entry_id
+            if link_type == NavigationLinkType.CONTENT_ENTRY.value
+            else None
+        ),
+        'custom_url': item.url if link_type == NavigationLinkType.CUSTOM_URL.value else None,
+        'enabled': item.enabled,
+    }
+
+
+def replace_primary_menu(
+    storage: DatabasePool,
+    payload: NavigationMenuReplaceRequest,
+    current_user: Mapping[str, object],
+) -> NavigationMenuResponse:
+    """Replace the primary navigation menu items in request order."""
+
+    user_id = _require_user_id(current_user)
+    timestamp = _utc_now()
+    serialized_items = [
+        _serialize_request_item(item, position=index)
+        for index, item in enumerate(payload.items, start=1)
+    ]
+
+    try:
+        with storage.connection() as connection, connection.transaction():
+            for item in serialized_items:
+                entry_id = item.get('content_entry_id')
+                if entry_id is None:
+                    continue
+                if get_entry_by_id(connection, entry_id) is None:
+                    raise PragmaError(
+                        detail='Navigation content entry target was not found',
+                        code='NAVIGATION_TARGET_NOT_FOUND',
+                        status_code=HTTPStatus.BAD_REQUEST,
+                    )
+
+            menu_row = upsert_navigation_menu(
+                connection,
+                key=PRIMARY_MENU_KEY,
+                user_id=user_id,
+                updated_at=timestamp,
+            )
+            rows = replace_navigation_menu_items(
+                connection,
+                menu_id=menu_row['id'],
+                items=serialized_items,
+                updated_at=timestamp,
+            )
+    except PragmaError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to save navigation menu',
+            code='NAVIGATION_MENU_SAVE_FAILED',
+        ) from exc
+
+    return _build_menu_response(rows)

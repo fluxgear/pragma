@@ -117,6 +117,90 @@ def _content_type_payload() -> dict[str, Any]:
     }
 
 
+def _valid_block_document() -> dict[str, Any]:
+    """Return a valid C4 block document covering baseline block keys."""
+
+    return {
+        'version': 1,
+        'root': {
+            'type': 'section',
+            'settings': {'background': 'none', 'width': 'wide'},
+            'children': [
+                {
+                    'type': 'container',
+                    'children': [
+                        {'type': 'heading', 'props': {'text': 'Hello Blocks', 'level': 2}},
+                        {
+                            'type': 'paragraph',
+                            'props': {'html': '<p><strong>Safe</strong> copy.</p>'},
+                        },
+                        {
+                            'type': 'columns',
+                            'props': {'columns': 2},
+                            'children': [
+                                {
+                                    'type': 'container',
+                                    'children': [
+                                        {
+                                            'type': 'image',
+                                            'props': {
+                                                'media_id': '11111111-1111-1111-1111-111111111111',
+                                                'alt': 'Block image',
+                                            },
+                                        },
+                                        {
+                                            'type': 'button',
+                                            'props': {'label': 'Read more', 'href': '/read-more'},
+                                        },
+                                    ],
+                                },
+                                {
+                                    'type': 'container',
+                                    'children': [
+                                        {'type': 'divider'},
+                                        {'type': 'spacer', 'props': {'size': 'medium'}},
+                                        {
+                                            'type': 'quote',
+                                            'props': {
+                                                'text': 'Ship structured content.',
+                                                'citation': 'Pragma',
+                                            },
+                                        },
+                                        {
+                                            'type': 'list',
+                                            'props': {
+                                                'style': 'unordered',
+                                                'items': ['Section', 'Container', 'Blocks'],
+                                            },
+                                        },
+                                        {
+                                            'type': 'card',
+                                            'children': [
+                                                {
+                                                    'type': 'paragraph',
+                                                    'props': {'html': '<p>Card body</p>'},
+                                                }
+                                            ],
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def _normalized_valid_block_document() -> dict[str, Any]:
+    """Return the deterministic validator output for the valid block fixture."""
+
+    from pragma.blocks.validator import validate_block_document
+
+    return validate_block_document(_valid_block_document())
+
+
 def _create_content_type(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
     """Create a reusable content type and return the response payload.
 
@@ -204,17 +288,7 @@ def _clear_entry_published_at(migrated_database: dict[str, str], entry_id: str) 
 
 
 def test_migrations_create_content_schema(migrated_database: dict[str, str]) -> None:
-    """Verify the Alembic chain creates the expected M2 tables and indexes.
-
-    Args:
-        migrated_database: Environment values for the migrated test database.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-    """
+    """Verify the Alembic chain creates the expected content tables and indexes."""
 
     dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
     with psycopg.connect(dsn, row_factory=dict_row) as connection:
@@ -224,18 +298,63 @@ def test_migrations_create_content_schema(migrated_database: dict[str, str]) -> 
                 to_regclass('public.pragma_content_types') AS content_types_table,
                 to_regclass('public.pragma_content_fields') AS content_fields_table,
                 to_regclass('public.pragma_content_entries') AS content_entries_table,
+                to_regclass(
+                    'public.pragma_content_entry_revisions'
+                ) AS content_entry_revisions_table,
                 to_regclass('public.ix_pragma_content_types_slug') AS content_types_slug_index,
                 to_regclass(
                     'public.ix_pragma_content_entries_payload'
-                ) AS content_entries_payload_index
+                ) AS content_entries_payload_index,
+                to_regclass(
+                    'public.ix_pragma_content_entry_revisions_entry_created'
+                ) AS content_entry_revisions_index
             """
         ).fetchone()
+        columns = {
+            column_row['column_name']
+            for column_row in connection.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'pragma_content_entries'
+                  AND column_name = ANY(%s)
+                """,
+                (
+                    [
+                        'version',
+                        'seo_title',
+                        'seo_description',
+                        'seo_canonical_url',
+                        'seo_robots',
+                        'seo_og_title',
+                        'seo_og_description',
+                        'seo_og_image',
+                    ],
+                ),
+            ).fetchall()
+        }
 
     assert row['content_types_table'] == 'pragma_content_types'
     assert row['content_fields_table'] == 'pragma_content_fields'
     assert row['content_entries_table'] == 'pragma_content_entries'
+    assert row['content_entry_revisions_table'] == 'pragma_content_entry_revisions'
     assert row['content_types_slug_index'] == 'ix_pragma_content_types_slug'
     assert row['content_entries_payload_index'] == 'ix_pragma_content_entries_payload'
+    assert (
+        row['content_entry_revisions_index']
+        == 'ix_pragma_content_entry_revisions_entry_created'
+    )
+    assert columns == {
+        'version',
+        'seo_title',
+        'seo_description',
+        'seo_canonical_url',
+        'seo_robots',
+        'seo_og_title',
+        'seo_og_description',
+        'seo_og_image',
+    }
 
 
 def test_content_routes_require_auth(client: TestClient) -> None:
@@ -424,6 +543,382 @@ def test_content_type_crud_flow(
     assert final_list_response.status_code == 200
     assert final_list_response.json()['total'] == 0
 
+def test_content_type_metadata_defaults_counts_and_defaults_apply_to_entries(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify C3 field metadata, counts, and entry defaults round-trip."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    payload = {
+        'name': 'Defaulted Records',
+        'field_definitions': [
+            {
+                'name': 'title',
+                'label': 'Title',
+                'kind': 'text',
+                'required': True,
+                'help_text': 'Shown next to the title input.',
+                'default_value': 'Untitled',
+                'min_length': 3,
+            },
+            {
+                'name': 'body',
+                'label': 'Body',
+                'kind': 'long_text',
+                'required': False,
+                'help_text': 'Plain long-form body copy.',
+                'default_value': 'Draft body',
+            },
+            {
+                'name': 'html',
+                'label': 'HTML',
+                'kind': 'rich_text',
+                'required': False,
+                'default_value': '<p>Draft</p>',
+                'min_length': 1,
+            },
+            {
+                'name': 'views',
+                'label': 'Views',
+                'kind': 'integer',
+                'required': False,
+                'default_value': 0,
+                'minimum': 0,
+            },
+            {
+                'name': 'rating',
+                'label': 'Rating',
+                'kind': 'number',
+                'required': False,
+                'default_value': 4.5,
+                'minimum': 0,
+                'maximum': 5,
+            },
+            {
+                'name': 'featured',
+                'label': 'Featured',
+                'kind': 'boolean',
+                'required': False,
+                'default_value': False,
+            },
+            {
+                'name': 'publish_date',
+                'label': 'Publish date',
+                'kind': 'date',
+                'required': False,
+                'default_value': '2026-05-06',
+            },
+            {
+                'name': 'launch_at',
+                'label': 'Launch at',
+                'kind': 'datetime',
+                'required': False,
+                'default_value': '2026-05-06T15:00:00Z',
+            },
+            {
+                'name': 'metadata',
+                'label': 'Metadata',
+                'kind': 'json',
+                'required': False,
+                'default_value': {'source': 'default'},
+            },
+        ],
+    }
+
+    create_response = client.post('/api/v1/content/types', headers=headers, json=payload)
+    assert create_response.status_code == 201
+    content_type = create_response.json()
+    assert content_type['entry_count'] == 0
+    assert content_type['can_delete'] is True
+    title_field = content_type['field_definitions'][0]
+    assert title_field['help_text'] == 'Shown next to the title input.'
+    assert title_field['default_value'] == 'Untitled'
+
+    reject_derived_response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json={**payload, 'name': 'Bad Derived', 'entry_count': 0, 'can_delete': True},
+    )
+    assert reject_derived_response.status_code == 422
+
+    entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {},
+        },
+    )
+    assert entry_response.status_code == 201
+    assert entry_response.json()['payload'] == {
+        'title': 'Untitled',
+        'body': 'Draft body',
+        'html': '<p>Draft</p>',
+        'views': 0,
+        'rating': 4.5,
+        'featured': False,
+        'publish_date': '2026-05-06',
+        'launch_at': '2026-05-06T15:00:00+00:00',
+        'metadata': {'source': 'default'},
+    }
+
+    list_response = client.get('/api/v1/content/types', headers=headers)
+    assert list_response.status_code == 200
+    listed_type = list_response.json()['items'][0]
+    assert listed_type['entry_count'] == 1
+    assert listed_type['can_delete'] is False
+
+    get_response = client.get(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()['entry_count'] == 1
+    assert get_response.json()['can_delete'] is False
+
+
+def test_content_type_rejects_invalid_field_defaults(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify defaults are validated through field kind constraints."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    payload = {
+        'name': 'Invalid Defaults',
+        'field_definitions': [
+            {
+                'name': 'title',
+                'label': 'Title',
+                'kind': 'text',
+                'required': False,
+                'default_value': 'no',
+                'min_length': 3,
+            }
+        ],
+    }
+
+    response = client.post('/api/v1/content/types', headers=headers, json=payload)
+    assert response.status_code == 400
+    assert response.json()['code'] == 'CONTENT_FIELD_DEFAULT_INVALID'
+
+    payload['field_definitions'] = [
+        {
+            'name': 'views',
+            'label': 'Views',
+            'kind': 'integer',
+            'required': False,
+            'default_value': True,
+        }
+    ]
+    response = client.post('/api/v1/content/types', headers=headers, json=payload)
+    assert response.status_code == 400
+    assert response.json()['code'] == 'CONTENT_FIELD_DEFAULT_INVALID'
+
+    payload['field_definitions'] = [
+        {
+            'name': 'body',
+            'label': 'Body',
+            'kind': 'rich_text',
+            'required': False,
+            'default_value': '<p class="lead">Bad</p>',
+        }
+    ]
+    response = client.post('/api/v1/content/types', headers=headers, json=payload)
+    assert response.status_code == 400
+    assert response.json()['code'] == 'CONTENT_FIELD_DEFAULT_INVALID'
+
+    payload['field_definitions'] = [
+        {
+            'name': 'publish_date',
+            'label': 'Publish date',
+            'kind': 'date',
+            'required': False,
+            'default_value': 'not-a-date',
+        }
+    ]
+    response = client.post('/api/v1/content/types', headers=headers, json=payload)
+    assert response.status_code == 400
+    assert response.json()['code'] == 'CONTENT_FIELD_DEFAULT_INVALID'
+
+
+def test_content_type_update_schema_safety_with_existing_entries(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify name-based schema changes are safe or return conflicts."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Hello World',
+                'body': '<p>Hello</p>',
+                'views': 1,
+            },
+        },
+    )
+    assert entry_response.status_code == 201
+
+    base_fields = _content_type_payload()['field_definitions']
+    additive_optional = {
+        'name': 'Blog Posts',
+        'slug': 'blog-posts',
+        'description': 'Optional addition',
+        'field_definitions': [
+            *base_fields,
+            {
+                'name': 'summary',
+                'label': 'Summary',
+                'kind': 'text',
+                'required': False,
+                'max_length': 200,
+            },
+        ],
+    }
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=additive_optional,
+    )
+    assert response.status_code == 200
+
+    required_with_default = {
+        **additive_optional,
+        'description': 'Required default addition',
+        'field_definitions': [
+            *additive_optional['field_definitions'],
+            {
+                'name': 'category',
+                'label': 'Category',
+                'kind': 'text',
+                'required': True,
+                'default_value': 'General',
+                'min_length': 3,
+            },
+        ],
+    }
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=required_with_default,
+    )
+    assert response.status_code == 200
+
+    new_entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Second Entry',
+                'body': '<p>Body</p>',
+                'views': 2,
+            },
+        },
+    )
+    assert new_entry_response.status_code == 201
+    assert new_entry_response.json()['payload']['category'] == 'General'
+
+    required_without_default = {
+        **required_with_default,
+        'field_definitions': [
+            *required_with_default['field_definitions'],
+            {
+                'name': 'author_note',
+                'label': 'Author note',
+                'kind': 'text',
+                'required': True,
+            },
+        ],
+    }
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=required_without_default,
+    )
+    assert response.status_code == 409
+    assert response.json()['code'] == 'CONTENT_TYPE_UPDATE_INVALID'
+
+    removal = {
+        **required_with_default,
+        'field_definitions': [
+            field
+            for field in required_with_default['field_definitions']
+            if field['name'] != 'views'
+        ],
+    }
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=removal,
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        'detail': (
+            'Field definition update would remove field(s) with existing data: views'
+        ),
+        'code': 'CONTENT_TYPE_UPDATE_INVALID',
+    }
+
+    rename = {
+        **required_with_default,
+        'field_definitions': [
+            {**field, 'name': 'headline'} if field['name'] == 'title' else field
+            for field in required_with_default['field_definitions']
+        ],
+    }
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=rename,
+    )
+    assert response.status_code == 409
+    assert response.json()['code'] == 'CONTENT_TYPE_UPDATE_INVALID'
+
+    type_change = {
+        **required_with_default,
+        'field_definitions': [
+            {**field, 'kind': 'number'} if field['name'] == 'views' else field
+            for field in required_with_default['field_definitions']
+        ],
+    }
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=type_change,
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        'detail': (
+            'Field definition update would change field type for existing field(s): views'
+        ),
+        'code': 'CONTENT_TYPE_UPDATE_INVALID',
+    }
+
+    constraint_tightening = {
+        **required_with_default,
+        'field_definitions': [
+            {**field, 'min_length': 50} if field['name'] == 'title' else field
+            for field in required_with_default['field_definitions']
+        ],
+    }
+    response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json=constraint_tightening,
+    )
+    assert response.status_code == 409
+    assert response.json()['code'] == 'CONTENT_TYPE_UPDATE_INVALID'
+
 
 def test_content_type_create_rejects_blank_name(
     client: TestClient,
@@ -594,24 +1089,225 @@ def test_entry_crud_flow_and_publish_state(
     assert final_list_response.json()['total'] == 0
 
 
+def test_entry_workflow_revisions_restore_seo_and_version_guard(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify C6 revisions, SEO metadata, restore, and version conflicts."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Workflow Draft',
+                'body': '<p>Draft</p>',
+                'views': 1,
+            },
+            'seo_metadata': {
+                'title': '  SEO Draft  ',
+                'description': '',
+                'canonical_url': '/workflow-draft',
+                'robots': 'noindex',
+                'og_title': 'Social Draft',
+                'og_description': 'Social description',
+                'og_image': 'https://example.com/social.png',
+            },
+        },
+    )
+    assert create_response.status_code == 201
+    entry = create_response.json()
+    assert entry['version'] == 1
+    assert entry['revision_number'] == 1
+    assert entry['seo_metadata'] == {
+        'title': 'SEO Draft',
+        'description': None,
+        'canonical_url': '/workflow-draft',
+        'robots': 'noindex',
+        'og_title': 'Social Draft',
+        'og_description': 'Social description',
+        'og_image': 'https://example.com/social.png',
+    }
+
+    stale_update_response = client.put(
+        f"/api/v1/content/entries/{entry['id']}",
+        headers=headers,
+        json={
+            'status': 'draft',
+            'expected_version': 99,
+            'payload': {
+                'title': 'Workflow Draft',
+                'body': '<p>Conflict</p>',
+                'views': 2,
+            },
+        },
+    )
+    assert stale_update_response.status_code == 409
+    assert stale_update_response.json()['code'] == 'CONTENT_ENTRY_VERSION_CONFLICT'
+
+    update_response = client.put(
+        f"/api/v1/content/entries/{entry['id']}",
+        headers=headers,
+        json={
+            'status': 'draft',
+            'expected_version': 1,
+            'payload': {
+                'title': 'Workflow Draft Updated',
+                'body': '<p>Updated</p>',
+                'views': 2,
+            },
+            'seo_metadata': {'title': 'Updated SEO'},
+        },
+    )
+    assert update_response.status_code == 200
+    updated_entry = update_response.json()
+    assert updated_entry['version'] == 2
+    assert updated_entry['revision_number'] == 2
+
+    publish_response = client.post(
+        f"/api/v1/content/entries/{entry['id']}/publish",
+        headers=headers,
+        json={'expected_version': 2},
+    )
+    assert publish_response.status_code == 200
+    published_entry = publish_response.json()
+    assert published_entry['status'] == 'published'
+    assert published_entry['version'] == 3
+    assert published_entry['published_at'] is not None
+
+    invalid_publish_response = client.post(
+        f"/api/v1/content/entries/{entry['id']}/publish",
+        headers=headers,
+        json={'expected_version': 3},
+    )
+    assert invalid_publish_response.status_code == 409
+    assert invalid_publish_response.json()['code'] == 'CONTENT_ENTRY_TRANSITION_INVALID'
+
+    revisions_response = client.get(
+        f"/api/v1/content/entries/{entry['id']}/revisions",
+        headers=headers,
+    )
+    assert revisions_response.status_code == 200
+    revisions = revisions_response.json()['items']
+    assert [item['action'] for item in revisions] == ['publish', 'update', 'create']
+    create_revision = revisions[-1]
+    assert create_revision['revision_number'] == 1
+    assert create_revision['payload']['title'] == 'Workflow Draft'
+
+    restore_response = client.post(
+        f"/api/v1/content/entries/{entry['id']}/revisions/{create_revision['id']}/restore",
+        headers=headers,
+        json={'expected_version': 3},
+    )
+    assert restore_response.status_code == 200
+    restored_entry = restore_response.json()
+    assert restored_entry['version'] == 4
+    assert restored_entry['revision_number'] == 4
+    assert restored_entry['status'] == 'draft'
+    assert restored_entry['payload']['title'] == 'Workflow Draft'
+    assert restored_entry['seo_metadata']['title'] == 'SEO Draft'
+    assert restored_entry['seo_metadata']['robots'] == 'noindex'
+
+    unpublish_response = client.post(
+        f"/api/v1/content/entries/{entry['id']}/unpublish",
+        headers=headers,
+        json={'expected_version': 4},
+    )
+    assert unpublish_response.status_code == 409
+    assert unpublish_response.json()['code'] == 'CONTENT_ENTRY_TRANSITION_INVALID'
+
+
+def test_entry_preview_endpoint_returns_signed_expiring_url(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify content preview URLs are permission-gated and non-guessable."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Preview Draft Secret',
+                'body': '<p>Draft preview body</p>',
+                'views': 1,
+            },
+        },
+    )
+    assert create_response.status_code == 201
+    entry = create_response.json()
+
+    response = client.post(
+        f"/api/v1/content/entries/{entry['id']}/preview",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['entry_id'] == entry['id']
+    assert payload['expires_at'] is not None
+    assert len(payload['token']) >= 80
+    assert payload['token'] in payload['preview_url']
+    assert payload['preview_url'].startswith('http://testserver/preview/content/')
+    assert entry['slug'] not in payload['token']
+    assert 'Preview Draft Secret' not in payload['token']
+
+
+def test_entry_preview_endpoint_requires_auth(client: TestClient) -> None:
+    """Verify anonymous callers cannot mint preview URLs."""
+
+    response = client.post(f'/api/v1/content/entries/{uuid4()}/preview')
+
+    assert response.status_code == 401
+    assert response.json()['code'] == 'AUTH_REQUIRED'
+
+
+def test_entry_seo_metadata_rejects_unsafe_urls(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify SEO URL fields reject unsafe schemes before storage."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+
+    response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {
+                'title': 'Unsafe SEO',
+                'body': '<p>Draft</p>',
+                'views': 1,
+            },
+            'seo_metadata': {'canonical_url': 'javascript:alert(1)'},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': 'Request validation failed',
+        'code': 'VALIDATION_ERROR',
+    }
+
+
 def test_entry_create_survives_search_storage_failure(
     client: TestClient,
     bootstrap_payload: dict[str, str],
     migrated_database: dict[str, str],
 ) -> None:
-    """Verify derived-search storage failures do not block entry creation.
-
-    Args:
-        client: FastAPI test client.
-        bootstrap_payload: Bootstrap request payload.
-        migrated_database: Environment values for the migrated test database.
-
-    Returns:
-        None.
-
-    Raises:
-        None.
-    """
+    """Verify derived-search storage failures do not block entry creation."""
 
     headers = _auth_headers(client, bootstrap_payload)
     content_type = _create_content_type(client, headers)
@@ -1563,8 +2259,295 @@ def test_content_type_update_serializes_concurrent_entry_create(
     assert update_response.status_code == 409
     assert update_response.json() == {
         'detail': (
-            "Field definition update would invalidate existing entry "
-            "'created-during-update': Unknown field(s) for this content type: body, views"
+            'Field definition update would remove field(s) with existing data: '
+            'body, views'
         ),
         'code': 'CONTENT_TYPE_UPDATE_INVALID',
     }
+
+
+def test_block_document_content_type_and_entry_round_trip(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify block_document fields accept only typed versioned block trees."""
+
+    from pragma.blocks.schema import STABLE_BLOCK_TYPES
+
+    assert STABLE_BLOCK_TYPES == (
+        'section',
+        'container',
+        'columns',
+        'heading',
+        'paragraph',
+        'image',
+        'button',
+        'divider',
+        'spacer',
+        'quote',
+        'list',
+        'card',
+    )
+
+    headers = _auth_headers(client, bootstrap_payload)
+    create_type_response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json={
+            'name': 'Block Pages',
+            'field_definitions': [
+                {
+                    'name': 'title',
+                    'label': 'Title',
+                    'kind': 'text',
+                    'required': True,
+                },
+                {
+                    'name': 'layout',
+                    'label': 'Layout',
+                    'kind': 'block_document',
+                    'required': True,
+                },
+            ],
+        },
+    )
+    assert create_type_response.status_code == 201
+    content_type = create_type_response.json()
+    assert content_type['field_definitions'][1]['kind'] == 'block_document'
+
+    document = _valid_block_document()
+    entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {'title': 'Landing Page', 'layout': document},
+        },
+    )
+
+    assert entry_response.status_code == 201
+    assert entry_response.json()['payload']['layout'] == _normalized_valid_block_document()
+
+
+def test_block_document_default_applies_and_validates(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify block_document defaults use the same validation path as writes."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    default_document = _valid_block_document()
+    create_type_response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json={
+            'name': 'Default Block Pages',
+            'field_definitions': [
+                {
+                    'name': 'title',
+                    'label': 'Title',
+                    'kind': 'text',
+                    'required': True,
+                    'default_value': 'Untitled Page',
+                },
+                {
+                    'name': 'layout',
+                    'label': 'Layout',
+                    'kind': 'block_document',
+                    'required': True,
+                    'default_value': default_document,
+                },
+            ],
+        },
+    )
+    assert create_type_response.status_code == 201
+
+    entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': create_type_response.json()['id'],
+            'status': 'draft',
+            'payload': {},
+        },
+    )
+
+    assert entry_response.status_code == 201
+    assert entry_response.json()['payload'] == {
+        'title': 'Untitled Page',
+        'layout': _normalized_valid_block_document(),
+    }
+
+
+def test_block_document_entry_validation_rejects_invalid_documents(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify version, unknown block, tree, payload, and prop errors fail closed."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    create_type_response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json={
+            'name': 'Validated Block Pages',
+            'field_definitions': [
+                {'name': 'title', 'label': 'Title', 'kind': 'text', 'required': True},
+                {
+                    'name': 'layout',
+                    'label': 'Layout',
+                    'kind': 'block_document',
+                    'required': True,
+                },
+            ],
+        },
+    )
+    assert create_type_response.status_code == 201
+    content_type_id = create_type_response.json()['id']
+
+    invalid_cases = [
+        ({**_valid_block_document(), 'version': 2}, 'unsupported block document version'),
+        ({**_valid_block_document(), 'root': {'type': 'unknown'}}, "unknown block type 'unknown'"),
+        (
+            {
+                **_valid_block_document(),
+                'root': {
+                    'type': 'section',
+                    'children': [
+                        {'type': 'columns', 'props': {'columns': 3}, 'children': []}
+                    ],
+                },
+            },
+            'requires at least 2 child blocks',
+        ),
+        (
+            {
+                **_valid_block_document(),
+                'root': {
+                    'type': 'section',
+                    'children': [
+                        {'type': 'paragraph', 'props': {'html': '<script>alert(1)</script>'}}
+                    ],
+                },
+            },
+            "unsupported rich-text HTML tag 'script'",
+        ),
+        (
+            {
+                **_valid_block_document(),
+                'root': {
+                    'type': 'section',
+                    'children': [
+                        {'type': 'button', 'props': {'label': 'Bad', 'href': 'javascript:alert(1)'}}
+                    ],
+                },
+            },
+            'uses an unsupported URL scheme',
+        ),
+        (
+            {
+                **_valid_block_document(),
+                'root': {
+                    'type': 'section',
+                    'children': [
+                        {'type': 'heading', 'props': {'text': 'Bad', 'level': 7}}
+                    ],
+                },
+            },
+            "value 'level' is above maximum",
+        ),
+        (
+            {
+                **_valid_block_document(),
+                'root': {
+                    'type': 'section',
+                    'children': [
+                        {
+                            'type': 'heading',
+                            'props': {'text': 'Bad', 'level': 2},
+                            'settings': {'style': 'color:red'},
+                        }
+                    ],
+                },
+            },
+            'unsupported settings: style',
+        ),
+    ]
+
+    for document, expected_detail in invalid_cases:
+        response = client.post(
+            '/api/v1/content/entries',
+            headers=headers,
+            json={
+                'content_type_id': content_type_id,
+                'status': 'draft',
+                'payload': {'title': 'Invalid Page', 'layout': document},
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()['code'] == 'ENTRY_FIELD_INVALID'
+        assert expected_detail in response.json()['detail']
+
+
+def test_block_document_schema_update_safety_with_existing_entries(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify schema updates preserve existing block_document entry safety."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    field_definitions = [
+        {'name': 'title', 'label': 'Title', 'kind': 'text', 'required': True},
+        {'name': 'layout', 'label': 'Layout', 'kind': 'block_document', 'required': True},
+    ]
+    create_type_response = client.post(
+        '/api/v1/content/types',
+        headers=headers,
+        json={'name': 'Safe Block Updates', 'field_definitions': field_definitions},
+    )
+    assert create_type_response.status_code == 201
+    content_type = create_type_response.json()
+
+    entry_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {'title': 'Existing', 'layout': _valid_block_document()},
+        },
+    )
+    assert entry_response.status_code == 201
+
+    additive_response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json={
+            'name': 'Safe Block Updates',
+            'slug': 'safe-block-updates',
+            'description': 'Add optional summary',
+            'field_definitions': [
+                *field_definitions,
+                {'name': 'summary', 'label': 'Summary', 'kind': 'text'},
+            ],
+        },
+    )
+    assert additive_response.status_code == 200
+
+    type_change_response = client.put(
+        f"/api/v1/content/types/{content_type['id']}",
+        headers=headers,
+        json={
+            'name': 'Safe Block Updates',
+            'slug': 'safe-block-updates',
+            'description': 'Unsafe type change',
+            'field_definitions': [
+                {'name': 'title', 'label': 'Title', 'kind': 'text', 'required': True},
+                {'name': 'layout', 'label': 'Layout', 'kind': 'json', 'required': True},
+                {'name': 'summary', 'label': 'Summary', 'kind': 'text'},
+            ],
+        },
+    )
+    assert type_change_response.status_code == 409
+    assert type_change_response.json()['code'] == 'CONTENT_TYPE_UPDATE_INVALID'

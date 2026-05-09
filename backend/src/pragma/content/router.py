@@ -26,11 +26,16 @@ from pragma.auth.permissions import (
     PERMISSION_CONTENT_TYPES_MANAGE,
     PERMISSION_CONTENT_TYPES_READ,
 )
+from pragma.config import Settings, get_settings
 from pragma.content.models import (
     ContentEntryCreateRequest,
     ContentEntryListParams,
     ContentEntryListResponse,
+    ContentEntryPreviewResponse,
     ContentEntryResponse,
+    ContentEntryRevisionListResponse,
+    ContentEntryRevisionRestoreRequest,
+    ContentEntryTransitionRequest,
     ContentEntryUpdateRequest,
     ContentTypeCreateRequest,
     ContentTypeListParams,
@@ -40,6 +45,7 @@ from pragma.content.models import (
 )
 from pragma.content.service import (
     create_content_type_record,
+    create_entry_preview_record,
     create_entry_record,
     delete_content_type_record,
     delete_entry_record,
@@ -47,6 +53,10 @@ from pragma.content.service import (
     get_entry_record,
     list_content_type_records,
     list_entry_records,
+    list_entry_revision_records,
+    publish_entry_record,
+    restore_entry_revision_record,
+    unpublish_entry_record,
     update_content_type_record,
     update_entry_record,
 )
@@ -403,6 +413,100 @@ def update_entry(
     return update_entry_record(storage, entry_id, payload, current_user)
 
 
+@router.get(
+    "/entries/{entry_id}/revisions",
+    response_model=ContentEntryRevisionListResponse,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
+def list_entry_revisions_for_content(
+    entry_id: UUID,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_READ))
+    ],
+) -> ContentEntryRevisionListResponse:
+    """List immutable revisions for a content entry."""
+
+    _ = current_user
+    return list_entry_revision_records(storage, entry_id)
+
+
+@router.post(
+    "/entries/{entry_id}/preview",
+    response_model=ContentEntryPreviewResponse,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
+def create_entry_preview_for_content(
+    entry_id: UUID,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_READ))
+    ],
+) -> ContentEntryPreviewResponse:
+    """Create a short-lived signed preview URL for a content entry."""
+
+    _ = current_user
+    return create_entry_preview_record(storage, settings, entry_id)
+
+
+@router.post(
+    "/entries/{entry_id}/publish",
+    response_model=ContentEntryResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
+def publish_entry_for_content(
+    entry_id: UUID,
+    payload: ContentEntryTransitionRequest,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> ContentEntryResponse:
+    """Publish a draft content entry explicitly."""
+
+    return publish_entry_record(storage, entry_id, payload, current_user)
+
+
+@router.post(
+    "/entries/{entry_id}/unpublish",
+    response_model=ContentEntryResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
+def unpublish_entry_for_content(
+    entry_id: UUID,
+    payload: ContentEntryTransitionRequest,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> ContentEntryResponse:
+    """Unpublish a published content entry explicitly."""
+
+    return unpublish_entry_record(storage, entry_id, payload, current_user)
+
+
+@router.post(
+    "/entries/{entry_id}/revisions/{revision_id}/restore",
+    response_model=ContentEntryResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
+def restore_entry_revision_for_content(
+    entry_id: UUID,
+    revision_id: UUID,
+    payload: ContentEntryRevisionRestoreRequest,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> ContentEntryResponse:
+    """Restore a prior immutable revision as a new current version."""
+
+    return restore_entry_revision_record(
+        storage, entry_id, revision_id, payload, current_user
+    )
+
+
 @router.delete(
     "/entries/{entry_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -415,20 +519,7 @@ def delete_entry_for_content(
         dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_DELETE))
     ],
 ) -> Response:
-    """Delete a content entry.
-
-    Args:
-        entry_id: Content-entry identifier.
-        storage: Initialized database pool manager.
-        current_user: Authenticated user context.
-
-    Returns:
-        Response: Empty HTTP 204 response.
-
-    Raises:
-        ContentError: If the entry does not exist.
-        StorageError: If the storage layer fails.
-    """
+    """Delete a content entry."""
 
     _ = current_user
     delete_entry_record(storage, entry_id)

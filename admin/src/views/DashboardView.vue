@@ -23,8 +23,16 @@
               <span>{{ user?.roles.join(', ') || (user?.is_superuser ? 'super-admin' : 'none') }}</span>
             </div>
             <div class="status-row">
-              <span>Permissions</span>
-              <span>{{ user?.permissions.length ?? 0 }}</span>
+              <span>Access source</span>
+              <Tag :severity="hasFullAccess ? 'info' : 'secondary'" :value="accessSourceLabel" />
+            </div>
+            <div class="status-row">
+              <span>Assigned permissions</span>
+              <span>{{ assignedAccessLabel }}</span>
+            </div>
+            <div class="status-row">
+              <span>Effective access</span>
+              <span>{{ effectiveAccessLabel }}</span>
             </div>
             <div class="status-row">
               <span>Access token loaded</span>
@@ -75,6 +83,10 @@
               <Tag :severity="authStore.hasPermission('users.manage') ? 'success' : 'secondary'" :value="authStore.hasPermission('users.manage') ? 'Available' : 'Not assigned'" />
             </div>
             <div class="status-row">
+              <span>Roles management</span>
+              <Tag :severity="authStore.hasPermission('roles.manage') ? 'success' : 'secondary'" :value="authStore.hasPermission('roles.manage') ? 'Available' : 'Not assigned'" />
+            </div>
+            <div class="status-row">
               <span>AI administration</span>
               <Tag :severity="authStore.hasPermission('ai.settings.manage') ? 'success' : 'secondary'" :value="authStore.hasPermission('ai.settings.manage') ? 'Available' : 'Not assigned'" />
             </div>
@@ -114,6 +126,28 @@ const { accessToken, user, requiresPasswordChange } = storeToRefs(authStore)
 const { readiness, readinessOk, schemaReady, errorMessage: readinessError } = storeToRefs(installStore)
 
 const capabilityEntries = computed(() => Object.entries(readiness.value?.capabilities ?? {}))
+const hasFullAccess = computed(() => (
+  user.value?.has_all_permissions === true
+  || user.value?.permission_source === 'superuser'
+  || user.value?.is_superuser === true
+))
+const assignedPermissionCount = computed(() => user.value?.assigned_permissions.length ?? 0)
+const effectivePermissionCount = computed(() => user.value?.effective_permissions.length ?? user.value?.permissions.length ?? 0)
+const accessSourceLabel = computed(() => (hasFullAccess.value ? 'Superuser full access' : 'Assigned roles'))
+const assignedAccessLabel = computed(() => {
+  const count = assignedPermissionCount.value
+  if (hasFullAccess.value && count === 0) {
+    return 'No role-assigned permissions; full access via superuser'
+  }
+  return `${count} role-assigned permission${count === 1 ? '' : 's'}`
+})
+const effectiveAccessLabel = computed(() => {
+  if (hasFullAccess.value) {
+    return 'All permissions via superuser'
+  }
+  const count = effectivePermissionCount.value
+  return `${count} effective permission${count === 1 ? '' : 's'}`
+})
 
 async function redirectToLogin(): Promise<void> {
   await router.replace({

@@ -28,13 +28,26 @@ from psycopg import Error as PsycopgError
 from psycopg import IntegrityError
 
 from pragma.auth.security import utc_now
+from pragma.blocks.validator import (
+    BlockDocumentValidationError,
+    validate_block_document,
+)
+from pragma.config import Settings
 from pragma.content.models import (
+    BlockDocumentFieldDefinition,
     BooleanFieldDefinition,
     ContentEntryCreateRequest,
     ContentEntryListParams,
     ContentEntryListResponse,
+    ContentEntryPreviewResponse,
     ContentEntryResponse,
+    ContentEntryRevisionListResponse,
+    ContentEntryRevisionResponse,
+    ContentEntryRevisionRestoreRequest,
+    ContentEntrySeoMetadata,
+    ContentEntryTransitionRequest,
     ContentEntryUpdateRequest,
+    ContentRevisionAction,
     ContentStatus,
     ContentTypeCreateRequest,
     ContentTypeListParams,
@@ -55,18 +68,23 @@ from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.content import (
     count_content_types,
     count_entries,
+    count_entries_by_content_type_ids,
     count_entries_for_content_type,
+    create_content_entry_revision,
     create_content_type,
     create_entry,
     delete_content_type_if_unused,
     delete_entry,
+    get_content_entry_revision,
     get_content_type_by_id,
     get_content_type_by_id_for_key_share,
     get_content_type_by_id_for_update,
     get_content_type_by_slug,
     get_entry_by_id,
+    get_entry_by_id_for_update,
     get_entry_by_slug,
     get_field_definitions,
+    list_content_entry_revisions,
     list_content_types,
     list_entries,
     list_entries_for_content_type_validation,
@@ -398,16 +416,22 @@ def _field_definition_to_storage_payload(
     """
 
     dumped = field_definition.model_dump(mode="json")
+    config = {
+        key: value
+        for key, value in dumped.items()
+        if key not in {"name", "label", "kind", "required"} and value is not None
+    }
+    storage_kind = dumped["kind"]
+    if storage_kind == "block_document":
+        storage_kind = "json"
+        config["kind"] = dumped["kind"]
+
     return {
         "name": dumped["name"],
         "label": dumped["label"],
-        "kind": dumped["kind"],
+        "kind": storage_kind,
         "required": dumped["required"],
-        "config": {
-            key: value
-            for key, value in dumped.items()
-            if key not in {"name", "label", "kind", "required"} and value is not None
-        },
+        "config": config,
     }
 
 
@@ -450,6 +474,38 @@ def _field_definitions_from_rows(rows: Sequence[Mapping[str, Any]]) -> list[Fiel
     """
 
     return [_field_definition_from_row(row) for row in rows]
+
+
+def _field_definition_has_default(field_definition: FieldDefinitionModel) -> bool:
+    """Return whether a field definition explicitly defines a default value.
+
+    Args:
+        field_definition: Parsed field definition.
+
+    Returns:
+        bool: True when ``default_value`` was supplied by API or storage config.
+
+    Raises:
+        None.
+    """
+
+    return "default_value" in field_definition.model_fields_set
+
+
+def _field_definition_default_value(field_definition: FieldDefinitionModel) -> Any:
+    """Return the explicit default value for a field definition.
+
+    Args:
+        field_definition: Parsed field definition.
+
+    Returns:
+        Any: Supplied default value.
+
+    Raises:
+        None.
+    """
+
+    return field_definition.default_value
 
 
 def _require_user_id(current_user: Mapping[str, object]) -> UUID:
@@ -518,9 +574,7 @@ def _validate_field_definitions(field_definitions: Sequence[FieldDefinitionModel
                     ),
                     code="CONTENT_FIELD_RANGE_INVALID",
                 )
-            continue
-
-        if isinstance(field_definition, IntegerFieldDefinition | NumberFieldDefinition) and (
+        elif isinstance(field_definition, IntegerFieldDefinition | NumberFieldDefinition) and (
             field_definition.minimum is not None
             and field_definition.maximum is not None
             and field_definition.minimum > field_definition.maximum
@@ -531,6 +585,41 @@ def _validate_field_definitions(field_definitions: Sequence[FieldDefinitionModel
                 ),
                 code="CONTENT_FIELD_RANGE_INVALID",
             )
+
+        if not _field_definition_has_default(field_definition):
+            continue
+
+        default_value = _field_definition_default_value(field_definition)
+        try:
+            json.dumps(default_value)
+        except TypeError as exc:
+            raise ContentError(
+                detail=(
+                    f"Field '{field_definition.name}' default_value must contain "
+                    "JSON-serializable data"
+                ),
+                code="CONTENT_FIELD_DEFAULT_INVALID",
+            ) from exc
+
+        if field_definition.required and default_value is None:
+            raise ContentError(
+                detail=(
+                    f"Field '{field_definition.name}' default_value is required when "
+                    "the field is required"
+                ),
+                code="CONTENT_FIELD_DEFAULT_INVALID",
+            )
+
+        try:
+            _validate_field_value(field_definition, default_value)
+        except ContentError as exc:
+            raise ContentError(
+                detail=(
+                    f"Field '{field_definition.name}' default_value is invalid: "
+                    f"{exc.detail}"
+                ),
+                code="CONTENT_FIELD_DEFAULT_INVALID",
+            ) from exc
 
 
 def _validate_datetime_value(value: str, field_name: str) -> str:
@@ -695,6 +784,15 @@ def _validate_field_value(
             )
         return _validate_datetime_value(value, field_name)
 
+    if isinstance(field_definition, BlockDocumentFieldDefinition):
+        try:
+            return validate_block_document(value)
+        except BlockDocumentValidationError as exc:
+            raise ContentError(
+                detail=f"Field '{field_name}' block document is invalid: {exc}",
+                code="ENTRY_FIELD_INVALID",
+            ) from exc
+
     if not isinstance(field_definition, JsonFieldDefinition):
         raise ContentError(
             detail=f"Field '{field_name}' uses an unsupported field type",
@@ -747,6 +845,12 @@ def _validate_entry_payload(
     normalized_payload: dict[str, Any] = {}
     for field_definition in field_definitions:
         if field_definition.name not in payload:
+            if _field_definition_has_default(field_definition):
+                normalized_payload[field_definition.name] = _validate_field_value(
+                    field_definition,
+                    _field_definition_default_value(field_definition),
+                )
+                continue
             if field_definition.required:
                 raise ContentError(
                     detail=f"Field '{field_definition.name}' is required",
@@ -886,15 +990,94 @@ def _resolve_published_at(
     return None
 
 
+def _validate_content_type_update_against_entries(
+    *,
+    existing_field_definitions: Sequence[FieldDefinitionModel],
+    proposed_field_definitions: Sequence[FieldDefinitionModel],
+    entry_rows: Sequence[Mapping[str, Any]],
+    legacy_rich_text_fields: set[str],
+) -> None:
+    """Validate a proposed schema update against existing entries.
+
+    Args:
+        existing_field_definitions: Currently stored field definitions.
+        proposed_field_definitions: Proposed replacement field definitions.
+        entry_rows: Existing entry payload rows for the content type.
+        legacy_rich_text_fields: Rich-text field names that may preserve legacy HTML.
+
+    Returns:
+        None.
+
+    Raises:
+        ContentError: If the proposed update is unsafe for existing entries.
+    """
+
+    if not entry_rows:
+        return
+
+    existing_by_name = {item.name: item for item in existing_field_definitions}
+    proposed_by_name = {item.name: item for item in proposed_field_definitions}
+
+    removed_names = sorted(set(existing_by_name) - set(proposed_by_name))
+    if removed_names:
+        names = ', '.join(removed_names)
+        raise ContentError(
+            detail=(
+                "Field definition update would remove field(s) with existing data: "
+                f"{names}"
+            ),
+            code="CONTENT_TYPE_UPDATE_INVALID",
+            status_code=HTTPStatus.CONFLICT,
+        )
+
+    type_changed_names = sorted(
+        name
+        for name in set(existing_by_name) & set(proposed_by_name)
+        if existing_by_name[name].kind != proposed_by_name[name].kind
+    )
+    if type_changed_names:
+        names = ', '.join(type_changed_names)
+        raise ContentError(
+            detail=(
+                "Field definition update would change field type for existing "
+                f"field(s): {names}"
+            ),
+            code="CONTENT_TYPE_UPDATE_INVALID",
+            status_code=HTTPStatus.CONFLICT,
+        )
+
+    for entry_row in entry_rows:
+        entry_payload = cast(dict[str, Any], entry_row["payload"])
+        try:
+            _validate_entry_payload(
+                entry_payload,
+                proposed_field_definitions,
+                existing_payload=entry_payload,
+                legacy_rich_text_fields=legacy_rich_text_fields,
+            )
+        except ContentError as exc:
+            raise ContentError(
+                detail=(
+                    "Field definition update would invalidate existing entry "
+                    f"'{entry_row['slug']}': {exc.detail}"
+                ),
+                code="CONTENT_TYPE_UPDATE_INVALID",
+                status_code=HTTPStatus.CONFLICT,
+            ) from exc
+
+
 def _build_content_type_response(
     content_type_row: Mapping[str, Any],
     field_rows: Sequence[Mapping[str, Any]],
+    *,
+    entry_count: int,
 ) -> ContentTypeResponse:
     """Build a content-type response from storage rows.
 
     Args:
         content_type_row: Content-type storage row.
         field_rows: Field-definition storage rows for the content type.
+        entry_count: Server-derived number of entries for the content type.
 
     Returns:
         ContentTypeResponse: Serialized content-type response model.
@@ -906,6 +1089,7 @@ def _build_content_type_response(
     return ContentTypeResponse.from_record(
         content_type_row,
         _field_definitions_from_rows(field_rows),
+        entry_count=entry_count,
     )
 
 
@@ -1003,6 +1187,7 @@ def create_content_type_record(
                 timestamp,
             )
             field_rows = get_field_definitions(connection, content_type_row["id"])
+            entry_count = count_entries_for_content_type(connection, content_type_row["id"])
     except ContentError:
         raise
     except IntegrityError as exc:
@@ -1017,7 +1202,11 @@ def create_content_type_record(
             code="CONTENT_TYPE_CREATE_FAILED",
         ) from exc
 
-    return _build_content_type_response(content_type_row, field_rows)
+    return _build_content_type_response(
+        content_type_row,
+        field_rows,
+        entry_count=entry_count,
+    )
 
 
 def list_content_type_records(
@@ -1045,9 +1234,9 @@ def list_content_type_records(
                 order_by=params.order_by,
             )
             total = count_content_types(connection)
-            fields_by_content_type = list_field_definitions(
-                connection, [row["id"] for row in content_type_rows]
-            )
+            content_type_ids = [cast(UUID, row["id"]) for row in content_type_rows]
+            fields_by_content_type = list_field_definitions(connection, content_type_ids)
+            entry_counts = count_entries_by_content_type_ids(connection, content_type_ids)
     except PsycopgError as exc:
         raise StorageError(
             detail="Unable to list content types",
@@ -1058,6 +1247,7 @@ def list_content_type_records(
         _build_content_type_response(
             row,
             fields_by_content_type.get(cast(UUID, row["id"]), []),
+            entry_count=entry_counts.get(cast(UUID, row["id"]), 0),
         )
         for row in content_type_rows
     ]
@@ -1094,6 +1284,7 @@ def get_content_type_record(storage: DatabasePool, content_type_id: UUID) -> Con
                     status_code=HTTPStatus.NOT_FOUND,
                 )
             field_rows = get_field_definitions(connection, content_type_id)
+            entry_count = count_entries_for_content_type(connection, content_type_id)
     except ContentError:
         raise
     except PsycopgError as exc:
@@ -1102,7 +1293,11 @@ def get_content_type_record(storage: DatabasePool, content_type_id: UUID) -> Con
             code="CONTENT_TYPE_LOOKUP_FAILED",
         ) from exc
 
-    return _build_content_type_response(content_type_row, field_rows)
+    return _build_content_type_response(
+        content_type_row,
+        field_rows,
+        entry_count=entry_count,
+    )
 
 
 def update_content_type_record(
@@ -1168,24 +1363,14 @@ def update_content_type_record(
                     status_code=HTTPStatus.CONFLICT,
                 )
 
-            for entry_row in list_entries_for_content_type_validation(connection, content_type_id):
-                entry_payload = cast(dict[str, Any], entry_row["payload"])
-                try:
-                    _validate_entry_payload(
-                        entry_payload,
-                        field_definitions,
-                        existing_payload=entry_payload,
-                        legacy_rich_text_fields=legacy_rich_text_fields,
-                    )
-                except ContentError as exc:
-                    raise ContentError(
-                        detail=(
-                            "Field definition update would invalidate existing entry "
-                            f"'{entry_row['slug']}': {exc.detail}"
-                        ),
-                        code="CONTENT_TYPE_UPDATE_INVALID",
-                        status_code=HTTPStatus.CONFLICT,
-                    ) from exc
+            _validate_content_type_update_against_entries(
+                existing_field_definitions=existing_field_definitions,
+                proposed_field_definitions=field_definitions,
+                entry_rows=list_entries_for_content_type_validation(
+                    connection, content_type_id
+                ),
+                legacy_rich_text_fields=legacy_rich_text_fields,
+            )
 
             content_type_row = update_content_type(
                 connection=connection,
@@ -1203,6 +1388,7 @@ def update_content_type_record(
                 timestamp,
             )
             field_rows = get_field_definitions(connection, content_type_id)
+            entry_count = count_entries_for_content_type(connection, content_type_id)
     except ContentError:
         raise
     except IntegrityError as exc:
@@ -1239,7 +1425,11 @@ def update_content_type_record(
             exc_info=True,
         )
 
-    return _build_content_type_response(content_type_row, field_rows)
+    return _build_content_type_response(
+        content_type_row,
+        field_rows,
+        entry_count=entry_count,
+    )
 
 
 def delete_content_type_record(storage: DatabasePool, content_type_id: UUID) -> None:
@@ -1294,20 +1484,7 @@ def create_entry_record(
     payload: ContentEntryCreateRequest,
     current_user: Mapping[str, object],
 ) -> ContentEntryResponse:
-    """Create a content entry within a content type.
-
-    Args:
-        storage: Initialized database pool manager.
-        payload: Content-entry creation payload.
-        current_user: Authenticated user context.
-
-    Returns:
-        ContentEntryResponse: Created content-entry response.
-
-    Raises:
-        ContentError: If the entry payload is invalid.
-        StorageError: If PostgreSQL access fails.
-    """
+    """Create a content entry within a content type."""
 
     from pragma.auth.permissions import (
         PERMISSION_CONTENT_ENTRIES_PUBLISH,
@@ -1348,6 +1525,7 @@ def create_entry_record(
                 storage_connection=connection,
             )
             published_at = _resolve_published_at(payload.status, None, timestamp)
+            seo_metadata = payload.seo_metadata.to_storage()
             entry_row = create_entry(
                 connection=connection,
                 entry_id=uuid4(),
@@ -1355,9 +1533,18 @@ def create_entry_record(
                 slug=slug,
                 status=payload.status.value,
                 payload=validated_payload,
+                seo_metadata=seo_metadata,
                 published_at=published_at,
                 user_id=user_id,
                 created_at=timestamp,
+            )
+            entry_row = {**entry_row, 'content_type_slug': content_type_row['slug']}
+            _create_entry_revision(
+                connection,
+                entry_row=entry_row,
+                action=ContentRevisionAction.CREATE,
+                user_id=user_id,
+                timestamp=timestamp,
             )
             _run_search_indexing_hook(
                 connection,
@@ -1387,9 +1574,7 @@ def create_entry_record(
             code='CONTENT_ENTRY_CREATE_FAILED',
         ) from exc
 
-    entry_response = ContentEntryResponse.from_record(
-        {**entry_row, 'content_type_slug': content_type_row['slug']}
-    )
+    entry_response = ContentEntryResponse.from_record(entry_row)
     publish_content_entry_event(
         event_type='content.entry.created',
         entry=entry_response,
@@ -1502,27 +1687,118 @@ def get_entry_record(storage: DatabasePool, entry_id: UUID) -> ContentEntryRespo
     return ContentEntryResponse.from_record(entry_row)
 
 
+CONTENT_ENTRY_PREVIEW_TOKEN_TYPE = 'content_preview'
+_CONTENT_ENTRY_PREVIEW_TTL_SECONDS = 15 * 60
+
+
+def create_content_entry_preview_token(
+    settings: Settings,
+    *,
+    entry_id: UUID,
+    ttl_seconds: int = _CONTENT_ENTRY_PREVIEW_TTL_SECONDS,
+    issued_at: datetime | None = None,
+) -> tuple[str, datetime]:
+    """Create a non-guessable stateless signed preview token.
+
+    Args:
+        settings: Application settings containing the JWT/HMAC secret.
+        entry_id: Content entry identifier to preview.
+        ttl_seconds: Token lifetime in seconds.
+        issued_at: Optional issued-at timestamp for tests.
+
+    Returns:
+        tuple[str, datetime]: Encoded preview token and expiry timestamp.
+
+    Raises:
+        None.
+    """
+
+    from datetime import timedelta
+
+    import jwt
+
+    issued_at = issued_at or utc_now()
+    expires_at = issued_at + timedelta(seconds=ttl_seconds)
+    payload = {
+        'sub': str(entry_id),
+        'typ': CONTENT_ENTRY_PREVIEW_TOKEN_TYPE,
+        'jti': str(uuid4()),
+        'iat': int(issued_at.timestamp()),
+        'exp': int(expires_at.timestamp()),
+        'iss': settings.jwt_issuer,
+        'aud': settings.jwt_audience,
+    }
+    token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return token, expires_at
+
+
+def decode_content_entry_preview_token(settings: Settings, token: str) -> UUID:
+    """Decode and validate a signed content-entry preview token."""
+
+    from pragma.auth.security import decode_token
+    from pragma.errors import AuthError
+
+    payload = decode_token(
+        settings=settings,
+        token=token,
+        expected_token_type=CONTENT_ENTRY_PREVIEW_TOKEN_TYPE,
+    )
+    subject = payload.get('sub')
+    if not isinstance(subject, str):
+        raise AuthError(detail='Preview token subject is missing', code='TOKEN_INVALID')
+    try:
+        return UUID(subject)
+    except ValueError as exc:
+        raise AuthError(detail='Preview token subject is invalid', code='TOKEN_INVALID') from exc
+
+
+def create_entry_preview_record(
+    storage: DatabasePool,
+    settings: Settings,
+    entry_id: UUID,
+) -> ContentEntryPreviewResponse:
+    """Create a short-lived preview token/URL for a content entry."""
+
+    from pragma.content.models import ContentEntryPreviewResponse
+
+    try:
+        with storage.connection() as connection:
+            entry_row = get_entry_by_id(connection, entry_id)
+            if entry_row is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to create content entry preview',
+            code='CONTENT_ENTRY_PREVIEW_CREATE_FAILED',
+        ) from exc
+
+    _ = entry_row
+    token, expires_at = create_content_entry_preview_token(
+        settings,
+        entry_id=entry_id,
+    )
+    preview_url = f"{settings.base_url.rstrip('/')}/preview/content/{token}"
+    return ContentEntryPreviewResponse(
+        entry_id=entry_id,
+        token=token,
+        preview_url=preview_url,
+        expires_at=expires_at,
+    )
+
+
 def update_entry_record(
     storage: DatabasePool,
     entry_id: UUID,
     payload: ContentEntryUpdateRequest,
     current_user: Mapping[str, object],
 ) -> ContentEntryResponse:
-    """Update an existing content entry.
-
-    Args:
-        storage: Initialized database pool manager.
-        entry_id: Content-entry identifier to update.
-        payload: Content-entry update payload.
-        current_user: Authenticated user context.
-
-    Returns:
-        ContentEntryResponse: Updated content-entry response.
-
-    Raises:
-        ContentError: If the entry payload is invalid.
-        StorageError: If PostgreSQL access fails.
-    """
+    """Update an existing content entry."""
 
     from pragma.auth.permissions import (
         PERMISSION_CONTENT_ENTRIES_PUBLISH,
@@ -1539,7 +1815,7 @@ def update_entry_record(
 
     try:
         with storage.connection() as connection, connection.transaction():
-            existing_entry = get_entry_by_id(connection, entry_id)
+            existing_entry = get_entry_by_id_for_update(connection, entry_id)
             if existing_entry is None:
                 raise ContentError(
                     detail='Content entry not found',
@@ -1584,15 +1860,34 @@ def update_entry_record(
                 existing_entry['published_at'],
                 timestamp,
             )
+            action = _revision_action_for_status_change(
+                cast(str, existing_entry['status']),
+                payload.status,
+            )
             entry_row = update_entry(
                 connection=connection,
                 entry_id=entry_id,
                 slug=slug,
                 status=payload.status.value,
                 payload=validated_payload,
+                seo_metadata=payload.seo_metadata.to_storage(),
                 published_at=published_at,
                 user_id=user_id,
                 updated_at=timestamp,
+                expected_version=payload.expected_version,
+            )
+            if entry_row is None:
+                _raise_version_conflict()
+            entry_row = {
+                **entry_row,
+                'content_type_slug': existing_entry['content_type_slug'],
+            }
+            _create_entry_revision(
+                connection,
+                entry_row=entry_row,
+                action=action,
+                user_id=user_id,
+                timestamp=timestamp,
             )
             _run_search_indexing_hook(
                 connection,
@@ -1622,9 +1917,7 @@ def update_entry_record(
             code='CONTENT_ENTRY_UPDATE_FAILED',
         ) from exc
 
-    entry_response = ContentEntryResponse.from_record(
-        {**entry_row, 'content_type_slug': existing_entry['content_type_slug']}
-    )
+    entry_response = ContentEntryResponse.from_record(entry_row)
     publish_content_entry_event(
         event_type='content.entry.updated',
         entry=entry_response,
@@ -1641,19 +1934,7 @@ def update_entry_record(
 
 
 def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
-    """Delete a content entry by identifier.
-
-    Args:
-        storage: Initialized database pool manager.
-        entry_id: Content-entry identifier to delete.
-
-    Returns:
-        None.
-
-    Raises:
-        ContentError: If the entry does not exist.
-        StorageError: If PostgreSQL access fails.
-    """
+    """Delete a content entry by identifier."""
 
     from pragma.modules.service import dispatch_content_entry_event
     from pragma.realtime.service import publish_content_entry_event
@@ -1701,3 +1982,370 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
                 'entry': deleted_entry_response.model_dump(mode='json'),
             },
         )
+
+
+def _raise_version_conflict() -> None:
+    """Raise a structured optimistic concurrency conflict."""
+
+    raise ContentError(
+        detail='Content entry version does not match the current stored version',
+        code='CONTENT_ENTRY_VERSION_CONFLICT',
+        status_code=HTTPStatus.CONFLICT,
+    )
+
+
+def _revision_action_for_status_change(
+    existing_status: str, requested_status: ContentStatus
+) -> ContentRevisionAction:
+    """Return the revision action label for a status-aware update."""
+
+    if requested_status is ContentStatus.PUBLISHED and existing_status != 'published':
+        return ContentRevisionAction.PUBLISH
+    if existing_status == 'published' and requested_status is ContentStatus.DRAFT:
+        return ContentRevisionAction.UNPUBLISH
+    return ContentRevisionAction.UPDATE
+
+
+def _create_entry_revision(
+    connection: Any,
+    *,
+    entry_row: Mapping[str, Any],
+    action: ContentRevisionAction,
+    user_id: UUID,
+    timestamp: datetime,
+    restore_source_revision_id: UUID | None = None,
+) -> ContentEntryRevisionResponse:
+    """Persist an immutable snapshot for a just-written entry row."""
+
+    revision_row = create_content_entry_revision(
+        connection,
+        revision_id=uuid4(),
+        entry_id=entry_row['id'],
+        revision_number=int(entry_row['version']),
+        action=action.value,
+        slug=cast(str, entry_row['slug']),
+        status=cast(str, entry_row['status']),
+        payload=cast(dict[str, Any], entry_row['payload']),
+        seo_metadata=ContentEntrySeoMetadata.from_record(entry_row).to_storage(),
+        published_at=entry_row['published_at'],
+        user_id=user_id,
+        created_at=timestamp,
+        restore_source_revision_id=restore_source_revision_id,
+    )
+    return ContentEntryRevisionResponse.from_record(revision_row)
+
+
+def _ensure_publish_transition_allowed(
+    current_user: Mapping[str, object],
+    *,
+    existing_status: str,
+    target_status: ContentStatus,
+) -> None:
+    """Enforce publish permission for publishing and unpublishing transitions."""
+
+    from pragma.auth.permissions import (
+        PERMISSION_CONTENT_ENTRIES_PUBLISH,
+        ensure_permission,
+    )
+
+    if target_status is ContentStatus.PUBLISHED or (
+        existing_status == 'published' and target_status is not ContentStatus.PUBLISHED
+    ):
+        ensure_permission(current_user, PERMISSION_CONTENT_ENTRIES_PUBLISH)
+
+
+def _invalid_transition(detail: str) -> ContentError:
+    """Build a structured invalid workflow transition error."""
+
+    return ContentError(
+        detail=detail,
+        code='CONTENT_ENTRY_TRANSITION_INVALID',
+        status_code=HTTPStatus.CONFLICT,
+    )
+
+
+def _emit_entry_updated(entry_response: ContentEntryResponse, actor_id: UUID) -> None:
+    """Emit realtime and module events for content entry changes."""
+
+    from pragma.modules.service import dispatch_content_entry_event
+    from pragma.realtime.service import publish_content_entry_event
+
+    publish_content_entry_event(
+        event_type='content.entry.updated',
+        entry=entry_response,
+        actor_id=actor_id,
+    )
+    dispatch_content_entry_event(
+        'content.entry.updated',
+        {
+            'event': 'content.entry.updated',
+            'entry': entry_response.model_dump(mode='json'),
+        },
+    )
+
+
+def list_entry_revision_records(
+    storage: DatabasePool, entry_id: UUID
+) -> ContentEntryRevisionListResponse:
+    """List immutable revisions for a content entry."""
+
+    try:
+        with storage.connection() as connection:
+            if get_entry_by_id(connection, entry_id) is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            revision_rows = list_content_entry_revisions(connection, entry_id)
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to list content entry revisions',
+            code='CONTENT_ENTRY_REVISION_LIST_FAILED',
+        ) from exc
+
+    return ContentEntryRevisionListResponse(
+        items=[ContentEntryRevisionResponse.from_record(row) for row in revision_rows]
+    )
+
+
+def publish_entry_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    payload: ContentEntryTransitionRequest,
+    current_user: Mapping[str, object],
+) -> ContentEntryResponse:
+    """Publish a draft content entry through an explicit transition endpoint."""
+
+    return _transition_entry_record(
+        storage,
+        entry_id,
+        payload.expected_version,
+        ContentStatus.PUBLISHED,
+        ContentRevisionAction.PUBLISH,
+        current_user,
+    )
+
+
+def unpublish_entry_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    payload: ContentEntryTransitionRequest,
+    current_user: Mapping[str, object],
+) -> ContentEntryResponse:
+    """Unpublish a published content entry through an explicit endpoint."""
+
+    return _transition_entry_record(
+        storage,
+        entry_id,
+        payload.expected_version,
+        ContentStatus.DRAFT,
+        ContentRevisionAction.UNPUBLISH,
+        current_user,
+    )
+
+
+def _transition_entry_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    expected_version: int | None,
+    target_status: ContentStatus,
+    action: ContentRevisionAction,
+    current_user: Mapping[str, object],
+) -> ContentEntryResponse:
+    """Apply an explicit publish/unpublish state transition."""
+
+    from pragma.search.service import sync_search_document
+
+    timestamp = utc_now()
+    user_id = _require_user_id(current_user)
+    try:
+        with storage.connection() as connection, connection.transaction():
+            existing_entry = get_entry_by_id_for_update(connection, entry_id)
+            if existing_entry is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            if target_status is ContentStatus.PUBLISHED and existing_entry['status'] != 'draft':
+                raise _invalid_transition('Only draft entries can be published explicitly')
+            if target_status is ContentStatus.DRAFT and existing_entry['status'] != 'published':
+                raise _invalid_transition('Only published entries can be unpublished explicitly')
+            _ensure_publish_transition_allowed(
+                current_user,
+                existing_status=cast(str, existing_entry['status']),
+                target_status=target_status,
+            )
+            field_definitions = _field_definitions_from_rows(
+                get_field_definitions(connection, existing_entry['content_type_id'])
+            )
+            published_at = _resolve_published_at(
+                target_status,
+                existing_entry['published_at'],
+                timestamp,
+            )
+            entry_row = update_entry(
+                connection=connection,
+                entry_id=entry_id,
+                slug=cast(str, existing_entry['slug']),
+                status=target_status.value,
+                payload=cast(dict[str, Any], existing_entry['payload']),
+                seo_metadata=ContentEntrySeoMetadata.from_record(existing_entry).to_storage(),
+                published_at=published_at,
+                user_id=user_id,
+                updated_at=timestamp,
+                expected_version=expected_version,
+            )
+            if entry_row is None:
+                _raise_version_conflict()
+            entry_row = {
+                **entry_row,
+                'content_type_slug': existing_entry['content_type_slug'],
+            }
+            _create_entry_revision(
+                connection,
+                entry_row=entry_row,
+                action=action,
+                user_id=user_id,
+                timestamp=timestamp,
+            )
+            _run_search_indexing_hook(
+                connection,
+                operation='entry_transition_sync',
+                context={
+                    'entry_id': str(entry_id),
+                    'content_type_id': str(existing_entry['content_type_id']),
+                },
+                hook=lambda: sync_search_document(
+                    connection,
+                    entry_row=entry_row,
+                    content_type_slug=cast(str, existing_entry['content_type_slug']),
+                    field_definitions=field_definitions,
+                ),
+            )
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to transition content entry',
+            code='CONTENT_ENTRY_TRANSITION_FAILED',
+        ) from exc
+
+    entry_response = ContentEntryResponse.from_record(entry_row)
+    _emit_entry_updated(entry_response, user_id)
+    return entry_response
+
+
+def restore_entry_revision_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    revision_id: UUID,
+    payload: ContentEntryRevisionRestoreRequest,
+    current_user: Mapping[str, object],
+) -> ContentEntryResponse:
+    """Restore an immutable revision by writing a new current version."""
+
+    from pragma.search.service import sync_search_document
+
+    timestamp = utc_now()
+    user_id = _require_user_id(current_user)
+    try:
+        with storage.connection() as connection, connection.transaction():
+            existing_entry = get_entry_by_id_for_update(connection, entry_id)
+            if existing_entry is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            revision_row = get_content_entry_revision(connection, entry_id, revision_id)
+            if revision_row is None:
+                raise ContentError(
+                    detail='Content entry revision not found',
+                    code='CONTENT_ENTRY_REVISION_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            target_status = ContentStatus(revision_row['status'])
+            _ensure_publish_transition_allowed(
+                current_user,
+                existing_status=cast(str, existing_entry['status']),
+                target_status=target_status,
+            )
+            field_definitions = _field_definitions_from_rows(
+                get_field_definitions(connection, existing_entry['content_type_id'])
+            )
+            restored_payload = _validate_entry_payload(
+                cast(dict[str, Any], revision_row['payload']),
+                field_definitions,
+                existing_payload=cast(dict[str, Any], existing_entry['payload']),
+            )
+            slug = _resolve_entry_slug(
+                content_type_id=existing_entry['content_type_id'],
+                content_type_slug=cast(str, existing_entry['content_type_slug']),
+                requested_slug=cast(str, revision_row['slug']),
+                existing_slug=None,
+                payload=restored_payload,
+                field_definitions=field_definitions,
+                storage_connection=connection,
+                entry_id=entry_id,
+            )
+            entry_row = update_entry(
+                connection=connection,
+                entry_id=entry_id,
+                slug=slug,
+                status=target_status.value,
+                payload=restored_payload,
+                seo_metadata=ContentEntrySeoMetadata.from_record(revision_row).to_storage(),
+                published_at=revision_row['published_at'],
+                user_id=user_id,
+                updated_at=timestamp,
+                expected_version=payload.expected_version,
+            )
+            if entry_row is None:
+                _raise_version_conflict()
+            entry_row = {
+                **entry_row,
+                'content_type_slug': existing_entry['content_type_slug'],
+            }
+            _create_entry_revision(
+                connection,
+                entry_row=entry_row,
+                action=ContentRevisionAction.RESTORE,
+                user_id=user_id,
+                timestamp=timestamp,
+                restore_source_revision_id=revision_id,
+            )
+            _run_search_indexing_hook(
+                connection,
+                operation='entry_restore_sync',
+                context={
+                    'entry_id': str(entry_id),
+                    'content_type_id': str(existing_entry['content_type_id']),
+                },
+                hook=lambda: sync_search_document(
+                    connection,
+                    entry_row=entry_row,
+                    content_type_slug=cast(str, existing_entry['content_type_slug']),
+                    field_definitions=field_definitions,
+                ),
+            )
+    except ContentError:
+        raise
+    except IntegrityError as exc:
+        raise ContentError(
+            detail='An entry with this slug already exists for the content type',
+            code='ENTRY_SLUG_CONFLICT',
+            status_code=HTTPStatus.CONFLICT,
+        ) from exc
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to restore content entry revision',
+            code='CONTENT_ENTRY_REVISION_RESTORE_FAILED',
+        ) from exc
+
+    entry_response = ContentEntryResponse.from_record(entry_row)
+    _emit_entry_updated(entry_response, user_id)
+    return entry_response

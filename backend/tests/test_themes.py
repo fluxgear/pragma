@@ -1024,3 +1024,71 @@ def test_create_app_attaches_checked_in_default_theme_runtime(
 
     assert runtime.resolve_default_theme().manifest.id == 'default'
     assert 'home.html' in runtime.environment.list_templates()
+
+
+def test_theme_design_settings_reject_unsafe_values() -> None:
+    """Verify design settings allow only typed safe tokens."""
+
+    from pydantic import ValidationError
+
+    from pragma.themes.models import ThemeDesignSettings
+
+    settings = ThemeDesignSettings(primary_color='#123abc', spacing_scale='compact')
+
+    assert settings.primary_color == '#123abc'
+    assert settings.spacing_scale == 'compact'
+    with pytest.raises(ValidationError):
+        ThemeDesignSettings(primary_color='url(javascript:alert(1))')
+    with pytest.raises(ValidationError):
+        ThemeDesignSettings(typography_preset='https://evil.example/font.woff2')
+
+
+def test_theme_runtime_uses_persisted_active_theme_and_falls_back_when_missing(
+    example_env_values: dict[str, str],
+    apply_runtime_env: Callable[[dict[str, str]], None],
+    tmp_path: Path,
+) -> None:
+    """Verify persisted activation overrides env and invalid persisted ids fall back safely."""
+
+    from pragma.themes.models import ThemeDesignSettings
+
+    theme_root = tmp_path / 'themes'
+    _write_theme(
+        theme_root,
+        'default',
+        {'id': 'default', 'name': 'Default Theme', 'version': '1.0.0'},
+        templates={'page.html': 'default'},
+    )
+    _write_theme(
+        theme_root,
+        'custom',
+        {'id': 'custom', 'name': 'Custom Theme', 'version': '1.0.0'},
+        templates={'page.html': 'custom'},
+    )
+    apply_runtime_env(
+        _build_theme_env(
+            example_env_values,
+            theme_root,
+            database_name='pragma_theme_persisted_override',
+            active_theme_id='default',
+            default_theme_id='default',
+        )
+    )
+
+    runtime = build_theme_runtime(get_settings())
+    runtime.apply_settings(
+        active_theme_id='custom',
+        design_settings=ThemeDesignSettings(primary_color='#123abc'),
+    )
+
+    assert runtime.resolve_active_theme().manifest.id == 'custom'
+    assert runtime.render_template('page.html') == 'custom'
+    assert runtime.design_settings.primary_color == '#123abc'
+
+    runtime.apply_settings(
+        active_theme_id='missing',
+        design_settings=ThemeDesignSettings(),
+    )
+
+    assert runtime.resolve_active_theme().manifest.id == 'default'
+    assert runtime.render_template('page.html') == 'default'

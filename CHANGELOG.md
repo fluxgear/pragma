@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.0-rc.2 (2026-05-08)
+
+- Added provider-backed generation settings, backend generation routes, secret isolation, and admin configuration UI.
+- Added active editor suggestion hooks, block pattern presets, and public block styling.
+- Added theme/design administration, persisted theme settings, safe design tokens, and admin theme controls.
+- Added publishing workflow foundations including revisions, version conflict checks, preview tokens, SEO metadata, publish/unpublish, restore, and admin workflow panels.
+- Added primary navigation management with backend API, public rendering integration, and admin menu editor.
+- Fixed install migration test expectations for expanded permission registry.
+- Fixed navigation migration formatting for full lint compliance.
+- Validated backend lint, backend tests, admin tests, and admin production build.
+
 ## v1.0.0-rc.1 — 2026-05-04
 
 ### Fixed

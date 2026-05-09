@@ -571,6 +571,37 @@ def count_entries_for_content_type(connection: Connection, content_type_id: UUID
     return int(row["total"])
 
 
+def count_entries_by_content_type_ids(
+    connection: Connection, content_type_ids: Sequence[UUID]
+) -> dict[UUID, int]:
+    """Return entry counts keyed by content-type identifier.
+
+    Args:
+        connection: Open PostgreSQL connection.
+        content_type_ids: Content-type identifiers to count.
+
+    Returns:
+        dict[UUID, int]: Entry totals keyed by content-type ID.
+
+    Raises:
+        psycopg.Error: If PostgreSQL query execution fails.
+    """
+
+    if not content_type_ids:
+        return {}
+
+    rows = connection.execute(
+        """
+        SELECT content_type_id, COUNT(*) AS total
+        FROM pragma_content_entries
+        WHERE content_type_id = ANY(%s)
+        GROUP BY content_type_id
+        """,
+        (list(content_type_ids),),
+    ).fetchall()
+    return {row["content_type_id"]: int(row["total"]) for row in rows}
+
+
 def list_entries_for_content_type_validation(
     connection: Connection, content_type_id: UUID
 ) -> list[dict[str, Any]]:
@@ -610,29 +641,12 @@ def create_entry(
     slug: str,
     status: str,
     payload: dict[str, Any],
+    seo_metadata: dict[str, Any],
     published_at: datetime | None,
     user_id: UUID,
     created_at: datetime,
 ) -> dict[str, Any]:
-    """Insert a new content entry and return the created record.
-
-    Args:
-        connection: Open PostgreSQL connection.
-        entry_id: Entry identifier to insert.
-        content_type_id: Content-type identifier that owns the entry.
-        slug: Normalized entry slug.
-        status: Publish-state string for the entry.
-        payload: Validated JSON payload for the entry.
-        published_at: Timestamp when the entry became published, if any.
-        user_id: Authenticated user creating the entry.
-        created_at: Timestamp for creation and update columns.
-
-    Returns:
-        dict[str, Any]: Created entry row.
-
-    Raises:
-        psycopg.Error: If PostgreSQL query execution fails.
-    """
+    """Insert a new content entry and return the created record."""
 
     return connection.execute(
         """
@@ -642,19 +656,39 @@ def create_entry(
             slug,
             status,
             payload,
+            seo_title,
+            seo_description,
+            seo_canonical_url,
+            seo_robots,
+            seo_og_title,
+            seo_og_description,
+            seo_og_image,
+            version,
             published_at,
             created_by_user_id,
             updated_by_user_id,
             created_at,
             updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
         RETURNING
             id,
             content_type_id,
             slug,
             status,
             payload,
+            seo_title,
+            seo_description,
+            seo_canonical_url,
+            seo_robots,
+            seo_og_title,
+            seo_og_description,
+            seo_og_image,
+            version,
+            version AS revision_number,
             published_at,
             created_by_user_id,
             updated_by_user_id,
@@ -667,6 +701,14 @@ def create_entry(
             slug,
             status,
             Jsonb(payload),
+            seo_metadata.get("title"),
+            seo_metadata.get("description"),
+            seo_metadata.get("canonical_url"),
+            seo_metadata.get("robots"),
+            seo_metadata.get("og_title"),
+            seo_metadata.get("og_description"),
+            seo_metadata.get("og_image"),
+            1,
             published_at,
             user_id,
             user_id,
@@ -682,28 +724,13 @@ def update_entry(
     slug: str,
     status: str,
     payload: dict[str, Any],
+    seo_metadata: dict[str, Any],
     published_at: datetime | None,
     user_id: UUID,
     updated_at: datetime,
-) -> dict[str, Any]:
-    """Update an existing content entry and return the updated record.
-
-    Args:
-        connection: Open PostgreSQL connection.
-        entry_id: Entry identifier to update.
-        slug: Normalized entry slug.
-        status: Publish-state string for the entry.
-        payload: Validated JSON payload for the entry.
-        published_at: Timestamp when the entry became published, if any.
-        user_id: Authenticated user updating the entry.
-        updated_at: Timestamp for the update.
-
-    Returns:
-        dict[str, Any]: Updated entry row.
-
-    Raises:
-        psycopg.Error: If PostgreSQL query execution fails.
-    """
+    expected_version: int | None = None,
+) -> dict[str, Any] | None:
+    """Update an existing content entry and return the updated record."""
 
     return connection.execute(
         """
@@ -712,39 +739,63 @@ def update_entry(
             slug = %s,
             status = %s,
             payload = %s,
+            seo_title = %s,
+            seo_description = %s,
+            seo_canonical_url = %s,
+            seo_robots = %s,
+            seo_og_title = %s,
+            seo_og_description = %s,
+            seo_og_image = %s,
+            version = version + 1,
             published_at = %s,
             updated_by_user_id = %s,
             updated_at = %s
         WHERE id = %s
+          AND (%s::integer IS NULL OR version = %s)
         RETURNING
             id,
             content_type_id,
             slug,
             status,
             payload,
+            seo_title,
+            seo_description,
+            seo_canonical_url,
+            seo_robots,
+            seo_og_title,
+            seo_og_description,
+            seo_og_image,
+            version,
+            version AS revision_number,
             published_at,
             created_by_user_id,
             updated_by_user_id,
             created_at,
             updated_at
         """,
-        (slug, status, Jsonb(payload), published_at, user_id, updated_at, entry_id),
+        (
+            slug,
+            status,
+            Jsonb(payload),
+            seo_metadata.get("title"),
+            seo_metadata.get("description"),
+            seo_metadata.get("canonical_url"),
+            seo_metadata.get("robots"),
+            seo_metadata.get("og_title"),
+            seo_metadata.get("og_description"),
+            seo_metadata.get("og_image"),
+            published_at,
+            user_id,
+            updated_at,
+            entry_id,
+            expected_version,
+            expected_version,
+        ),
     ).fetchone()
 
 
 def get_entry_by_id(connection: Connection, entry_id: UUID) -> dict[str, Any] | None:
-    """Return a content entry by identifier.
-
-    Args:
-        connection: Open PostgreSQL connection.
-        entry_id: Entry identifier.
-
-    Returns:
-        dict[str, Any] | None: Entry row when found, otherwise None.
-
-    Raises:
-        psycopg.Error: If PostgreSQL query execution fails.
-    """
+    """Return a content entry by identifier."""
 
     return connection.execute(
         """
@@ -755,6 +806,19 @@ def get_entry_by_id(connection: Connection, entry_id: UUID) -> dict[str, Any] | 
             e.slug,
             e.status,
             e.payload,
+            e.seo_title,
+            e.seo_description,
+            e.seo_canonical_url,
+            e.seo_robots,
+            e.seo_og_title,
+            e.seo_og_description,
+            e.seo_og_image,
+            e.version,
+            (
+                SELECT max(r.revision_number)
+                FROM pragma_content_entry_revisions AS r
+                WHERE r.entry_id = e.id
+            ) AS revision_number,
             e.published_at,
             e.created_by_user_id,
             e.updated_by_user_id,
@@ -769,22 +833,48 @@ def get_entry_by_id(connection: Connection, entry_id: UUID) -> dict[str, Any] | 
     ).fetchone()
 
 
+def get_entry_by_id_for_update(
+    connection: Connection, entry_id: UUID
+) -> dict[str, Any] | None:
+    """Return a content entry by identifier with a row lock."""
+
+    return connection.execute(
+        """
+        SELECT
+            e.id,
+            e.content_type_id,
+            ct.slug AS content_type_slug,
+            e.slug,
+            e.status,
+            e.payload,
+            e.seo_title,
+            e.seo_description,
+            e.seo_canonical_url,
+            e.seo_robots,
+            e.seo_og_title,
+            e.seo_og_description,
+            e.seo_og_image,
+            e.version,
+            NULL::integer AS revision_number,
+            e.published_at,
+            e.created_by_user_id,
+            e.updated_by_user_id,
+            e.created_at,
+            e.updated_at
+        FROM pragma_content_entries AS e
+        JOIN pragma_content_types AS ct ON ct.id = e.content_type_id
+        WHERE e.id = %s
+        LIMIT 1
+        FOR UPDATE OF e
+        """,
+        (entry_id,),
+    ).fetchone()
+
+
 def get_entry_by_slug(
     connection: Connection, content_type_id: UUID, slug: str
 ) -> dict[str, Any] | None:
-    """Return a content entry by content type and slug.
-
-    Args:
-        connection: Open PostgreSQL connection.
-        content_type_id: Content-type identifier that scopes the slug.
-        slug: Normalized entry slug.
-
-    Returns:
-        dict[str, Any] | None: Entry row when found, otherwise None.
-
-    Raises:
-        psycopg.Error: If PostgreSQL query execution fails.
-    """
+    """Return a content entry by content type and slug."""
 
     return connection.execute(
         """
@@ -794,6 +884,14 @@ def get_entry_by_slug(
             slug,
             status,
             payload,
+            seo_title,
+            seo_description,
+            seo_canonical_url,
+            seo_robots,
+            seo_og_title,
+            seo_og_description,
+            seo_og_image,
+            version,
             published_at,
             created_by_user_id,
             updated_by_user_id,
@@ -863,23 +961,7 @@ def list_entries(
     content_type_slug: str | None,
     status: str | None,
 ) -> list[dict[str, Any]]:
-    """List content entries with pagination and optional filters.
-
-    Args:
-        connection: Open PostgreSQL connection.
-        limit: Maximum number of rows to return.
-        offset: Number of rows to skip before returning results.
-        order_by: Safe order-by key selected by the service layer.
-        content_type_id: Optional content-type identifier filter.
-        content_type_slug: Optional content-type slug filter.
-        status: Optional publish-state filter.
-
-    Returns:
-        list[dict[str, Any]]: Entry rows for the current page.
-
-    Raises:
-        psycopg.Error: If PostgreSQL query execution fails.
-    """
+    """List content entries with pagination and optional filters."""
 
     where_clauses: list[str] = []
     params: list[Any] = []
@@ -907,6 +989,19 @@ def list_entries(
             e.slug,
             e.status,
             e.payload,
+            e.seo_title,
+            e.seo_description,
+            e.seo_canonical_url,
+            e.seo_robots,
+            e.seo_og_title,
+            e.seo_og_description,
+            e.seo_og_image,
+            e.version,
+            (
+                SELECT max(r.revision_number)
+                FROM pragma_content_entry_revisions AS r
+                WHERE r.entry_id = e.id
+            ) AS revision_number,
             e.published_at,
             e.created_by_user_id,
             e.updated_by_user_id,
@@ -921,6 +1016,128 @@ def list_entries(
         """,
         tuple(params),
     ).fetchall()
+
+
+def create_content_entry_revision(
+    connection: Connection,
+    *,
+    revision_id: UUID,
+    entry_id: UUID,
+    revision_number: int,
+    action: str,
+    slug: str,
+    status: str,
+    payload: dict[str, Any],
+    seo_metadata: dict[str, Any],
+    published_at: datetime | None,
+    user_id: UUID,
+    created_at: datetime,
+    restore_source_revision_id: UUID | None = None,
+) -> dict[str, Any]:
+    """Insert an immutable content-entry revision snapshot."""
+
+    return connection.execute(
+        """
+        INSERT INTO pragma_content_entry_revisions (
+            id,
+            entry_id,
+            revision_number,
+            action,
+            slug,
+            status,
+            payload,
+            seo_metadata,
+            published_at,
+            created_by_user_id,
+            created_at,
+            restore_source_revision_id
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING
+            id,
+            entry_id,
+            revision_number,
+            action,
+            slug,
+            status,
+            payload,
+            seo_metadata,
+            published_at,
+            created_by_user_id,
+            created_at,
+            restore_source_revision_id
+        """,
+        (
+            revision_id,
+            entry_id,
+            revision_number,
+            action,
+            slug,
+            status,
+            Jsonb(payload),
+            Jsonb(seo_metadata),
+            published_at,
+            user_id,
+            created_at,
+            restore_source_revision_id,
+        ),
+    ).fetchone()
+
+
+def list_content_entry_revisions(
+    connection: Connection, entry_id: UUID
+) -> list[dict[str, Any]]:
+    """List immutable revisions for a content entry newest-first."""
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            entry_id,
+            revision_number,
+            action,
+            slug,
+            status,
+            payload,
+            seo_metadata,
+            published_at,
+            created_by_user_id,
+            created_at,
+            restore_source_revision_id
+        FROM pragma_content_entry_revisions
+        WHERE entry_id = %s
+        ORDER BY revision_number DESC, created_at DESC, id DESC
+        """,
+        (entry_id,),
+    ).fetchall()
+
+
+def get_content_entry_revision(
+    connection: Connection, entry_id: UUID, revision_id: UUID
+) -> dict[str, Any] | None:
+    """Return a specific immutable revision for a content entry."""
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            entry_id,
+            revision_number,
+            action,
+            slug,
+            status,
+            payload,
+            seo_metadata,
+            published_at,
+            created_by_user_id,
+            created_at,
+            restore_source_revision_id
+        FROM pragma_content_entry_revisions
+        WHERE entry_id = %s AND id = %s
+        LIMIT 1
+        """,
+        (entry_id, revision_id),
+    ).fetchone()
 
 
 def delete_entry(connection: Connection, entry_id: UUID) -> None:

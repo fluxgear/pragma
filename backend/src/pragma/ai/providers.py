@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from urllib import error, parse, request
 
-from pragma.ai.models import AIProvider
+from pragma.ai.models import AIProvider, AIProviderAPIMode
 from pragma.errors import SearchError
 
 _MAX_EMBEDDING_RESPONSE_BYTES = 1024 * 1024
@@ -58,6 +58,38 @@ class EmbeddingProviderConfig:
     embedding_dimensions: int
     request_timeout_seconds: int
     allow_private_base_urls: bool = False
+
+@dataclass(frozen=True)
+class GenerationProviderConfig:
+    """Runtime provider configuration required for text generation."""
+
+    provider: AIProvider
+    base_url: str
+    api_key: str
+    api_mode: AIProviderAPIMode
+    generation_model: str
+    request_timeout_seconds: int
+    allow_private_base_urls: bool = False
+
+
+@dataclass(frozen=True)
+class GenerationRequest:
+    """Provider-agnostic text-generation input."""
+
+    input: str
+    instructions: str | None = None
+    messages: tuple[tuple[str, str], ...] = ()
+    temperature: float | None = None
+    max_output_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    """Provider-agnostic text-generation output."""
+
+    text: str
+    finish_reason: str | None = None
+    usage: dict[str, int] | None = None
 
 
 def _embedding_url(base_url: str) -> str:
@@ -107,6 +139,126 @@ def _embedding_payload(
         'model': config.embedding_model,
         'encoding_format': 'float',
     }
+
+def _generation_url(config: GenerationProviderConfig) -> str:
+    """Return the canonical generation endpoint for provider API mode."""
+
+    path = 'responses' if config.api_mode is AIProviderAPIMode.RESPONSES else 'chat/completions'
+    return f"{config.base_url.rstrip('/')}/{path}"
+
+
+def _generation_payload(
+    config: GenerationProviderConfig,
+    payload: GenerationRequest,
+) -> dict[str, object]:
+    """Build provider-specific JSON payload for text generation."""
+
+    body: dict[str, object] = {'model': config.generation_model}
+    if payload.temperature is not None:
+        body['temperature'] = payload.temperature
+    if config.api_mode is AIProviderAPIMode.RESPONSES:
+        body['input'] = payload.input
+        if payload.instructions:
+            body['instructions'] = payload.instructions
+        if payload.max_output_tokens is not None:
+            body['max_output_tokens'] = payload.max_output_tokens
+        return body
+    messages: list[dict[str, str]] = []
+    if payload.instructions:
+        messages.append({'role': 'system', 'content': payload.instructions})
+    for role, content in payload.messages:
+        compatible_role = 'system' if role == 'developer' else role
+        messages.append({'role': compatible_role, 'content': content})
+    messages.append({'role': 'user', 'content': payload.input})
+    body['messages'] = messages
+    if payload.max_output_tokens is not None:
+        body['max_tokens'] = payload.max_output_tokens
+    return body
+
+
+def _normalize_usage(raw_usage: object) -> dict[str, int] | None:
+    """Normalize token usage metadata when a provider returns it."""
+
+    if not isinstance(raw_usage, dict):
+        return None
+    usage: dict[str, int] = {}
+    for output_key, input_keys in {
+        'input_tokens': ('input_tokens', 'prompt_tokens'),
+        'output_tokens': ('output_tokens', 'completion_tokens'),
+        'total_tokens': ('total_tokens',),
+    }.items():
+        for input_key in input_keys:
+            value = raw_usage.get(input_key)
+            if isinstance(value, int) and value >= 0:
+                usage[output_key] = value
+                break
+    return usage or None
+
+
+def _extract_response_text(response_payload: dict[str, object]) -> GenerationResult:
+    """Extract normalized text from a Responses API payload."""
+
+    output_text = response_payload.get('output_text')
+    if isinstance(output_text, str) and output_text.strip():
+        return GenerationResult(
+            text=output_text,
+            finish_reason=(
+                str(response_payload['status'])
+                if response_payload.get('status')
+                else None
+            ),
+            usage=_normalize_usage(response_payload.get('usage')),
+        )
+    output = response_payload.get('output')
+    if isinstance(output, list):
+        text_parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get('content')
+            if not isinstance(content, list):
+                continue
+            for content_item in content:
+                if not isinstance(content_item, dict):
+                    continue
+                text_value = content_item.get('text') or content_item.get('output_text')
+                if isinstance(text_value, str):
+                    text_parts.append(text_value)
+        text = ''.join(text_parts).strip()
+        if text:
+            return GenerationResult(
+                text=text,
+                finish_reason=(
+                str(response_payload['status'])
+                if response_payload.get('status')
+                else None
+            ),
+                usage=_normalize_usage(response_payload.get('usage')),
+            )
+    raise ValueError('Provider response is missing generated text')
+
+
+def _extract_chat_completion_text(response_payload: dict[str, object]) -> GenerationResult:
+    """Extract normalized text from a Chat Completions payload."""
+
+    choices = response_payload.get('choices')
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, dict):
+            message = first_choice.get('message')
+            if isinstance(message, dict) and isinstance(message.get('content'), str):
+                text = str(message['content']).strip()
+                if text:
+                    return GenerationResult(
+                        text=text,
+                        finish_reason=(
+                            str(first_choice['finish_reason'])
+                            if first_choice.get('finish_reason')
+                            else None
+                        ),
+                        usage=_normalize_usage(response_payload.get('usage')),
+                    )
+    raise ValueError('Provider response is missing generated text')
 
 
 def _raise_unsafe_provider_target() -> None:
@@ -663,3 +815,85 @@ def request_embedding(
             status_code=HTTPStatus.BAD_GATEWAY,
         )
     return embedding
+
+
+def request_generation(
+    config: GenerationProviderConfig,
+    payload: GenerationRequest,
+) -> GenerationResult:
+    """Generate text via the configured provider adapter."""
+
+    body = json.dumps(_generation_payload(config, payload)).encode('utf-8')
+    endpoint_url = _generation_url(config)
+    try:
+        parsed_url, resolved_targets = _validate_runtime_provider_target(
+            endpoint_url,
+            allow_private_base_urls=config.allow_private_base_urls,
+        )
+        http_request = request.Request(
+            endpoint_url,
+            data=body,
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {config.api_key}',
+            },
+            method='POST',
+        )
+        with _open_embedding_request(
+            http_request,
+            timeout=config.request_timeout_seconds,
+            parsed_url=parsed_url,
+            resolved_targets=resolved_targets,
+        ) as response:
+            response_body = _read_limited_response_body(response)
+    except ValueError as exc:
+        raise SearchError(
+            detail='AI provider URL is invalid',
+            code='AI_GENERATION_PROVIDER_INVALID',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+    except error.HTTPError as exc:
+        raise SearchError(
+            detail='AI provider rejected the request',
+            code='AI_GENERATION_PROVIDER_REJECTED',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+    except error.URLError as exc:
+        raise SearchError(
+            detail='AI provider is unavailable',
+            code='AI_GENERATION_PROVIDER_UNAVAILABLE',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+    except TimeoutError as exc:
+        raise SearchError(
+            detail='AI provider timed out',
+            code='AI_GENERATION_PROVIDER_UNAVAILABLE',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    try:
+        decoded = response_body.decode('utf-8')
+        response_payload = json.loads(decoded)
+        if not isinstance(response_payload, dict):
+            raise ValueError('Provider response must be a JSON object')
+        if config.api_mode is AIProviderAPIMode.RESPONSES:
+            return _extract_response_text(response_payload)
+        return _extract_chat_completion_text(response_payload)
+    except UnicodeDecodeError as exc:
+        raise SearchError(
+            detail='AI provider returned unreadable data',
+            code='AI_GENERATION_PROVIDER_INVALID',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise SearchError(
+            detail='AI provider returned invalid JSON',
+            code='AI_GENERATION_PROVIDER_INVALID',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+    except ValueError as exc:
+        raise SearchError(
+            detail='AI provider response was missing generated text',
+            code='AI_GENERATION_PROVIDER_INVALID',
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc

@@ -14,10 +14,49 @@ Raises:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
+
+from pragma.auth.permissions import get_permission_definitions
+
+PermissionSource = Literal['roles', 'superuser']
+
+
+def user_access_payload_from_record(record: Mapping[str, Any]) -> dict[str, object]:
+    """Build assigned/effective permission response fields from a user record.
+
+    Args:
+        record: User record returned by the storage layer.
+
+    Returns:
+        dict[str, object]: Access response fields for the user payload.
+
+    Raises:
+        None.
+    """
+
+    assigned_permissions = [str(value) for value in record.get('permissions', [])]
+    if bool(record['is_superuser']):
+        effective_permissions = [
+            definition.key for definition in get_permission_definitions()
+        ]
+        return {
+            'assigned_permissions': assigned_permissions,
+            'effective_permissions': effective_permissions,
+            'has_all_permissions': True,
+            'permission_source': 'superuser',
+            'permissions': effective_permissions,
+        }
+
+    return {
+        'assigned_permissions': assigned_permissions,
+        'effective_permissions': assigned_permissions,
+        'has_all_permissions': False,
+        'permission_source': 'roles',
+        'permissions': assigned_permissions,
+    }
 
 
 class UserResponse(BaseModel):
@@ -40,6 +79,10 @@ class UserResponse(BaseModel):
     is_active: bool
     is_superuser: bool
     roles: list[str] = Field(default_factory=list)
+    assigned_permissions: list[str] = Field(default_factory=list)
+    effective_permissions: list[str] = Field(default_factory=list)
+    has_all_permissions: bool = False
+    permission_source: PermissionSource = 'roles'
     permissions: list[str] = Field(default_factory=list)
     force_password_change: bool = False
 
@@ -65,8 +108,8 @@ class UserResponse(BaseModel):
             is_active=bool(record["is_active"]),
             is_superuser=bool(record["is_superuser"]),
             roles=[str(value) for value in record.get('roles', [])],
-            permissions=[str(value) for value in record.get('permissions', [])],
             force_password_change=bool(record.get('force_password_change', False)),
+            **user_access_payload_from_record(record),
         )
 
 

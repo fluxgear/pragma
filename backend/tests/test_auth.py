@@ -17,7 +17,7 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,7 +26,8 @@ from pydantic import ValidationError
 
 from pragma.app import create_app
 from pragma.auth import service as auth_service
-from pragma.auth.models import LoginRequest
+from pragma.auth.models import LoginRequest, UserResponse
+from pragma.auth.permissions import get_permission_definitions
 from pragma.auth.security import REFRESH_TOKEN_TYPE, decode_token
 from pragma.config import clear_settings_cache, get_settings
 from pragma.errors import AuthError
@@ -706,3 +707,76 @@ def test_login_request_strips_identity_before_length_validation() -> None:
     request = LoginRequest(identity='  admin@example.com  ', password='valid-password')
 
     assert request.identity == 'admin@example.com'
+
+
+def test_user_response_superuser_contract_expands_effective_permissions() -> None:
+    """Verify superuser response exposes all canonical effective permissions.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    response = UserResponse.from_record(
+        {
+            'id': uuid4(),
+            'email': 'root@example.com',
+            'username': 'root',
+            'full_name': None,
+            'is_active': True,
+            'is_superuser': True,
+            'roles': [],
+            'permissions': [],
+            'force_password_change': False,
+        }
+    )
+    canonical_permissions = [
+        definition.key for definition in get_permission_definitions()
+    ]
+
+    assert response.assigned_permissions == []
+    assert response.has_all_permissions is True
+    assert response.permission_source == 'superuser'
+    assert response.effective_permissions == canonical_permissions
+    assert response.permissions == response.effective_permissions
+
+
+def test_user_response_role_contract_uses_assigned_permissions() -> None:
+    """Verify non-superuser response preserves role-derived permissions.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    role_permissions = ['admin.access', 'content.entries.read']
+
+    response = UserResponse.from_record(
+        {
+            'id': uuid4(),
+            'email': 'viewer@example.com',
+            'username': 'viewer',
+            'full_name': None,
+            'is_active': True,
+            'is_superuser': False,
+            'roles': ['viewer'],
+            'permissions': role_permissions,
+            'force_password_change': False,
+        }
+    )
+
+    assert response.assigned_permissions == role_permissions
+    assert response.effective_permissions == role_permissions
+    assert response.permissions == role_permissions
+    assert response.has_all_permissions is False
+    assert response.permission_source == 'roles'

@@ -118,7 +118,7 @@ def test_install_status_reports_schema_not_ready_when_bootstrap_dependencies_mis
 
 
 def test_migrations_create_expected_tables(migrated_database: dict[str, str]) -> None:
-    """Verify the Alembic chain creates the required M11 schema objects.
+    """Verify the Alembic chain creates required install and RBAC schema objects.
 
     Args:
         migrated_database: Environment values for the migrated test database.
@@ -129,6 +129,15 @@ def test_migrations_create_expected_tables(migrated_database: dict[str, str]) ->
     Raises:
         None.
     """
+
+    from pragma.auth.permissions import get_permission_definitions, get_role_definitions
+
+    expected_permission_count = len(get_permission_definitions())
+    expected_role_definitions = get_role_definitions()
+    expected_role_count = len(expected_role_definitions)
+    expected_role_permission_count = sum(
+        len(role_definition.permissions) for role_definition in expected_role_definitions
+    )
 
     dsn = build_database_dsn(migrated_database, migrated_database["PRAGMA_DATABASE_NAME"])
     with psycopg.connect(dsn, row_factory=dict_row) as connection:
@@ -184,9 +193,9 @@ def test_migrations_create_expected_tables(migrated_database: dict[str, str]) ->
     assert row["alembic_table"] == "alembic_version"
     assert row["has_password_changed_at"] is True
     assert row["has_force_password_change"] is True
-    assert row["permission_count"] == 12
-    assert row["role_count"] == 4
-    assert row["role_permission_count"] == 29
+    assert row["permission_count"] == expected_permission_count
+    assert row["role_count"] == expected_role_count
+    assert row["role_permission_count"] == expected_role_permission_count
     assert row["has_administrator_role"] is True
     assert row["has_administrator_users_manage"] is True
 

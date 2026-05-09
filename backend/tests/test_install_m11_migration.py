@@ -21,6 +21,7 @@ from alembic.config import Config
 from psycopg.rows import dict_row
 
 from alembic import command
+from pragma.auth.permissions import get_permission_definitions, get_role_definitions
 from pragma.config import clear_settings_cache
 from tests.helpers import BACKEND_ROOT, build_database_dsn
 
@@ -199,18 +200,103 @@ def test_m11_migration_backfills_existing_superuser_and_seeds_rbac(
     assert superuser_row['force_password_change'] is False
     assert superuser_row['has_administrator_role'] is True
     assert superuser_row['has_users_manage_permission'] is True
-    assert superuser_row['permission_count'] == 12
+    assert superuser_row['permission_count'] == 22
     assert superuser_row['role_count'] == 4
-    assert superuser_row['role_permission_count'] == 29
+    assert superuser_row['role_permission_count'] == 39
 
     regular_user_row = rows_by_id[regular_user_id]
     assert regular_user_row['password_changed_at'] == created_at
     assert regular_user_row['force_password_change'] is False
     assert regular_user_row['has_administrator_role'] is False
     assert regular_user_row['has_users_manage_permission'] is True
-    assert regular_user_row['permission_count'] == 12
+    assert regular_user_row['permission_count'] == 22
     assert regular_user_row['role_count'] == 4
-    assert regular_user_row['role_permission_count'] == 29
+    assert regular_user_row['role_permission_count'] == 39
+
+
+def test_c2_migration_seeds_registry_permissions_and_system_role_grants(
+    runtime_database: dict[str, str],
+) -> None:
+    """Verify C2 RBAC seed rows stay aligned with the runtime registry.
+
+    Args:
+        runtime_database: Environment values for the isolated test database.
+
+    Returns:
+        None.
+
+    Raises:
+        None.
+    """
+
+    c2_permission_keys = {
+        'admin.access',
+        'roles.manage',
+        'themes.manage',
+        'settings.manage',
+        'page_builder.use',
+        'page_builder.design',
+        'navigation.manage',
+        'ai.editor_assist',
+        'ai.seo_assist',
+        'ai.oauth.manage',
+    }
+    runtime_permissions = {
+        definition.key: definition for definition in get_permission_definitions()
+    }
+    runtime_role_permissions = {
+        definition.key: set(definition.permissions) for definition in get_role_definitions()
+    }
+    assert c2_permission_keys <= set(runtime_permissions)
+
+    _upgrade_database('20260502_0011')
+    database_dsn = build_database_dsn(
+        runtime_database, runtime_database['PRAGMA_DATABASE_NAME']
+    )
+
+    with psycopg.connect(database_dsn, row_factory=dict_row) as connection:
+        pre_c2_rows = connection.execute(
+            """
+            SELECT permission_key
+            FROM pragma_permissions
+            WHERE permission_key = ANY(%s)
+            """,
+            (list(c2_permission_keys),),
+        ).fetchall()
+
+    assert pre_c2_rows == []
+
+    _upgrade_database('head')
+
+    with psycopg.connect(database_dsn, row_factory=dict_row) as connection:
+        permission_rows = connection.execute(
+            """
+            SELECT permission_key, name, description
+            FROM pragma_permissions
+            ORDER BY permission_key
+            """
+        ).fetchall()
+        role_permission_rows = connection.execute(
+            """
+            SELECT role_key, permission_key
+            FROM pragma_role_permissions
+            ORDER BY role_key, permission_key
+            """
+        ).fetchall()
+
+    permission_rows_by_key = {row['permission_key']: row for row in permission_rows}
+    assert set(permission_rows_by_key) == set(runtime_permissions)
+    for permission_key, definition in runtime_permissions.items():
+        row = permission_rows_by_key[permission_key]
+        assert row['name'] == definition.name
+        assert row['description'] == definition.description
+
+    role_permissions_by_role = {role_key: set() for role_key in runtime_role_permissions}
+    for row in role_permission_rows:
+        role_permissions_by_role.setdefault(row['role_key'], set()).add(row['permission_key'])
+
+    assert role_permissions_by_role['administrator'] == set(runtime_permissions)
+    assert role_permissions_by_role == runtime_role_permissions
 
 
 def test_m11_migration_downgrade_removes_rbac_schema(

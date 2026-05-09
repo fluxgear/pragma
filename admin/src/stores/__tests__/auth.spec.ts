@@ -26,6 +26,10 @@ const authPayload = {
     is_active: true,
     is_superuser: true,
     roles: ['administrator'],
+    assigned_permissions: ['users.manage', 'ai.settings.manage'],
+    effective_permissions: ['users.manage', 'ai.settings.manage'],
+    has_all_permissions: true,
+    permission_source: 'superuser' as const,
     permissions: ['users.manage', 'ai.settings.manage'],
     force_password_change: false,
   },
@@ -125,6 +129,22 @@ describe('useAuthStore', () => {
     await store.logout()
     expect(store.isAuthenticated).toBe(false)
     expect(store.accessToken).toBeNull()
+  })
+
+  it('checks permissions against the backend effective alias', () => {
+    const store = useAuthStore()
+    store.user = {
+      ...authPayload.user,
+      is_superuser: false,
+      assigned_permissions: [],
+      effective_permissions: ['roles.manage'],
+      has_all_permissions: false,
+      permission_source: 'roles',
+      permissions: ['roles.manage'],
+    }
+
+    expect(store.hasPermission('roles.manage')).toBe(true)
+    expect(store.hasPermission('users.manage')).toBe(false)
   })
 
   it('rotates the current user password and clears forced-change state', async () => {

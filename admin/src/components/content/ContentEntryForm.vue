@@ -136,6 +136,14 @@
       </small>
     </div>
 
+    <SeoPanel
+      v-model="formState.seo_metadata"
+      :content-type="contentType"
+      :entry="entry"
+      :payload="formState.fields"
+      :read-only="formDisabled"
+    />
+
     <div class="inline-actions">
       <Button
         type="submit"
@@ -160,11 +168,13 @@ import Textarea from 'primevue/textarea'
 
 import type {
   ContentEntryResponse,
+  ContentEntrySeoMetadata,
   ContentEntryStatus,
   ContentFieldDefinition,
   ContentTypeResponse,
 } from '@/api/types'
 import RichTextEditor from '@/components/content/RichTextEditor.vue'
+import SeoPanel from '@/components/content/SeoPanel.vue'
 import {
   ContentEntryFormError,
   buildContentEntryFormState,
@@ -190,7 +200,13 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  submit: [payload: { slug: string | null; status: ContentEntryStatus; payload: Record<string, unknown> }]
+  submit: [payload: {
+    slug: string | null
+    status: ContentEntryStatus
+    payload: Record<string, unknown>
+    seo_metadata: ContentEntrySeoMetadata
+    expected_version?: number
+  }]
 }>()
 
 const baseStatusOptions: Array<{ label: string; value: ContentEntryStatus }> = [
@@ -214,6 +230,8 @@ function resetFormState(): void {
   formState.slug = nextState.slug
   formState.status = nextState.status
   formState.fields = nextState.fields
+  formState.seo_metadata = nextState.seo_metadata
+  formState.expected_version = nextState.expected_version
   localErrorMessage.value = null
 }
 

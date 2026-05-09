@@ -2,10 +2,17 @@ import { authenticatedApiRequest } from '@/api/authenticated'
 import type {
   ContentEntryCreateRequest,
   ContentEntryListResponse,
+  ContentEntryPreviewResponse,
   ContentEntryResponse,
+  ContentEntryRevisionListResponse,
+  ContentEntryRevisionRestoreRequest,
   ContentEntryStatus,
+  ContentEntryTransitionRequest,
   ContentEntryUpdateRequest,
+  ContentTypeCreateRequest,
   ContentTypeListResponse,
+  ContentTypeResponse,
+  ContentTypeUpdateRequest,
 } from '@/api/types'
 
 export type ContentTypeOrderBy = 'created_at' | 'updated_at' | 'name' | 'slug'
@@ -78,6 +85,35 @@ export function listContentTypes(
   return authenticatedApiRequest<ContentTypeListResponse>(buildContentTypeQuery(params))
 }
 
+export function getContentType(contentTypeId: string): Promise<ContentTypeResponse> {
+  return authenticatedApiRequest<ContentTypeResponse>(`/content/types/${contentTypeId}`)
+}
+
+export function createContentType(
+  payload: ContentTypeCreateRequest,
+): Promise<ContentTypeResponse> {
+  return authenticatedApiRequest<ContentTypeResponse>('/content/types', {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+export function updateContentType(
+  contentTypeId: string,
+  payload: ContentTypeUpdateRequest,
+): Promise<ContentTypeResponse> {
+  return authenticatedApiRequest<ContentTypeResponse>(`/content/types/${contentTypeId}`, {
+    method: 'PUT',
+    body: payload,
+  })
+}
+
+export function deleteContentType(contentTypeId: string): Promise<void> {
+  return authenticatedApiRequest<void>(`/content/types/${contentTypeId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function listContentEntries(
   params: ListContentEntriesParams = {},
 ): Promise<ContentEntryListResponse> {
@@ -101,4 +137,57 @@ export function updateContentEntry(
     method: 'PUT',
     body: payload,
   })
+}
+
+export function listContentEntryRevisions(
+  entryId: string,
+): Promise<ContentEntryRevisionListResponse> {
+  return authenticatedApiRequest<ContentEntryRevisionListResponse>(
+    `/content/entries/${entryId}/revisions`,
+  )
+}
+
+export function createContentEntryPreview(
+  entryId: string,
+): Promise<ContentEntryPreviewResponse> {
+  return authenticatedApiRequest<ContentEntryPreviewResponse>(
+    `/content/entries/${entryId}/preview`,
+    {
+      method: 'POST',
+    },
+  )
+}
+
+export function publishContentEntry(
+  entryId: string,
+  payload: ContentEntryTransitionRequest = {},
+): Promise<ContentEntryResponse> {
+  return authenticatedApiRequest<ContentEntryResponse>(`/content/entries/${entryId}/publish`, {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+export function unpublishContentEntry(
+  entryId: string,
+  payload: ContentEntryTransitionRequest = {},
+): Promise<ContentEntryResponse> {
+  return authenticatedApiRequest<ContentEntryResponse>(`/content/entries/${entryId}/unpublish`, {
+    method: 'POST',
+    body: payload,
+  })
+}
+
+export function restoreContentEntryRevision(
+  entryId: string,
+  revisionId: string,
+  payload: ContentEntryRevisionRestoreRequest = {},
+): Promise<ContentEntryResponse> {
+  return authenticatedApiRequest<ContentEntryResponse>(
+    `/content/entries/${entryId}/revisions/${revisionId}/restore`,
+    {
+      method: 'POST',
+      body: payload,
+    },
+  )
 }

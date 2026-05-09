@@ -9,13 +9,17 @@ const AccountView = () => import('@/views/AccountView.vue')
 const AiSettingsView = () => import('@/views/AiSettingsView.vue')
 const BootView = () => import('@/views/BootView.vue')
 const ContentEntriesView = () => import('@/views/ContentEntriesView.vue')
+const ContentModelsView = () => import('@/views/ContentModelsView.vue')
 const DashboardView = () => import('@/views/DashboardView.vue')
+const NavigationView = () => import('@/views/NavigationView.vue')
 const LoginView = () => import('@/views/LoginView.vue')
 const MediaLibraryView = () => import('@/views/MediaLibraryView.vue')
 const NotFoundView = () => import('@/views/NotFoundView.vue')
 const SetupWizardView = () => import('@/views/SetupWizardView.vue')
 const UsersView = () => import('@/views/UsersView.vue')
 const ModulesView = () => import('@/views/ModulesView.vue')
+const RolesView = () => import('@/views/RolesView.vue')
+const ThemesView = () => import('@/views/ThemesView.vue')
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -71,6 +75,16 @@ export const router = createRouter({
           },
         },
         {
+          path: 'content-models',
+          name: 'content-models',
+          component: ContentModelsView,
+          meta: {
+            requiresAuth: true,
+            requiresPermission: 'content.types.read',
+            title: 'Content models',
+          },
+        },
+        {
           path: 'media',
           name: 'media',
           component: MediaLibraryView,
@@ -91,10 +105,36 @@ export const router = createRouter({
           },
         },
         {
+          path: 'themes',
+          name: 'themes',
+          component: ThemesView,
+          meta: {
+            requiresAuth: true,
+            requiresPermission: 'themes.manage',
+            title: 'Themes',
+          },
+        },
+        {
+          path: 'navigation',
+          name: 'navigation',
+          component: NavigationView,
+          meta: {
+            requiresAuth: true,
+            requiresPermission: 'navigation.manage',
+            title: 'Navigation',
+          },
+        },
+        {
           path: 'users',
           name: 'users',
           component: UsersView,
           meta: { requiresAuth: true, requiresPermission: 'users.manage', title: 'Users' },
+        },
+        {
+          path: 'roles',
+          name: 'roles',
+          component: RolesView,
+          meta: { requiresAuth: true, requiresPermission: 'roles.manage', title: 'Roles' },
         },
         {
           path: 'modules',

@@ -315,6 +315,7 @@ def render_page(
         route_path=page_view.url,
         robots='index,follow',
         og_type='article',
+        entry_seo=entry_row,
     )
 
     context = build_common_context(site_context, seo_context)
@@ -378,6 +379,7 @@ def render_post(
         robots='index,follow',
         og_type='article',
         og_image=post_view.featured_image_url,
+        entry_seo=entry_row,
     )
 
     related_posts: list[dict[str, str | None]] = []
@@ -393,6 +395,74 @@ def render_post(
     return render_public_template(
         theme_runtime=theme_runtime,
         template_name='post.html',
+        context=context,
+        status_code=status.HTTP_200_OK,
+        error_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
+
+@router.get('/preview/content/{token}', response_class=HTMLResponse)
+def render_content_preview(
+    token: str,
+    request: Request,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    theme_runtime: Annotated[ThemeRuntime, Depends(get_theme_runtime)],
+) -> HTMLResponse:
+    """Render a content entry preview when the signed token is valid."""
+
+    from pragma.content.service import decode_content_entry_preview_token
+    from pragma.errors import AuthError
+    from pragma.public.service import get_preview_entry
+
+    site_context = build_site_context(settings, theme_runtime)
+    try:
+        entry_id = decode_content_entry_preview_token(settings, token)
+        entry_row = get_preview_entry(storage, entry_id)
+    except AuthError:
+        return _render_not_found(request, settings, theme_runtime, site_context)
+    except (StorageError, PsycopgError, PoolTimeout) as exc:
+        return _render_storage_unavailable(
+            request,
+            settings,
+            theme_runtime,
+            site_context,
+            exc,
+        )
+
+    if entry_row is None:
+        return _render_not_found(request, settings, theme_runtime, site_context)
+
+    entry_view = build_public_entry_view(entry_row)
+    seo_context = build_seo_context(
+        settings=settings,
+        site=site_context,
+        page_title=entry_view.title,
+        page_description=entry_view.summary or site_context.description,
+        route_path=_request_path_with_query(request),
+        robots='noindex,nofollow',
+        og_type='article',
+        og_image=entry_view.featured_image_url,
+        entry_seo=entry_row,
+        force_noindex=True,
+    )
+
+    context = build_common_context(site_context, seo_context)
+    context['preview'] = {
+        'enabled': True,
+        'entry_id': str(entry_row['id']),
+        'status': str(entry_row['status']),
+    }
+    if entry_view.content_type_slug == 'page':
+        context['page'] = asdict(entry_view)
+        template_name = 'page.html'
+    else:
+        context.update({'post': asdict(entry_view), 'related_posts': []})
+        template_name = 'post.html'
+
+    return render_public_template(
+        theme_runtime=theme_runtime,
+        template_name=template_name,
         context=context,
         status_code=status.HTTP_200_OK,
         error_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
