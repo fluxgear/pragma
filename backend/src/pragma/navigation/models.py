@@ -32,6 +32,7 @@ class NavigationMenuItemRequest(BaseModel):
     content_entry_id: UUID | None = None
     url: str | None = Field(default=None, min_length=1, max_length=2048)
     enabled: bool = True
+    children: list[NavigationMenuItemRequest] = Field(default_factory=list, max_length=25)
 
     @field_validator('label')
     @classmethod
@@ -95,6 +96,25 @@ class NavigationMenuReplaceRequest(BaseModel):
 
     items: list[NavigationMenuItemRequest] = Field(default_factory=list, max_length=100)
 
+    @model_validator(mode='after')
+    def validate_tree_bounds(self) -> Self:
+        """Limit total item count and nesting depth for public navigation."""
+
+        total = 0
+
+        def visit(items: list[NavigationMenuItemRequest], depth: int) -> None:
+            nonlocal total
+            if depth > 3:
+                raise ValueError('Navigation menus support at most three levels')
+            for item in items:
+                total += 1
+                visit(item.children, depth + 1)
+
+        visit(self.items, 1)
+        if total > 100:
+            raise ValueError('Navigation menus support at most 100 total items')
+        return self
+
 
 class NavigationMenuItemResponse(BaseModel):
     """Persisted menu item projection."""
@@ -102,6 +122,7 @@ class NavigationMenuItemResponse(BaseModel):
     model_config = ConfigDict(extra='forbid', use_enum_values=True)
 
     id: UUID
+    parent_item_id: UUID | None = None
     position: int
     label: str
     link_type: NavigationLinkType
@@ -112,6 +133,31 @@ class NavigationMenuItemResponse(BaseModel):
     content_type_slug: str | None = None
     entry_slug: str | None = None
     entry_status: str | None = None
+    children: list[NavigationMenuItemResponse] = Field(default_factory=list)
+
+
+class NavigationContentOptionResponse(BaseModel):
+    """Content entry option for the navigation target picker."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    id: UUID
+    label: str
+    content_type_slug: str
+    slug: str
+    status: str
+    href: str
+
+
+class NavigationContentOptionListResponse(BaseModel):
+    """Paginated content-entry options visible to navigation managers."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    items: list[NavigationContentOptionResponse]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0)
 
 
 class NavigationWarningResponse(BaseModel):

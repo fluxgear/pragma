@@ -243,6 +243,136 @@
                 @restore="restoreSelectedEntryRevision"
               />
             </div>
+
+            <Message v-if="workflowStatusMessage" severity="success" closable @close="workflowStatusMessage = null">
+              {{ workflowStatusMessage }}
+            </Message>
+
+            <div class="content-workspace__workflow-grid">
+              <Card>
+                <template #title>Autosave safety copy</template>
+                <template #content>
+                  <div class="form-stack">
+                    <Message v-if="autosaveErrorMessage" severity="error" :closable="false">
+                      {{ autosaveErrorMessage }}
+                    </Message>
+                    <p class="muted">
+                      Store a user-scoped safety copy of the selected entry without creating a revision or changing public content.
+                    </p>
+                    <div v-if="autosaveLoading" class="loading-state" role="status">Loading autosave…</div>
+                    <div v-else-if="selectedAutosave !== null" class="form-stack" style="gap: 0.35rem;">
+                      <span>Autosaved {{ formatTimestamp(selectedAutosave.updated_at) }}</span>
+                      <span class="muted">Based on v{{ selectedAutosave.base_version }} · current v{{ selectedAutosave.current_version }}</span>
+                      <Tag :severity="selectedAutosave.is_stale ? 'warn' : 'success'" :value="selectedAutosave.is_stale ? 'Stale' : 'Current'" />
+                    </div>
+                    <p v-else class="muted">No autosave exists for the selected entry.</p>
+                    <div class="inline-actions">
+                      <Button
+                        label="Save autosave"
+                        icon="pi pi-save"
+                        severity="secondary"
+                        variant="outlined"
+                        :loading="autosaveSaving"
+                        :disabled="!canWriteContentEntries || selectedWorkflowEntry === null"
+                        data-testid="content-entry-autosave-save"
+                        @click="saveSelectedEntryAutosave"
+                      />
+                      <Button
+                        label="Discard autosave"
+                        icon="pi pi-trash"
+                        severity="danger"
+                        variant="outlined"
+                        :loading="autosaveSaving"
+                        :disabled="!canWriteContentEntries || selectedWorkflowEntry === null || selectedAutosave === null"
+                        data-testid="content-entry-autosave-discard"
+                        @click="discardSelectedEntryAutosave"
+                      />
+                    </div>
+                  </div>
+                </template>
+              </Card>
+
+              <Card>
+                <template #title>Scheduling</template>
+                <template #content>
+                  <div class="form-stack">
+                    <Message v-if="scheduleErrorMessage" severity="error" :closable="false">
+                      {{ scheduleErrorMessage }}
+                    </Message>
+                    <div class="form-grid">
+                      <div class="field">
+                        <label for="content-entry-publish-at">Publish at</label>
+                        <input id="content-entry-publish-at" v-model="schedulePublishAt" type="datetime-local" :disabled="!canWriteContentEntries || scheduleSaving" data-testid="content-entry-schedule-publish-at" />
+                      </div>
+                      <div class="field">
+                        <label for="content-entry-unpublish-at">Unpublish at</label>
+                        <input id="content-entry-unpublish-at" v-model="scheduleUnpublishAt" type="datetime-local" :disabled="!canWriteContentEntries || scheduleSaving" data-testid="content-entry-schedule-unpublish-at" />
+                      </div>
+                    </div>
+                    <div v-if="scheduleLoading" class="loading-state" role="status">Loading schedule…</div>
+                    <div v-else class="form-stack" style="gap: 0.35rem;">
+                      <span>{{ scheduleItemSummary(selectedSchedule?.publish, 'Publish') }}</span>
+                      <span>{{ scheduleItemSummary(selectedSchedule?.unpublish, 'Unpublish') }}</span>
+                    </div>
+                    <div class="inline-actions">
+                      <Button
+                        label="Save schedule"
+                        icon="pi pi-clock"
+                        severity="secondary"
+                        variant="outlined"
+                        :loading="scheduleSaving"
+                        :disabled="!canWriteContentEntries || selectedWorkflowEntry === null"
+                        data-testid="content-entry-schedule-save"
+                        @click="saveSelectedEntrySchedule"
+                      />
+                      <Button
+                        label="Cancel schedule"
+                        icon="pi pi-times"
+                        severity="danger"
+                        variant="outlined"
+                        :loading="scheduleSaving"
+                        :disabled="!canWriteContentEntries || selectedWorkflowEntry === null || selectedScheduleHasNoPendingItems"
+                        data-testid="content-entry-schedule-cancel"
+                        @click="cancelSelectedEntrySchedule"
+                      />
+                    </div>
+                  </div>
+                </template>
+              </Card>
+            </div>
+
+            <Card>
+              <template #title>Activity</template>
+              <template #content>
+                <div class="form-stack">
+                  <Message v-if="activityErrorMessage" severity="error" :closable="false">
+                    {{ activityErrorMessage }}
+                  </Message>
+                  <div class="inline-actions">
+                    <Button
+                      label="Refresh activity"
+                      icon="pi pi-refresh"
+                      severity="secondary"
+                      variant="outlined"
+                      :loading="activityLoading"
+                      data-testid="content-entry-activity-refresh"
+                      @click="loadSelectedEntryActivity"
+                    />
+                  </div>
+                  <div v-if="activityLoading" class="loading-state" role="status">Loading activity…</div>
+                  <div v-else-if="entryActivity.length === 0" class="empty-state">
+                    No activity has been recorded for this entry yet.
+                  </div>
+                  <ul v-else class="content-workspace__activity-list" data-testid="content-entry-activity-list">
+                    <li v-for="activity in entryActivity" :key="activity.id">
+                      <strong>{{ activityLabel(activity.action) }}</strong>
+                      <span class="muted">{{ formatTimestamp(activity.created_at) }}</span>
+                      <span v-if="activity.entry_version !== null" class="muted">v{{ activity.entry_version }}</span>
+                    </li>
+                  </ul>
+                </div>
+              </template>
+            </Card>
           </template>
         </Card>
       </template>
@@ -296,13 +426,20 @@ import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 
 import {
+  cancelContentEntrySchedule,
   createContentEntry,
   createContentEntryPreview,
+  deleteContentEntryAutosave,
+  getContentEntryAutosave,
+  getContentEntrySchedule,
   listContentEntries,
+  listContentEntryActivity,
   listContentEntryRevisions,
   listContentTypes,
   publishContentEntry,
   restoreContentEntryRevision,
+  saveContentEntryAutosave,
+  setContentEntrySchedule,
   unpublishContentEntry,
   updateContentEntry,
 } from '@/api/content'
@@ -310,8 +447,13 @@ import { ApiClientError, asUserMessage } from '@/api/errors'
 import type {
   BlockDocument,
   BlockDocumentFieldDefinition,
+  ContentEntryActivityAction,
+  ContentEntryActivityResponse,
+  ContentEntryAutosaveResponse,
   ContentEntryResponse,
   ContentEntryRevisionResponse,
+  ContentEntryScheduleItemResponse,
+  ContentEntryScheduleResponse,
   ContentEntrySeoMetadata,
   ContentEntryStatus,
   ContentTypeResponse,
@@ -355,12 +497,26 @@ const dialogErrorMessage = ref<string | null>(null)
 const blockEditorErrorMessage = ref<string | null>(null)
 const workflowEntryId = ref<string | null>(null)
 const entryRevisions = ref<ContentEntryRevisionResponse[]>([])
+const entryActivity = ref<ContentEntryActivityResponse[]>([])
+const selectedAutosave = ref<ContentEntryAutosaveResponse | null>(null)
+const selectedSchedule = ref<ContentEntryScheduleResponse | null>(null)
 const workflowErrorMessage = ref<string | null>(null)
 const revisionsErrorMessage = ref<string | null>(null)
+const autosaveErrorMessage = ref<string | null>(null)
+const scheduleErrorMessage = ref<string | null>(null)
+const activityErrorMessage = ref<string | null>(null)
+const workflowStatusMessage = ref<string | null>(null)
 const previewUrl = ref<string | null>(null)
+const schedulePublishAt = ref('')
+const scheduleUnpublishAt = ref('')
 const submitting = ref(false)
 const blockEditorSubmitting = ref(false)
 const revisionsLoading = ref(false)
+const autosaveLoading = ref(false)
+const autosaveSaving = ref(false)
+const scheduleLoading = ref(false)
+const scheduleSaving = ref(false)
+const activityLoading = ref(false)
 const previewLoading = ref(false)
 const publishingAction = ref<'publish' | 'unpublish' | null>(null)
 const restoringRevisionId = ref<string | null>(null)
@@ -430,6 +586,7 @@ const hasNextContentTypesPage = computed(
 )
 const hasPreviousEntriesPage = computed(() => entriesOffset.value > 0)
 const hasNextEntriesPage = computed(() => entriesOffset.value + entries.value.length < entriesTotal.value)
+const selectedScheduleHasNoPendingItems = computed(() => selectedSchedule.value === null || (selectedSchedule.value.publish === null && selectedSchedule.value.unpublish === null))
 const canSaveDialogEntry = computed(() => {
   if (!canWriteContentEntries.value) {
     return false
@@ -511,6 +668,7 @@ async function loadContentTypes(): Promise<void> {
       entriesOffset.value = 0
       workflowEntryId.value = null
       entryRevisions.value = []
+      resetWorkflowAuxiliaryState()
       return
     }
 
@@ -556,6 +714,7 @@ async function loadEntries(): Promise<void> {
     if (response.items.length === 0) {
       workflowEntryId.value = null
       entryRevisions.value = []
+      resetWorkflowAuxiliaryState()
     } else if (!response.items.some((entry) => entry.id === workflowEntryId.value)) {
       workflowEntryId.value = response.items[0].id
     }
@@ -567,6 +726,7 @@ async function loadEntries(): Promise<void> {
     entriesTotal.value = 0
     workflowEntryId.value = null
     entryRevisions.value = []
+    resetWorkflowAuxiliaryState()
   } finally {
     entriesLoading.value = false
   }
@@ -796,8 +956,13 @@ function selectWorkflowEntry(entry: ContentEntryResponse): void {
   workflowEntryId.value = entry.id
   workflowErrorMessage.value = null
   revisionsErrorMessage.value = null
+  autosaveErrorMessage.value = null
+  scheduleErrorMessage.value = null
+  activityErrorMessage.value = null
+  workflowStatusMessage.value = null
   previewUrl.value = null
   void loadSelectedEntryRevisions()
+  void loadSelectedEntryWorkflowMetadata()
 }
 
 function currentWorkflowEntryOrMessage(): ContentEntryResponse | null {
@@ -823,6 +988,18 @@ function formatEntryActionError(error: unknown): string {
   return asUserMessage(error)
 }
 
+function resetWorkflowAuxiliaryState(): void {
+  entryActivity.value = []
+  selectedAutosave.value = null
+  selectedSchedule.value = null
+  schedulePublishAt.value = ''
+  scheduleUnpublishAt.value = ''
+  autosaveErrorMessage.value = null
+  scheduleErrorMessage.value = null
+  activityErrorMessage.value = null
+  workflowStatusMessage.value = null
+}
+
 async function loadSelectedEntryRevisions(): Promise<void> {
   const entry = selectedWorkflowEntry.value
   if (entry === null) {
@@ -842,6 +1019,222 @@ async function loadSelectedEntryRevisions(): Promise<void> {
   } finally {
     revisionsLoading.value = false
   }
+}
+
+async function loadSelectedEntryAutosave(): Promise<void> {
+  const entry = selectedWorkflowEntry.value
+  if (entry === null || !canWriteContentEntries.value) {
+    selectedAutosave.value = null
+    return
+  }
+
+  autosaveLoading.value = true
+  autosaveErrorMessage.value = null
+
+  try {
+    selectedAutosave.value = await getContentEntryAutosave(entry.id)
+  } catch (error) {
+    if (error instanceof ApiClientError && error.status === 404) {
+      selectedAutosave.value = null
+    } else {
+      autosaveErrorMessage.value = formatEntryActionError(error)
+      selectedAutosave.value = null
+    }
+  } finally {
+    autosaveLoading.value = false
+  }
+}
+
+function localDateTimeToIso(value: string): string | null {
+  if (!value) {
+    return null
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return null
+  }
+  return date.toISOString()
+}
+
+function isoToLocalDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return ''
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  return date.toISOString().slice(0, 16)
+}
+
+function applyScheduleInputs(schedule: ContentEntryScheduleResponse | null): void {
+  schedulePublishAt.value = isoToLocalDateTime(schedule?.publish?.run_at)
+  scheduleUnpublishAt.value = isoToLocalDateTime(schedule?.unpublish?.run_at)
+}
+
+async function loadSelectedEntrySchedule(): Promise<void> {
+  const entry = selectedWorkflowEntry.value
+  if (entry === null) {
+    selectedSchedule.value = null
+    applyScheduleInputs(null)
+    return
+  }
+
+  scheduleLoading.value = true
+  scheduleErrorMessage.value = null
+
+  try {
+    selectedSchedule.value = await getContentEntrySchedule(entry.id)
+    applyScheduleInputs(selectedSchedule.value)
+  } catch (error) {
+    scheduleErrorMessage.value = formatEntryActionError(error)
+    selectedSchedule.value = null
+    applyScheduleInputs(null)
+  } finally {
+    scheduleLoading.value = false
+  }
+}
+
+async function loadSelectedEntryActivity(): Promise<void> {
+  const entry = selectedWorkflowEntry.value
+  if (entry === null) {
+    entryActivity.value = []
+    return
+  }
+
+  activityLoading.value = true
+  activityErrorMessage.value = null
+
+  try {
+    const response = await listContentEntryActivity(entry.id)
+    entryActivity.value = response.items
+  } catch (error) {
+    activityErrorMessage.value = formatEntryActionError(error)
+    entryActivity.value = []
+  } finally {
+    activityLoading.value = false
+  }
+}
+
+async function loadSelectedEntryWorkflowMetadata(): Promise<void> {
+  await Promise.all([
+    loadSelectedEntryAutosave(),
+    loadSelectedEntrySchedule(),
+    loadSelectedEntryActivity(),
+  ])
+}
+
+async function saveSelectedEntryAutosave(): Promise<void> {
+  const entry = currentWorkflowEntryOrMessage()
+  if (entry === null) {
+    return
+  }
+
+  autosaveSaving.value = true
+  autosaveErrorMessage.value = null
+  workflowStatusMessage.value = null
+
+  try {
+    selectedAutosave.value = await saveContentEntryAutosave(entry.id, {
+      base_version: entry.version,
+      slug: entry.slug,
+      payload: entry.payload,
+      seo_metadata: entry.seo_metadata,
+    })
+    workflowStatusMessage.value = 'Autosave safety copy saved.'
+    await loadSelectedEntryActivity()
+  } catch (error) {
+    autosaveErrorMessage.value = formatEntryActionError(error)
+  } finally {
+    autosaveSaving.value = false
+  }
+}
+
+async function discardSelectedEntryAutosave(): Promise<void> {
+  const entry = currentWorkflowEntryOrMessage()
+  if (entry === null) {
+    return
+  }
+
+  autosaveSaving.value = true
+  autosaveErrorMessage.value = null
+  workflowStatusMessage.value = null
+
+  try {
+    await deleteContentEntryAutosave(entry.id)
+    selectedAutosave.value = null
+    workflowStatusMessage.value = 'Autosave safety copy discarded.'
+  } catch (error) {
+    autosaveErrorMessage.value = formatEntryActionError(error)
+  } finally {
+    autosaveSaving.value = false
+  }
+}
+
+async function saveSelectedEntrySchedule(): Promise<void> {
+  const entry = currentWorkflowEntryOrMessage()
+  if (entry === null) {
+    return
+  }
+
+  const publishAt = localDateTimeToIso(schedulePublishAt.value)
+  const unpublishAt = localDateTimeToIso(scheduleUnpublishAt.value)
+  if (!publishAt && !unpublishAt) {
+    scheduleErrorMessage.value = 'Set a publish or unpublish time before saving the schedule.'
+    return
+  }
+
+  scheduleSaving.value = true
+  scheduleErrorMessage.value = null
+  workflowStatusMessage.value = null
+
+  try {
+    selectedSchedule.value = await setContentEntrySchedule(entry.id, {
+      expected_version: entry.version,
+      publish_at: publishAt,
+      unpublish_at: unpublishAt,
+    })
+    applyScheduleInputs(selectedSchedule.value)
+    workflowStatusMessage.value = 'Schedule saved.'
+    await loadSelectedEntryActivity()
+  } catch (error) {
+    scheduleErrorMessage.value = formatEntryActionError(error)
+  } finally {
+    scheduleSaving.value = false
+  }
+}
+
+async function cancelSelectedEntrySchedule(): Promise<void> {
+  const entry = currentWorkflowEntryOrMessage()
+  if (entry === null) {
+    return
+  }
+
+  scheduleSaving.value = true
+  scheduleErrorMessage.value = null
+  workflowStatusMessage.value = null
+
+  try {
+    selectedSchedule.value = await cancelContentEntrySchedule(entry.id)
+    applyScheduleInputs(selectedSchedule.value)
+    workflowStatusMessage.value = 'Schedule cancelled.'
+    await loadSelectedEntryActivity()
+  } catch (error) {
+    scheduleErrorMessage.value = formatEntryActionError(error)
+  } finally {
+    scheduleSaving.value = false
+  }
+}
+
+function scheduleItemSummary(item: ContentEntryScheduleItemResponse | null | undefined, label: string): string {
+  if (!item) {
+    return `${label}: not scheduled`
+  }
+  return `${label}: ${formatTimestamp(item.run_at)} (${item.state}, requested v${item.requested_entry_version})`
+}
+
+function activityLabel(action: ContentEntryActivityAction): string {
+  return action.replaceAll('_', ' ')
 }
 
 function replaceEntry(updatedEntry: ContentEntryResponse): void {
@@ -889,6 +1282,7 @@ async function publishSelectedEntry(): Promise<void> {
     replaceEntry(updatedEntry)
     await loadEntries()
     await loadSelectedEntryRevisions()
+    await loadSelectedEntryWorkflowMetadata()
   } catch (error) {
     workflowErrorMessage.value = formatEntryActionError(error)
   } finally {
@@ -910,6 +1304,7 @@ async function unpublishSelectedEntry(): Promise<void> {
     replaceEntry(updatedEntry)
     await loadEntries()
     await loadSelectedEntryRevisions()
+    await loadSelectedEntryWorkflowMetadata()
   } catch (error) {
     workflowErrorMessage.value = formatEntryActionError(error)
   } finally {
@@ -932,6 +1327,7 @@ async function restoreSelectedEntryRevision(revision: ContentEntryRevisionRespon
     replaceEntry(updatedEntry)
     await loadEntries()
     await loadSelectedEntryRevisions()
+    await loadSelectedEntryWorkflowMetadata()
   } catch (error) {
     revisionsErrorMessage.value = formatEntryActionError(error)
   } finally {
@@ -1194,6 +1590,7 @@ watch(() => route.query.blockEditor, () => {
 watch(() => selectedWorkflowEntry.value?.id, () => {
   previewUrl.value = null
   void loadSelectedEntryRevisions()
+  void loadSelectedEntryWorkflowMetadata()
 })
 
 onBeforeRouteLeave(() => {

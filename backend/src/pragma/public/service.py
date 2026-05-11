@@ -696,9 +696,9 @@ def build_site_context(settings: Settings, theme_runtime: ThemeRuntime) -> Publi
         description = _DEFAULT_SITE_DESCRIPTION
 
     fallback_navigation = [
-        {'label': 'Home', 'href': '/'},
-        {'label': 'Archive', 'href': '/archive'},
-        {'label': 'Search', 'href': '/search'},
+        {'label': 'Home', 'href': '/', 'children': []},
+        {'label': 'Archive', 'href': '/archive', 'children': []},
+        {'label': 'Search', 'href': '/search', 'children': []},
     ]
     navigation = list(fallback_navigation)
 
@@ -726,29 +726,49 @@ def build_site_context(settings: Settings, theme_runtime: ThemeRuntime) -> Publi
             logger.warning('Public navigation menu unavailable', exc_info=True)
         else:
             if menu_row is not None:
-                navigation = []
+                rows_by_parent: dict[Any, list[dict[str, Any]]] = {}
                 for row in menu_rows:
+                    rows_by_parent.setdefault(row.get('parent_item_id'), []).append(row)
+
+                def build_public_item(row: dict[str, Any]) -> dict[str, Any] | None:
                     if not row.get('enabled'):
-                        continue
+                        return None
                     label = str(row['label'])
                     if str(row['link_type']) == 'custom_url':
-                        navigation.append({'label': label, 'href': str(row['custom_url'])})
-                        continue
+                        return {
+                            'label': label,
+                            'href': str(row['custom_url']),
+                            'children': [],
+                        }
                     if str(row.get('entry_status')) != ContentStatus.PUBLISHED.value:
-                        continue
+                        return None
                     content_type_slug = row.get('content_type_slug')
                     entry_slug = row.get('entry_slug')
                     if content_type_slug is None or entry_slug is None:
-                        continue
-                    navigation.append(
-                        {
-                            'label': label,
-                            'href': build_entry_url(
-                                str(content_type_slug),
-                                str(entry_slug),
-                            ),
-                        }
-                    )
+                        return None
+                    return {
+                        'label': label,
+                        'href': build_entry_url(
+                            str(content_type_slug),
+                            str(entry_slug),
+                        ),
+                        'children': [],
+                    }
+
+                def build_public_items(parent_item_id: Any) -> list[dict[str, Any]]:
+                    items: list[dict[str, Any]] = []
+                    for row in sorted(
+                        rows_by_parent.get(parent_item_id, []),
+                        key=lambda item: (int(item['position']), str(item['id'])),
+                    ):
+                        item = build_public_item(row)
+                        if item is None:
+                            continue
+                        item['children'] = build_public_items(row['id'])
+                        items.append(item)
+                    return items
+
+                navigation = build_public_items(None)
 
     return PublicSiteContext(
         name=name,

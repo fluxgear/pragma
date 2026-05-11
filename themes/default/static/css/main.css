@@ -204,6 +204,39 @@ p, ul, ol {
   gap: 1.25rem;
 }
 
+.site-nav li {
+  position: relative;
+}
+.site-nav .site-nav__children {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 30;
+  display: none;
+  min-width: 12rem;
+  padding: 0.65rem;
+  border: 1px solid var(--site-border);
+  border-radius: var(--site-radius-sm);
+  background: var(--site-surface);
+  box-shadow: var(--site-shadow);
+}
+.site-nav .has-children:focus-within > .site-nav__children,
+.site-nav .has-children:hover > .site-nav__children {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.site-nav .site-nav__children .site-nav__children {
+  left: 100%;
+  top: 0;
+}
+
+.footer-list--nested {
+  margin-top: 0.5rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--site-border);
+}
+
 .site-nav a,
 .footer-list a,
 .quick-links a,

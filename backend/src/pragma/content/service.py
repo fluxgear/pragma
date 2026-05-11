@@ -36,6 +36,10 @@ from pragma.config import Settings
 from pragma.content.models import (
     BlockDocumentFieldDefinition,
     BooleanFieldDefinition,
+    ContentEntryActivityListParams,
+    ContentEntryActivityListResponse,
+    ContentEntryAutosaveRequest,
+    ContentEntryAutosaveResponse,
     ContentEntryCreateRequest,
     ContentEntryListParams,
     ContentEntryListResponse,
@@ -44,6 +48,9 @@ from pragma.content.models import (
     ContentEntryRevisionListResponse,
     ContentEntryRevisionResponse,
     ContentEntryRevisionRestoreRequest,
+    ContentEntryScheduleExecutionResult,
+    ContentEntryScheduleRequest,
+    ContentEntryScheduleResponse,
     ContentEntrySeoMetadata,
     ContentEntryTransitionRequest,
     ContentEntryUpdateRequest,
@@ -1490,6 +1497,7 @@ def create_entry_record(
         PERMISSION_CONTENT_ENTRIES_PUBLISH,
         ensure_permission,
     )
+    from pragma.content.models import ContentEntryActivityAction
     from pragma.modules.service import dispatch_content_entry_event
     from pragma.realtime.service import publish_content_entry_event
     from pragma.search.service import sync_search_document
@@ -1544,6 +1552,14 @@ def create_entry_record(
                 entry_row=entry_row,
                 action=ContentRevisionAction.CREATE,
                 user_id=user_id,
+                timestamp=timestamp,
+            )
+            _record_entry_activity(
+                connection,
+                entry_id=cast(UUID, entry_row['id']),
+                entry_row=entry_row,
+                action=ContentEntryActivityAction.CREATE.value,
+                actor_user_id=user_id,
                 timestamp=timestamp,
             )
             _run_search_indexing_hook(
@@ -1687,6 +1703,786 @@ def get_entry_record(storage: DatabasePool, entry_id: UUID) -> ContentEntryRespo
     return ContentEntryResponse.from_record(entry_row)
 
 
+def _record_entry_activity(
+    connection: Any,
+    *,
+    entry_id: UUID,
+    action: str,
+    actor_user_id: UUID | None,
+    timestamp: datetime,
+    entry_row: Mapping[str, Any] | None = None,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    """Append durable activity without requiring the entry row to survive."""
+
+    from pragma.storage.queries.content import create_content_entry_activity
+
+    entry_version = None
+    if entry_row is not None and entry_row.get('version') is not None:
+        entry_version = int(entry_row['version'])
+    create_content_entry_activity(
+        connection,
+        activity_id=uuid4(),
+        entry_id=entry_id,
+        content_type_id=(
+            cast(UUID, entry_row.get('content_type_id'))
+            if entry_row is not None
+            else None
+        ),
+        entry_slug=(
+            cast(str, entry_row.get('slug')) if entry_row is not None else None
+        ),
+        entry_version=entry_version,
+        action=action,
+        actor_user_id=actor_user_id,
+        details=dict(details or {}),
+        created_at=timestamp,
+    )
+
+
+def _build_autosave_response(
+    autosave_row: Mapping[str, Any], *, current_version: int
+) -> ContentEntryAutosaveResponse:
+    """Build a current-user autosave response from storage rows."""
+
+    from pragma.content.models import ContentEntryAutosaveResponse
+
+    base_version = int(autosave_row['base_version'])
+    return ContentEntryAutosaveResponse(
+        entry_id=autosave_row['entry_id'],
+        user_id=autosave_row['user_id'],
+        base_version=base_version,
+        current_version=current_version,
+        is_stale=base_version != current_version,
+        slug=cast(str, autosave_row['slug']),
+        payload=cast(dict[str, Any], autosave_row['payload']),
+        seo_metadata=ContentEntrySeoMetadata.from_record(autosave_row),
+        updated_at=autosave_row['updated_at'],
+    )
+
+
+def _legacy_rich_text_fields(
+    field_definitions: Sequence[FieldDefinitionModel],
+) -> set[str]:
+    """Return rich-text fields allowed to preserve unchanged legacy HTML."""
+
+    return {
+        field_definition.name
+        for field_definition in field_definitions
+        if isinstance(field_definition, TextFieldDefinition)
+        and field_definition.kind == 'rich_text'
+    }
+
+
+def save_entry_autosave_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    payload: ContentEntryAutosaveRequest,
+    current_user: Mapping[str, object],
+) -> ContentEntryAutosaveResponse:
+    """Store a validated per-user autosave snapshot without mutating the entry."""
+
+    from pragma.content.models import ContentEntryActivityAction
+    from pragma.storage.queries.content import upsert_entry_autosave
+
+    timestamp = utc_now()
+    user_id = _require_user_id(current_user)
+    try:
+        with storage.connection() as connection, connection.transaction():
+            existing_entry = get_entry_by_id(connection, entry_id)
+            if existing_entry is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            field_definitions = _field_definitions_from_rows(
+                get_field_definitions(connection, existing_entry['content_type_id'])
+            )
+            existing_payload = cast(dict[str, Any], existing_entry['payload'])
+            validated_payload = _validate_entry_payload(
+                payload.payload,
+                field_definitions,
+                existing_payload=existing_payload,
+                legacy_rich_text_fields=_legacy_rich_text_fields(field_definitions),
+            )
+            slug = _resolve_entry_slug(
+                content_type_id=existing_entry['content_type_id'],
+                content_type_slug=cast(str, existing_entry['content_type_slug']),
+                requested_slug=payload.slug,
+                existing_slug=existing_entry['slug'] if payload.slug is None else None,
+                payload=validated_payload,
+                field_definitions=field_definitions,
+                storage_connection=connection,
+                entry_id=entry_id,
+            )
+            current_version = int(existing_entry['version'])
+            autosave_row = upsert_entry_autosave(
+                connection,
+                entry_id=entry_id,
+                user_id=user_id,
+                base_version=payload.base_version,
+                slug=slug,
+                payload=validated_payload,
+                seo_metadata=payload.seo_metadata.to_storage(),
+                timestamp=timestamp,
+            )
+            _record_entry_activity(
+                connection,
+                entry_id=entry_id,
+                entry_row=existing_entry,
+                action=ContentEntryActivityAction.AUTOSAVE.value,
+                actor_user_id=user_id,
+                timestamp=timestamp,
+                details={
+                    'base_version': payload.base_version,
+                    'current_version': current_version,
+                    'is_stale': payload.base_version != current_version,
+                },
+            )
+    except ContentError:
+        raise
+    except IntegrityError as exc:
+        raise ContentError(
+            detail='An entry with this slug already exists for the content type',
+            code='ENTRY_SLUG_CONFLICT',
+            status_code=HTTPStatus.CONFLICT,
+        ) from exc
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to save content entry autosave',
+            code='CONTENT_ENTRY_AUTOSAVE_SAVE_FAILED',
+        ) from exc
+
+    return _build_autosave_response(autosave_row, current_version=current_version)
+
+
+def get_entry_autosave_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    current_user: Mapping[str, object],
+) -> ContentEntryAutosaveResponse:
+    """Return the current user's autosave snapshot for an entry."""
+
+    from pragma.storage.queries.content import get_entry_autosave
+
+    user_id = _require_user_id(current_user)
+    try:
+        with storage.connection() as connection:
+            existing_entry = get_entry_by_id(connection, entry_id)
+            if existing_entry is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            autosave_row = get_entry_autosave(connection, entry_id, user_id)
+            if autosave_row is None:
+                raise ContentError(
+                    detail='Content entry autosave not found',
+                    code='CONTENT_ENTRY_AUTOSAVE_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            current_version = int(existing_entry['version'])
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load content entry autosave',
+            code='CONTENT_ENTRY_AUTOSAVE_LOOKUP_FAILED',
+        ) from exc
+
+    return _build_autosave_response(autosave_row, current_version=current_version)
+
+
+def delete_entry_autosave_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    current_user: Mapping[str, object],
+) -> None:
+    """Discard the current user's autosave snapshot for an entry."""
+
+    from pragma.content.models import ContentEntryActivityAction
+    from pragma.storage.queries.content import delete_entry_autosave
+
+    timestamp = utc_now()
+    user_id = _require_user_id(current_user)
+    try:
+        with storage.connection() as connection, connection.transaction():
+            existing_entry = get_entry_by_id(connection, entry_id)
+            if existing_entry is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            deleted = delete_entry_autosave(connection, entry_id, user_id)
+            if deleted:
+                _record_entry_activity(
+                    connection,
+                    entry_id=entry_id,
+                    entry_row=existing_entry,
+                    action=ContentEntryActivityAction.AUTOSAVE.value,
+                    actor_user_id=user_id,
+                    timestamp=timestamp,
+                    details={'discarded': True},
+                )
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to delete content entry autosave',
+            code='CONTENT_ENTRY_AUTOSAVE_DELETE_FAILED',
+        ) from exc
+
+
+def list_entry_activity_records(
+    storage: DatabasePool,
+    entry_id: UUID,
+    params: ContentEntryActivityListParams,
+) -> ContentEntryActivityListResponse:
+    """List durable content-entry activity newest-first."""
+
+    from pragma.content.models import (
+        ContentEntryActivityListResponse,
+        ContentEntryActivityResponse,
+    )
+    from pragma.storage.queries.content import (
+        count_content_entry_activity,
+        list_content_entry_activity,
+    )
+
+    try:
+        with storage.connection() as connection:
+            activity_rows = list_content_entry_activity(
+                connection, entry_id, params.limit, params.offset
+            )
+            total = count_content_entry_activity(connection, entry_id)
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to list content entry activity',
+            code='CONTENT_ENTRY_ACTIVITY_LIST_FAILED',
+        ) from exc
+
+    return ContentEntryActivityListResponse(
+        items=[ContentEntryActivityResponse.from_record(row) for row in activity_rows],
+        total=total,
+        limit=params.limit,
+        offset=params.offset,
+    )
+
+
+def _build_schedule_response(
+    entry_id: UUID, schedule_rows: Sequence[Mapping[str, Any]]
+) -> ContentEntryScheduleResponse:
+    """Build a pending schedule summary from storage rows."""
+
+    from pragma.content.models import (
+        ContentEntryScheduleItemResponse,
+        ContentEntryScheduleResponse,
+    )
+
+    items = {
+        str(row['action']): ContentEntryScheduleItemResponse.from_record(row)
+        for row in schedule_rows
+    }
+    return ContentEntryScheduleResponse(
+        entry_id=entry_id,
+        publish=items.get('publish'),
+        unpublish=items.get('unpublish'),
+    )
+
+
+def _schedule_invalid(detail: str) -> ContentError:
+    """Build a structured invalid schedule error."""
+
+    return ContentError(
+        detail=detail,
+        code='CONTENT_ENTRY_SCHEDULE_INVALID',
+        status_code=HTTPStatus.CONFLICT,
+    )
+
+
+def _normalize_schedule_time(
+    value: datetime | None, *, field_name: str, now: datetime
+) -> datetime | None:
+    """Require timezone-aware future schedule timestamps."""
+
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise _schedule_invalid(f'{field_name} must include a timezone')
+    normalized = value.astimezone(now.tzinfo)
+    if normalized <= now:
+        raise _schedule_invalid(f'{field_name} must be in the future')
+    return normalized
+
+
+def _validate_schedule_request(
+    existing_entry: Mapping[str, Any],
+    payload: ContentEntryScheduleRequest,
+    current_user: Mapping[str, object],
+    *,
+    now: datetime,
+) -> tuple[datetime | None, datetime | None]:
+    """Validate and normalize a schedule replacement request."""
+
+    from pragma.auth.permissions import (
+        PERMISSION_CONTENT_ENTRIES_PUBLISH,
+        ensure_permission,
+    )
+
+    if payload.publish_at is None and payload.unpublish_at is None:
+        raise _schedule_invalid('At least one schedule timestamp is required')
+
+    if int(existing_entry['version']) != payload.expected_version:
+        _raise_version_conflict()
+
+    publish_at = _normalize_schedule_time(
+        payload.publish_at, field_name='publish_at', now=now
+    )
+    unpublish_at = _normalize_schedule_time(
+        payload.unpublish_at, field_name='unpublish_at', now=now
+    )
+    if publish_at is not None and unpublish_at is not None and publish_at >= unpublish_at:
+        raise _schedule_invalid('publish_at must be before unpublish_at')
+
+    existing_status = cast(str, existing_entry['status'])
+    if existing_status == 'archived':
+        raise _schedule_invalid('Archived entries cannot be scheduled')
+    if publish_at is not None and existing_status != 'draft':
+        raise _schedule_invalid('Only draft entries can schedule publish')
+    if unpublish_at is not None and existing_status == 'draft' and publish_at is None:
+        raise _schedule_invalid('Draft entries must schedule publish before unpublish')
+
+    ensure_permission(current_user, PERMISSION_CONTENT_ENTRIES_PUBLISH)
+    return publish_at, unpublish_at
+
+
+def get_entry_schedule_record(
+    storage: DatabasePool, entry_id: UUID
+) -> ContentEntryScheduleResponse:
+    """Return pending schedule metadata for a content entry."""
+
+    from pragma.storage.queries.content import list_pending_content_entry_schedules
+
+    try:
+        with storage.connection() as connection:
+            if get_entry_by_id(connection, entry_id) is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            schedule_rows = list_pending_content_entry_schedules(connection, entry_id)
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load content entry schedules',
+            code='CONTENT_ENTRY_SCHEDULE_LOOKUP_FAILED',
+        ) from exc
+
+    return _build_schedule_response(entry_id, schedule_rows)
+
+
+def set_entry_schedule_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    payload: ContentEntryScheduleRequest,
+    current_user: Mapping[str, object],
+) -> ContentEntryScheduleResponse:
+    """Replace pending publish/unpublish schedules for a content entry."""
+
+    from pragma.content.models import ContentEntryActivityAction
+    from pragma.storage.queries.content import (
+        cancel_pending_content_entry_schedules,
+        list_pending_content_entry_schedules,
+        upsert_content_entry_schedule,
+    )
+
+    timestamp = utc_now()
+    user_id = _require_user_id(current_user)
+    try:
+        with storage.connection() as connection, connection.transaction():
+            existing_entry = get_entry_by_id_for_update(connection, entry_id)
+            if existing_entry is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            publish_at, unpublish_at = _validate_schedule_request(
+                existing_entry, payload, current_user, now=timestamp
+            )
+
+            requested_actions = []
+            if publish_at is not None:
+                requested_actions.append('publish')
+            if unpublish_at is not None:
+                requested_actions.append('unpublish')
+
+            omitted_actions = [
+                action
+                for action in ('publish', 'unpublish')
+                if action not in requested_actions
+            ]
+            cancelled_rows = cancel_pending_content_entry_schedules(
+                connection,
+                entry_id=entry_id,
+                actions=omitted_actions,
+                timestamp=timestamp,
+            )
+            for row in cancelled_rows:
+                _record_entry_activity(
+                    connection,
+                    entry_id=entry_id,
+                    entry_row=existing_entry,
+                    action=ContentEntryActivityAction.SCHEDULE_CANCEL.value,
+                    actor_user_id=user_id,
+                    timestamp=timestamp,
+                    details={
+                        'schedule_id': str(row['id']),
+                        'schedule_action': row['action'],
+                    },
+                )
+
+            for action, run_at in (
+                ('publish', publish_at),
+                ('unpublish', unpublish_at),
+            ):
+                if run_at is None:
+                    continue
+                schedule_row = upsert_content_entry_schedule(
+                    connection,
+                    schedule_id=uuid4(),
+                    entry_id=entry_id,
+                    action=action,
+                    run_at=run_at,
+                    requested_entry_version=payload.expected_version,
+                    requested_by_user_id=user_id,
+                    timestamp=timestamp,
+                )
+                _record_entry_activity(
+                    connection,
+                    entry_id=entry_id,
+                    entry_row=existing_entry,
+                    action=ContentEntryActivityAction.SCHEDULE_SET.value,
+                    actor_user_id=user_id,
+                    timestamp=timestamp,
+                    details={
+                        'schedule_id': str(schedule_row['id']),
+                        'schedule_action': action,
+                        'run_at': run_at.isoformat(),
+                        'expected_version': payload.expected_version,
+                    },
+                )
+
+            schedule_rows = list_pending_content_entry_schedules(connection, entry_id)
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to set content entry schedule',
+            code='CONTENT_ENTRY_SCHEDULE_SET_FAILED',
+        ) from exc
+
+    return _build_schedule_response(entry_id, schedule_rows)
+
+
+def cancel_entry_schedule_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    current_user: Mapping[str, object],
+) -> ContentEntryScheduleResponse:
+    """Cancel all pending schedules for a content entry."""
+
+    from pragma.content.models import ContentEntryActivityAction
+    from pragma.storage.queries.content import (
+        cancel_pending_content_entry_schedules,
+        list_pending_content_entry_schedules,
+    )
+
+    timestamp = utc_now()
+    user_id = _require_user_id(current_user)
+    try:
+        with storage.connection() as connection, connection.transaction():
+            existing_entry = get_entry_by_id_for_update(connection, entry_id)
+            if existing_entry is None:
+                raise ContentError(
+                    detail='Content entry not found',
+                    code='CONTENT_ENTRY_NOT_FOUND',
+                    status_code=HTTPStatus.NOT_FOUND,
+                )
+            cancelled_rows = cancel_pending_content_entry_schedules(
+                connection,
+                entry_id=entry_id,
+                actions=('publish', 'unpublish'),
+                timestamp=timestamp,
+            )
+            for row in cancelled_rows:
+                _record_entry_activity(
+                    connection,
+                    entry_id=entry_id,
+                    entry_row=existing_entry,
+                    action=ContentEntryActivityAction.SCHEDULE_CANCEL.value,
+                    actor_user_id=user_id,
+                    timestamp=timestamp,
+                    details={
+                        'schedule_id': str(row['id']),
+                        'schedule_action': row['action'],
+                    },
+                )
+            schedule_rows = list_pending_content_entry_schedules(connection, entry_id)
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to cancel content entry schedules',
+            code='CONTENT_ENTRY_SCHEDULE_CANCEL_FAILED',
+        ) from exc
+
+    return _build_schedule_response(entry_id, schedule_rows)
+
+
+def _schedule_failure(
+    connection: Any,
+    *,
+    schedule_row: Mapping[str, Any],
+    entry_row: Mapping[str, Any] | None,
+    failure_code: str,
+    failure_detail: str,
+    timestamp: datetime,
+) -> None:
+    """Mark a due schedule failed and append durable activity."""
+
+    from pragma.content.models import ContentEntryActivityAction
+    from pragma.storage.queries.content import mark_content_entry_schedule_failed
+
+    failed_row = mark_content_entry_schedule_failed(
+        connection,
+        schedule_id=schedule_row['id'],
+        failure_code=failure_code,
+        failure_detail=failure_detail[:500],
+        timestamp=timestamp,
+    )
+    _record_entry_activity(
+        connection,
+        entry_id=schedule_row['entry_id'],
+        entry_row=entry_row,
+        action=ContentEntryActivityAction.SCHEDULE_FAIL.value,
+        actor_user_id=failed_row.get('requested_by_user_id'),
+        timestamp=timestamp,
+        details={
+            'schedule_id': str(failed_row['id']),
+            'schedule_action': failed_row['action'],
+            'failure_code': failure_code,
+        },
+    )
+
+
+def execute_due_content_entry_schedules(
+    storage: DatabasePool,
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> ContentEntryScheduleExecutionResult:
+    """Execute due pending publish/unpublish schedules once.
+
+    This function is intentionally caller-driven; no background worker is started here.
+    """
+
+    from functools import partial
+
+    from pragma.content.models import (
+        ContentEntryActivityAction,
+        ContentEntryScheduleExecutionResult,
+    )
+    from pragma.search.service import sync_search_document
+    from pragma.storage.queries.content import (
+        claim_due_content_entry_schedules,
+        mark_content_entry_schedule_executed,
+    )
+
+    if limit < 1:
+        raise ContentError(
+            detail='Schedule execution limit must be at least 1',
+            code='CONTENT_ENTRY_SCHEDULE_LIMIT_INVALID',
+        )
+
+    timestamp = now or utc_now()
+    emitted: list[tuple[ContentEntryResponse, UUID | None]] = []
+    checked = 0
+    executed = 0
+    failed = 0
+    try:
+        with storage.connection() as connection, connection.transaction():
+            due_rows = claim_due_content_entry_schedules(
+                connection, now=timestamp, limit=limit
+            )
+            checked = len(due_rows)
+            for schedule_row in due_rows:
+                entry_id = cast(UUID, schedule_row['entry_id'])
+                existing_entry = get_entry_by_id_for_update(connection, entry_id)
+                if existing_entry is None:
+                    _schedule_failure(
+                        connection,
+                        schedule_row=schedule_row,
+                        entry_row=None,
+                        failure_code='CONTENT_ENTRY_NOT_FOUND',
+                        failure_detail='Content entry not found',
+                        timestamp=timestamp,
+                    )
+                    failed += 1
+                    continue
+
+                expected_version = int(schedule_row['requested_entry_version'])
+                if int(existing_entry['version']) != expected_version:
+                    _schedule_failure(
+                        connection,
+                        schedule_row=schedule_row,
+                        entry_row=existing_entry,
+                        failure_code='CONTENT_ENTRY_VERSION_CONFLICT',
+                        failure_detail=(
+                            'Content entry version does not match scheduled version'
+                        ),
+                        timestamp=timestamp,
+                    )
+                    failed += 1
+                    continue
+
+                action_value = cast(str, schedule_row['action'])
+                target_status = (
+                    ContentStatus.PUBLISHED
+                    if action_value == 'publish'
+                    else ContentStatus.DRAFT
+                )
+                if target_status is ContentStatus.PUBLISHED and existing_entry['status'] != 'draft':
+                    _schedule_failure(
+                        connection,
+                        schedule_row=schedule_row,
+                        entry_row=existing_entry,
+                        failure_code='CONTENT_ENTRY_TRANSITION_INVALID',
+                        failure_detail='Only draft entries can be published',
+                        timestamp=timestamp,
+                    )
+                    failed += 1
+                    continue
+                if target_status is ContentStatus.DRAFT and existing_entry['status'] != 'published':
+                    _schedule_failure(
+                        connection,
+                        schedule_row=schedule_row,
+                        entry_row=existing_entry,
+                        failure_code='CONTENT_ENTRY_TRANSITION_INVALID',
+                        failure_detail='Only published entries can be unpublished',
+                        timestamp=timestamp,
+                    )
+                    failed += 1
+                    continue
+
+                field_definitions = _field_definitions_from_rows(
+                    get_field_definitions(connection, existing_entry['content_type_id'])
+                )
+                published_at = _resolve_published_at(
+                    target_status, existing_entry['published_at'], timestamp
+                )
+                entry_row = update_entry(
+                    connection=connection,
+                    entry_id=entry_id,
+                    slug=cast(str, existing_entry['slug']),
+                    status=target_status.value,
+                    payload=cast(dict[str, Any], existing_entry['payload']),
+                    seo_metadata=ContentEntrySeoMetadata.from_record(
+                        existing_entry
+                    ).to_storage(),
+                    published_at=published_at,
+                    user_id=cast(UUID, schedule_row['requested_by_user_id']),
+                    updated_at=timestamp,
+                    expected_version=expected_version,
+                )
+                if entry_row is None:
+                    _schedule_failure(
+                        connection,
+                        schedule_row=schedule_row,
+                        entry_row=existing_entry,
+                        failure_code='CONTENT_ENTRY_VERSION_CONFLICT',
+                        failure_detail=(
+                            'Content entry version does not match scheduled version'
+                        ),
+                        timestamp=timestamp,
+                    )
+                    failed += 1
+                    continue
+
+                content_type_slug = cast(str, existing_entry['content_type_slug'])
+                entry_row = {
+                    **entry_row,
+                    'content_type_slug': content_type_slug,
+                }
+                revision_action = (
+                    ContentRevisionAction.PUBLISH
+                    if target_status is ContentStatus.PUBLISHED
+                    else ContentRevisionAction.UNPUBLISH
+                )
+                _create_entry_revision(
+                    connection,
+                    entry_row=entry_row,
+                    action=revision_action,
+                    user_id=cast(UUID, schedule_row['requested_by_user_id']),
+                    timestamp=timestamp,
+                )
+                _run_search_indexing_hook(
+                    connection,
+                    operation='entry_schedule_sync',
+                    context={
+                        'entry_id': str(entry_id),
+                        'content_type_id': str(existing_entry['content_type_id']),
+                    },
+                    hook=partial(
+                        sync_search_document,
+                        connection,
+                        entry_row=entry_row,
+                        content_type_slug=content_type_slug,
+                        field_definitions=field_definitions,
+                    ),
+                )
+                executed_row = mark_content_entry_schedule_executed(
+                    connection, schedule_id=schedule_row['id'], timestamp=timestamp
+                )
+                _record_entry_activity(
+                    connection,
+                    entry_id=entry_id,
+                    entry_row=entry_row,
+                    action=ContentEntryActivityAction.SCHEDULE_EXECUTE.value,
+                    actor_user_id=executed_row.get('requested_by_user_id'),
+                    timestamp=timestamp,
+                    details={
+                        'schedule_id': str(executed_row['id']),
+                        'schedule_action': executed_row['action'],
+                    },
+                )
+                response = ContentEntryResponse.from_record(entry_row)
+                emitted.append((response, executed_row.get('requested_by_user_id')))
+                executed += 1
+    except ContentError:
+        raise
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to execute due content entry schedules',
+            code='CONTENT_ENTRY_SCHEDULE_EXECUTE_FAILED',
+        ) from exc
+
+    for entry_response, actor_id in emitted:
+        if actor_id is not None:
+            _emit_entry_updated(entry_response, actor_id)
+
+    return ContentEntryScheduleExecutionResult(
+        checked=checked,
+        executed=executed,
+        failed=failed,
+    )
+
+
 CONTENT_ENTRY_PREVIEW_TOKEN_TYPE = 'content_preview'
 _CONTENT_ENTRY_PREVIEW_TTL_SECONDS = 15 * 60
 
@@ -1756,13 +2552,25 @@ def create_entry_preview_record(
     storage: DatabasePool,
     settings: Settings,
     entry_id: UUID,
+    current_user: Mapping[str, object],
 ) -> ContentEntryPreviewResponse:
     """Create a short-lived preview token/URL for a content entry."""
 
-    from pragma.content.models import ContentEntryPreviewResponse
+    from pragma.content.models import (
+        ContentEntryActivityAction,
+        ContentEntryPreviewResponse,
+    )
+
+    timestamp = utc_now()
+    user_id = _require_user_id(current_user)
+    token, expires_at = create_content_entry_preview_token(
+        settings,
+        entry_id=entry_id,
+        issued_at=timestamp,
+    )
 
     try:
-        with storage.connection() as connection:
+        with storage.connection() as connection, connection.transaction():
             entry_row = get_entry_by_id(connection, entry_id)
             if entry_row is None:
                 raise ContentError(
@@ -1770,6 +2578,15 @@ def create_entry_preview_record(
                     code='CONTENT_ENTRY_NOT_FOUND',
                     status_code=HTTPStatus.NOT_FOUND,
                 )
+            _record_entry_activity(
+                connection,
+                entry_id=entry_id,
+                entry_row=entry_row,
+                action=ContentEntryActivityAction.PREVIEW.value,
+                actor_user_id=user_id,
+                timestamp=timestamp,
+                details={'expires_at': expires_at.isoformat()},
+            )
     except ContentError:
         raise
     except PsycopgError as exc:
@@ -1778,11 +2595,6 @@ def create_entry_preview_record(
             code='CONTENT_ENTRY_PREVIEW_CREATE_FAILED',
         ) from exc
 
-    _ = entry_row
-    token, expires_at = create_content_entry_preview_token(
-        settings,
-        entry_id=entry_id,
-    )
     preview_url = f"{settings.base_url.rstrip('/')}/preview/content/{token}"
     return ContentEntryPreviewResponse(
         entry_id=entry_id,
@@ -1889,6 +2701,14 @@ def update_entry_record(
                 user_id=user_id,
                 timestamp=timestamp,
             )
+            _record_entry_activity(
+                connection,
+                entry_id=entry_id,
+                entry_row=entry_row,
+                action=action.value,
+                actor_user_id=user_id,
+                timestamp=timestamp,
+            )
             _run_search_indexing_hook(
                 connection,
                 operation='entry_update_sync',
@@ -1933,13 +2753,20 @@ def update_entry_record(
     return entry_response
 
 
-def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
+def delete_entry_record(
+    storage: DatabasePool,
+    entry_id: UUID,
+    current_user: Mapping[str, object],
+) -> None:
     """Delete a content entry by identifier."""
 
+    from pragma.content.models import ContentEntryActivityAction
     from pragma.modules.service import dispatch_content_entry_event
     from pragma.realtime.service import publish_content_entry_event
     from pragma.search.service import delete_search_document
 
+    user_id = _require_user_id(current_user)
+    timestamp = utc_now()
     deleted_entry_response: ContentEntryResponse | None = None
     try:
         with storage.connection() as connection, connection.transaction():
@@ -1951,6 +2778,14 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
                     status_code=HTTPStatus.NOT_FOUND,
                 )
             deleted_entry_response = ContentEntryResponse.from_record(existing_entry)
+            _record_entry_activity(
+                connection,
+                entry_id=entry_id,
+                entry_row=existing_entry,
+                action=ContentEntryActivityAction.DELETE.value,
+                actor_user_id=user_id,
+                timestamp=timestamp,
+            )
             _run_search_indexing_hook(
                 connection,
                 operation='entry_delete_sync',
@@ -1973,7 +2808,7 @@ def delete_entry_record(storage: DatabasePool, entry_id: UUID) -> None:
         publish_content_entry_event(
             event_type='content.entry.deleted',
             entry=deleted_entry_response,
-            actor_id=None,
+            actor_id=user_id,
         )
         dispatch_content_entry_event(
             'content.entry.deleted',
@@ -2212,6 +3047,14 @@ def _transition_entry_record(
                 user_id=user_id,
                 timestamp=timestamp,
             )
+            _record_entry_activity(
+                connection,
+                entry_id=entry_id,
+                entry_row=entry_row,
+                action=action.value,
+                actor_user_id=user_id,
+                timestamp=timestamp,
+            )
             _run_search_indexing_hook(
                 connection,
                 operation='entry_transition_sync',
@@ -2248,6 +3091,7 @@ def restore_entry_revision_record(
 ) -> ContentEntryResponse:
     """Restore an immutable revision by writing a new current version."""
 
+    from pragma.content.models import ContentEntryActivityAction
     from pragma.search.service import sync_search_document
 
     timestamp = utc_now()
@@ -2317,6 +3161,15 @@ def restore_entry_revision_record(
                 user_id=user_id,
                 timestamp=timestamp,
                 restore_source_revision_id=revision_id,
+            )
+            _record_entry_activity(
+                connection,
+                entry_id=entry_id,
+                entry_row=entry_row,
+                action=ContentEntryActivityAction.RESTORE.value,
+                actor_user_id=user_id,
+                timestamp=timestamp,
+                details={'restore_source_revision_id': str(revision_id)},
             )
             _run_search_indexing_hook(
                 connection,

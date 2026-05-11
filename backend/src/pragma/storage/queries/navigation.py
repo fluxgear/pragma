@@ -79,6 +79,7 @@ def list_navigation_menu_items(
         SELECT
             item.id,
             item.menu_id,
+            item.parent_item_id,
             item.position,
             item.label,
             item.link_type,
@@ -95,7 +96,7 @@ def list_navigation_menu_items(
         LEFT JOIN pragma_content_types AS content_type
             ON content_type.id = entry.content_type_id
         WHERE item.menu_id = %s
-        ORDER BY item.position ASC, item.id ASC
+        ORDER BY item.parent_item_id NULLS FIRST, item.position ASC, item.id ASC
         """,
         (menu_id,),
     ).fetchall()
@@ -118,35 +119,84 @@ def replace_navigation_menu_items(
         (menu_id,),
     )
 
-    for item in items:
-        connection.execute(
-            """
-            INSERT INTO pragma_navigation_menu_items (
-                id,
-                menu_id,
-                position,
-                label,
-                link_type,
-                content_entry_id,
-                custom_url,
-                enabled,
-                created_at,
-                updated_at
+    def insert_items(
+        parent_item_id: UUID | None,
+        nested_items: Sequence[dict[str, Any]],
+    ) -> None:
+        for item in nested_items:
+            item_id = uuid4()
+            connection.execute(
+                """
+                INSERT INTO pragma_navigation_menu_items (
+                    id,
+                    menu_id,
+                    parent_item_id,
+                    position,
+                    label,
+                    link_type,
+                    content_entry_id,
+                    custom_url,
+                    enabled,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    item_id,
+                    menu_id,
+                    parent_item_id,
+                    item['position'],
+                    item['label'],
+                    item['link_type'],
+                    item.get('content_entry_id'),
+                    item.get('custom_url'),
+                    item['enabled'],
+                    updated_at,
+                    updated_at,
+                ),
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                uuid4(),
-                menu_id,
-                item['position'],
-                item['label'],
-                item['link_type'],
-                item.get('content_entry_id'),
-                item.get('custom_url'),
-                item['enabled'],
-                updated_at,
-                updated_at,
-            ),
-        )
+            children = item.get('children')
+            if isinstance(children, Sequence) and not isinstance(children, str | bytes):
+                insert_items(item_id, children)
 
+    insert_items(None, items)
     return list_navigation_menu_items(connection, menu_id)
+
+
+def list_navigation_content_options(
+    connection: Connection,
+    *,
+    limit: int,
+    offset: int,
+) -> list[dict[str, Any]]:
+    """Return content entries available to the navigation target picker."""
+
+    return connection.execute(
+        """
+        SELECT
+            e.id,
+            e.slug,
+            e.status,
+            e.payload,
+            ct.slug AS content_type_slug
+        FROM pragma_content_entries AS e
+        JOIN pragma_content_types AS ct ON ct.id = e.content_type_id
+        ORDER BY ct.slug ASC, e.updated_at DESC, e.id ASC
+        LIMIT %s
+        OFFSET %s
+        """,
+        (limit, offset),
+    ).fetchall()
+
+
+def count_navigation_content_options(connection: Connection) -> int:
+    """Return the total number of content entries available as menu targets."""
+
+    row = connection.execute(
+        """
+        SELECT count(*) AS total
+        FROM pragma_content_entries
+        """
+    ).fetchone()
+    return int(row['total'])

@@ -6,6 +6,17 @@
 {% set search_url = search_url|default(home_url ~ '#search', true) %}
 {% set footer_links = footer_links|default(site.footer_links|default([{'label': 'Home', 'href': home_url}, {'label': 'Services', 'href': home_url ~ '#services'}, {'label': 'Archive', 'href': archive_url}, {'label': 'Search', 'href': search_url}], true), true) %}
 {% set social_links = social_links|default(site.social_links|default([], true), true) %}
+{% macro footer_navigation_items(items) %}
+    {% for item in items %}
+    {% set children = item.children|default([], true) %}
+    <li>
+        <a href="{{ item.href|default(home_url, true) }}">{{ item.label|default('Link', true) }}</a>
+        {% if children %}
+        <ul class="footer-list footer-list--nested">{{ footer_navigation_items(children) }}</ul>
+        {% endif %}
+    </li>
+    {% endfor %}
+{% endmacro %}
 <footer class="site-footer">
     <div class="shell-container footer-grid">
         <div class="footer-brand">
@@ -20,9 +31,7 @@
         <div>
             <p class="footer-heading">Navigate</p>
             <ul class="footer-list">
-                {% for item in footer_links %}
-                <li><a href="{{ item.href|default(home_url, true) }}">{{ item.label|default('Link', true) }}</a></li>
-                {% endfor %}
+                {{ footer_navigation_items(footer_links) }}
             </ul>
         </div>
         {% if social_links %}

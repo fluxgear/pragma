@@ -500,6 +500,179 @@ class ContentEntryUpdateRequest(BaseModel):
     expected_version: int | None = Field(default=None, ge=1)
 
 
+class ContentEntryAutosaveRequest(BaseModel):
+    """Payload for storing the current user's entry autosave."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_version: int = Field(ge=1)
+    slug: str | None = Field(default=None, min_length=1, max_length=160)
+    payload: dict[str, Any]
+    seo_metadata: ContentEntrySeoMetadata = Field(
+        default_factory=ContentEntrySeoMetadata
+    )
+
+
+class ContentEntryAutosaveResponse(BaseModel):
+    """Serialized current-user autosave snapshot for an entry."""
+
+    entry_id: UUID
+    user_id: UUID
+    base_version: int = Field(ge=1)
+    current_version: int = Field(ge=1)
+    is_stale: bool
+    slug: str
+    payload: dict[str, Any]
+    seo_metadata: ContentEntrySeoMetadata
+    updated_at: datetime
+
+
+class ContentEntryActivityAction(StrEnum):
+    """Durable content entry activity action labels."""
+
+    CREATE = "create"
+    UPDATE = "update"
+    AUTOSAVE = "autosave"
+    PUBLISH = "publish"
+    UNPUBLISH = "unpublish"
+    RESTORE = "restore"
+    PREVIEW = "preview"
+    DELETE = "delete"
+    SCHEDULE_SET = "schedule_set"
+    SCHEDULE_CANCEL = "schedule_cancel"
+    SCHEDULE_EXECUTE = "schedule_execute"
+    SCHEDULE_FAIL = "schedule_fail"
+
+
+class ContentEntryActivityListParams(BaseModel):
+    """Query parameters for content-entry activity lists."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int = Field(default=50, gt=0, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class ContentEntryActivityResponse(BaseModel):
+    """Serialized durable content-entry activity row."""
+
+    id: UUID
+    entry_id: UUID
+    content_type_id: UUID | None
+    entry_slug: str | None
+    entry_version: int | None = Field(default=None, ge=1)
+    action: ContentEntryActivityAction
+    actor_user_id: UUID | None
+    details: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> ContentEntryActivityResponse:
+        """Build an activity response from a storage-layer row."""
+
+        entry_version = record.get("entry_version")
+        return cls(
+            id=record["id"],
+            entry_id=record["entry_id"],
+            content_type_id=record.get("content_type_id"),
+            entry_slug=record.get("entry_slug"),
+            entry_version=int(entry_version) if entry_version is not None else None,
+            action=record["action"],
+            actor_user_id=record.get("actor_user_id"),
+            details=record.get("details") or {},
+            created_at=record["created_at"],
+        )
+
+
+class ContentEntryActivityListResponse(BaseModel):
+    """Paginated durable content-entry activity list."""
+
+    items: list[ContentEntryActivityResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class ContentEntryScheduleAction(StrEnum):
+    """Supported scheduled entry workflow actions."""
+
+    PUBLISH = "publish"
+    UNPUBLISH = "unpublish"
+
+
+class ContentEntryScheduleState(StrEnum):
+    """Stored states for scheduled entry workflow actions."""
+
+    PENDING = "pending"
+    EXECUTED = "executed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class ContentEntryScheduleRequest(BaseModel):
+    """Payload for replacing pending publish/unpublish schedules."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    publish_at: datetime | None = None
+    unpublish_at: datetime | None = None
+
+
+class ContentEntryScheduleItemResponse(BaseModel):
+    """Serialized scheduled entry workflow action."""
+
+    id: UUID
+    entry_id: UUID
+    action: ContentEntryScheduleAction
+    run_at: datetime
+    requested_entry_version: int = Field(ge=1)
+    requested_by_user_id: UUID | None
+    state: ContentEntryScheduleState
+    created_at: datetime
+    updated_at: datetime
+    executed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    failure_code: str | None = None
+    failure_detail: str | None = None
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> ContentEntryScheduleItemResponse:
+        """Build a schedule item response from a storage-layer row."""
+
+        return cls(
+            id=record["id"],
+            entry_id=record["entry_id"],
+            action=record["action"],
+            run_at=record["run_at"],
+            requested_entry_version=int(record["requested_entry_version"]),
+            requested_by_user_id=record.get("requested_by_user_id"),
+            state=record["state"],
+            created_at=record["created_at"],
+            updated_at=record["updated_at"],
+            executed_at=record.get("executed_at"),
+            cancelled_at=record.get("cancelled_at"),
+            failure_code=record.get("failure_code"),
+            failure_detail=record.get("failure_detail"),
+        )
+
+
+class ContentEntryScheduleResponse(BaseModel):
+    """Pending schedule summary for a content entry."""
+
+    entry_id: UUID
+    publish: ContentEntryScheduleItemResponse | None = None
+    unpublish: ContentEntryScheduleItemResponse | None = None
+
+
+class ContentEntryScheduleExecutionResult(BaseModel):
+    """Summary returned by the manual due-schedule executor."""
+
+    checked: int = Field(ge=0)
+    executed: int = Field(ge=0)
+    failed: int = Field(ge=0)
+
+
 class ContentEntryListParams(BaseModel):
     """Query parameters for content-entry list endpoints.
 

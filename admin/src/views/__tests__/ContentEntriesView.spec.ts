@@ -20,13 +20,20 @@ import { useAuthStore } from '@/stores/auth'
 import ContentEntriesView from '@/views/ContentEntriesView.vue'
 
 const contentApiMocks = vi.hoisted(() => ({
+  cancelContentEntrySchedule: vi.fn(),
   createContentEntry: vi.fn(),
   createContentEntryPreview: vi.fn(),
+  deleteContentEntryAutosave: vi.fn(),
+  getContentEntryAutosave: vi.fn(),
+  getContentEntrySchedule: vi.fn(),
   listContentEntries: vi.fn(),
+  listContentEntryActivity: vi.fn(),
   listContentEntryRevisions: vi.fn(),
   listContentTypes: vi.fn(),
   publishContentEntry: vi.fn(),
   restoreContentEntryRevision: vi.fn(),
+  saveContentEntryAutosave: vi.fn(),
+  setContentEntrySchedule: vi.fn(),
   unpublishContentEntry: vi.fn(),
   updateContentEntry: vi.fn(),
 }))
@@ -293,6 +300,41 @@ describe('ContentEntriesView', () => {
       preview_url: '/preview/content/preview-token',
       expires_at: '2026-04-21T00:15:00Z',
     })
+    contentApiMocks.getContentEntryAutosave.mockRejectedValue(new ApiClientError(404, 'Autosave not found', 'CONTENT_ENTRY_AUTOSAVE_NOT_FOUND'))
+    contentApiMocks.getContentEntrySchedule.mockResolvedValue({ entry_id: 'entry-1', publish: null, unpublish: null })
+    contentApiMocks.listContentEntryActivity.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+    contentApiMocks.saveContentEntryAutosave.mockResolvedValue({
+      entry_id: 'entry-1',
+      user_id: 'user-1',
+      base_version: 4,
+      current_version: 4,
+      is_stale: false,
+      slug: 'hello-world',
+      payload: existingEntry.payload,
+      seo_metadata: existingEntry.seo_metadata,
+      updated_at: '2026-04-21T00:05:00Z',
+    })
+    contentApiMocks.deleteContentEntryAutosave.mockResolvedValue(undefined)
+    contentApiMocks.setContentEntrySchedule.mockResolvedValue({
+      entry_id: 'entry-1',
+      publish: {
+        id: 'schedule-1',
+        entry_id: 'entry-1',
+        action: 'publish',
+        run_at: '2026-04-22T09:00:00Z',
+        requested_entry_version: 4,
+        requested_by_user_id: 'user-1',
+        state: 'pending',
+        created_at: '2026-04-21T00:00:00Z',
+        updated_at: '2026-04-21T00:00:00Z',
+        executed_at: null,
+        cancelled_at: null,
+        failure_code: null,
+        failure_detail: null,
+      },
+      unpublish: null,
+    })
+    contentApiMocks.cancelContentEntrySchedule.mockResolvedValue({ entry_id: 'entry-1', publish: null, unpublish: null })
   })
 
   afterEach(() => {
@@ -952,6 +994,57 @@ describe('ContentEntriesView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="workflow-error"]').text()).toContain('Permission denied')
+  })
+
+  it('exposes autosave, scheduling, and activity workflow controls', async () => {
+    contentApiMocks.listContentEntryActivity.mockResolvedValue({
+      items: [
+        {
+          id: 'activity-1',
+          entry_id: 'entry-1',
+          content_type_id: 'type-1',
+          entry_slug: 'hello-world',
+          entry_version: 4,
+          action: 'autosave',
+          actor_user_id: 'user-1',
+          details: {},
+          created_at: '2026-04-21T00:05:00Z',
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+
+    const { wrapper } = await mountView()
+
+    expect(contentApiMocks.getContentEntryAutosave).toHaveBeenCalledWith('entry-1')
+    expect(contentApiMocks.getContentEntrySchedule).toHaveBeenCalledWith('entry-1')
+    expect(contentApiMocks.listContentEntryActivity).toHaveBeenCalledWith('entry-1')
+    expect(wrapper.text()).toContain('Autosave safety copy')
+    expect(wrapper.text()).toContain('autosave')
+
+    await wrapper.get('[data-testid=content-entry-autosave-save]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.saveContentEntryAutosave).toHaveBeenCalledWith('entry-1', {
+      base_version: 4,
+      slug: 'hello-world',
+      payload: existingEntry.payload,
+      seo_metadata: existingEntry.seo_metadata,
+    })
+    expect(wrapper.text()).toContain('Autosave safety copy saved.')
+
+    await wrapper.get('[data-testid=content-entry-schedule-publish-at]').setValue('2026-04-22T09:00')
+    await wrapper.get('[data-testid=content-entry-schedule-save]').trigger('click')
+    await flushPromises()
+
+    expect(contentApiMocks.setContentEntrySchedule).toHaveBeenCalledWith('entry-1', {
+      expected_version: 4,
+      publish_at: expect.any(String),
+      unpublish_at: null,
+    })
+    expect(wrapper.text()).toContain('Schedule saved.')
   })
 
   it('disables create and edit controls for read-only users', async () => {

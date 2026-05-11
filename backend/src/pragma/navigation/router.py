@@ -5,12 +5,20 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from pragma.auth.dependencies import get_current_user, require_permission
 from pragma.auth.permissions import PERMISSION_NAVIGATION_MANAGE
-from pragma.navigation.models import NavigationMenuReplaceRequest, NavigationMenuResponse
-from pragma.navigation.service import get_primary_menu_snapshot, replace_primary_menu
+from pragma.navigation.models import (
+    NavigationContentOptionListResponse,
+    NavigationMenuReplaceRequest,
+    NavigationMenuResponse,
+)
+from pragma.navigation.service import (
+    get_primary_menu_snapshot,
+    list_navigation_content_picker_options,
+    replace_primary_menu,
+)
 from pragma.storage import get_storage
 from pragma.storage.pool import DatabasePool
 
@@ -51,6 +59,29 @@ _NAVIGATION_ERROR_RESPONSES = {
         'content': {'application/json': {'schema': _ERROR_RESPONSE_SCHEMA}},
     },
 }
+
+
+@router.get(
+    '/content-options',
+    response_model=NavigationContentOptionListResponse,
+    responses=_NAVIGATION_ERROR_RESPONSES,
+)
+def list_content_options(
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_NAVIGATION_MANAGE))
+    ],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> NavigationContentOptionListResponse:
+    """Return content-entry options for the navigation target picker."""
+
+    _ = current_user
+    return list_navigation_content_picker_options(
+        storage,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(

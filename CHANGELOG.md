@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-rc.3 (2026-05-11)
+
+- Completed the C6 commercial publishing workflow with durable autosave snapshots, entry activity, schedule metadata, and due-schedule execution.
+- Added admin publishing workflow controls for autosave, scheduling, and activity review, plus nested navigation editing with a content-entry picker.
+- Added nested public navigation rendering across the backend API, public site context, and default theme header/footer styling.
+- Expanded backend and admin coverage for autosave, activity, scheduling, nested navigation, and content-picker contracts.
+- Aligned release metadata for v1.0.0-rc.3 / 1.0.0rc3 across backend and admin package metadata.
+- Validated backend lint, backend tests, admin tests, and admin production build.
+
 ## v1.0.0-rc.2 (2026-05-08)
 
 - Added provider-backed generation settings, backend generation routes, secret isolation, and admin configuration UI.

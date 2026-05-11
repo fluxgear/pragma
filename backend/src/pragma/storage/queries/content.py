@@ -1161,3 +1161,425 @@ def delete_entry(connection: Connection, entry_id: UUID) -> None:
         """,
         (entry_id,),
     )
+
+
+def upsert_entry_autosave(
+    connection: Connection,
+    *,
+    entry_id: UUID,
+    user_id: UUID,
+    base_version: int,
+    slug: str,
+    payload: dict[str, Any],
+    seo_metadata: dict[str, Any],
+    timestamp: datetime,
+) -> dict[str, Any]:
+    """Insert or replace a per-user autosave snapshot for an entry."""
+
+    return connection.execute(
+        """
+        INSERT INTO pragma_content_entry_autosaves (
+            entry_id,
+            user_id,
+            base_version,
+            slug,
+            payload,
+            seo_metadata,
+            created_at,
+            updated_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (entry_id, user_id) DO UPDATE
+        SET
+            base_version = EXCLUDED.base_version,
+            slug = EXCLUDED.slug,
+            payload = EXCLUDED.payload,
+            seo_metadata = EXCLUDED.seo_metadata,
+            updated_at = EXCLUDED.updated_at
+        RETURNING
+            entry_id,
+            user_id,
+            base_version,
+            slug,
+            payload,
+            seo_metadata,
+            created_at,
+            updated_at
+        """,
+        (
+            entry_id,
+            user_id,
+            base_version,
+            slug,
+            Jsonb(payload),
+            Jsonb(seo_metadata),
+            timestamp,
+            timestamp,
+        ),
+    ).fetchone()
+
+
+def get_entry_autosave(
+    connection: Connection, entry_id: UUID, user_id: UUID
+) -> dict[str, Any] | None:
+    """Return the current user's autosave snapshot for an entry."""
+
+    return connection.execute(
+        """
+        SELECT
+            entry_id,
+            user_id,
+            base_version,
+            slug,
+            payload,
+            seo_metadata,
+            created_at,
+            updated_at
+        FROM pragma_content_entry_autosaves
+        WHERE entry_id = %s AND user_id = %s
+        LIMIT 1
+        """,
+        (entry_id, user_id),
+    ).fetchone()
+
+
+def delete_entry_autosave(connection: Connection, entry_id: UUID, user_id: UUID) -> bool:
+    """Delete the current user's autosave snapshot for an entry."""
+
+    row = connection.execute(
+        """
+        DELETE FROM pragma_content_entry_autosaves
+        WHERE entry_id = %s AND user_id = %s
+        RETURNING entry_id
+        """,
+        (entry_id, user_id),
+    ).fetchone()
+    return row is not None
+
+
+def create_content_entry_activity(
+    connection: Connection,
+    *,
+    activity_id: UUID,
+    entry_id: UUID,
+    content_type_id: UUID | None,
+    entry_slug: str | None,
+    entry_version: int | None,
+    action: str,
+    actor_user_id: UUID | None,
+    details: dict[str, Any],
+    created_at: datetime,
+) -> dict[str, Any]:
+    """Append a durable content-entry activity row."""
+
+    return connection.execute(
+        """
+        INSERT INTO pragma_content_entry_activity (
+            id,
+            entry_id,
+            content_type_id,
+            entry_slug,
+            entry_version,
+            action,
+            actor_user_id,
+            details,
+            created_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING
+            id,
+            entry_id,
+            content_type_id,
+            entry_slug,
+            entry_version,
+            action,
+            actor_user_id,
+            details,
+            created_at
+        """,
+        (
+            activity_id,
+            entry_id,
+            content_type_id,
+            entry_slug,
+            entry_version,
+            action,
+            actor_user_id,
+            Jsonb(details),
+            created_at,
+        ),
+    ).fetchone()
+
+
+def list_content_entry_activity(
+    connection: Connection, entry_id: UUID, limit: int, offset: int
+) -> list[dict[str, Any]]:
+    """List durable content-entry activity newest-first."""
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            entry_id,
+            content_type_id,
+            entry_slug,
+            entry_version,
+            action,
+            actor_user_id,
+            details,
+            created_at
+        FROM pragma_content_entry_activity
+        WHERE entry_id = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT %s
+        OFFSET %s
+        """,
+        (entry_id, limit, offset),
+    ).fetchall()
+
+
+def count_content_entry_activity(connection: Connection, entry_id: UUID) -> int:
+    """Count durable content-entry activity rows for an entry."""
+
+    row = connection.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM pragma_content_entry_activity
+        WHERE entry_id = %s
+        """,
+        (entry_id,),
+    ).fetchone()
+    return int(row["total"])
+
+
+def list_pending_content_entry_schedules(
+    connection: Connection, entry_id: UUID
+) -> list[dict[str, Any]]:
+    """Return pending schedules for a content entry."""
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            state,
+            created_at,
+            updated_at,
+            executed_at,
+            cancelled_at,
+            failure_code,
+            failure_detail
+        FROM pragma_content_entry_schedules
+        WHERE entry_id = %s AND state = 'pending'
+        ORDER BY action ASC, run_at ASC, id ASC
+        """,
+        (entry_id,),
+    ).fetchall()
+
+
+def upsert_content_entry_schedule(
+    connection: Connection,
+    *,
+    schedule_id: UUID,
+    entry_id: UUID,
+    action: str,
+    run_at: datetime,
+    requested_entry_version: int,
+    requested_by_user_id: UUID,
+    timestamp: datetime,
+) -> dict[str, Any]:
+    """Insert or replace a pending schedule for one entry action."""
+
+    return connection.execute(
+        """
+        INSERT INTO pragma_content_entry_schedules (
+            id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            state,
+            created_at,
+            updated_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s)
+        ON CONFLICT (entry_id, action) WHERE state = 'pending' DO UPDATE
+        SET
+            run_at = EXCLUDED.run_at,
+            requested_entry_version = EXCLUDED.requested_entry_version,
+            requested_by_user_id = EXCLUDED.requested_by_user_id,
+            updated_at = EXCLUDED.updated_at,
+            executed_at = NULL,
+            cancelled_at = NULL,
+            failure_code = NULL,
+            failure_detail = NULL
+        RETURNING
+            id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            state,
+            created_at,
+            updated_at,
+            executed_at,
+            cancelled_at,
+            failure_code,
+            failure_detail
+        """,
+        (
+            schedule_id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            timestamp,
+            timestamp,
+        ),
+    ).fetchone()
+
+
+def cancel_pending_content_entry_schedules(
+    connection: Connection,
+    *,
+    entry_id: UUID,
+    actions: Sequence[str],
+    timestamp: datetime,
+) -> list[dict[str, Any]]:
+    """Cancel pending schedules for an entry and selected actions."""
+
+    return connection.execute(
+        """
+        UPDATE pragma_content_entry_schedules
+        SET
+            state = 'cancelled',
+            cancelled_at = %s,
+            updated_at = %s
+        WHERE entry_id = %s
+          AND state = 'pending'
+          AND action = ANY(%s::text[])
+        RETURNING
+            id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            state,
+            created_at,
+            updated_at,
+            executed_at,
+            cancelled_at,
+            failure_code,
+            failure_detail
+        """,
+        (timestamp, timestamp, entry_id, list(actions)),
+    ).fetchall()
+
+
+def claim_due_content_entry_schedules(
+    connection: Connection, *, now: datetime, limit: int
+) -> list[dict[str, Any]]:
+    """Lock and return due pending schedules using SKIP LOCKED semantics."""
+
+    return connection.execute(
+        """
+        SELECT
+            id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            state,
+            created_at,
+            updated_at,
+            executed_at,
+            cancelled_at,
+            failure_code,
+            failure_detail
+        FROM pragma_content_entry_schedules
+        WHERE state = 'pending' AND run_at <= %s
+        ORDER BY run_at ASC, created_at ASC, id ASC
+        LIMIT %s
+        FOR UPDATE SKIP LOCKED
+        """,
+        (now, limit),
+    ).fetchall()
+
+
+def mark_content_entry_schedule_executed(
+    connection: Connection, *, schedule_id: UUID, timestamp: datetime
+) -> dict[str, Any]:
+    """Mark a claimed schedule as executed."""
+
+    return connection.execute(
+        """
+        UPDATE pragma_content_entry_schedules
+        SET
+            state = 'executed',
+            executed_at = %s,
+            updated_at = %s
+        WHERE id = %s
+        RETURNING
+            id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            state,
+            created_at,
+            updated_at,
+            executed_at,
+            cancelled_at,
+            failure_code,
+            failure_detail
+        """,
+        (timestamp, timestamp, schedule_id),
+    ).fetchone()
+
+
+def mark_content_entry_schedule_failed(
+    connection: Connection,
+    *,
+    schedule_id: UUID,
+    failure_code: str,
+    failure_detail: str,
+    timestamp: datetime,
+) -> dict[str, Any]:
+    """Mark a claimed schedule as failed."""
+
+    return connection.execute(
+        """
+        UPDATE pragma_content_entry_schedules
+        SET
+            state = 'failed',
+            failure_code = %s,
+            failure_detail = %s,
+            updated_at = %s
+        WHERE id = %s
+        RETURNING
+            id,
+            entry_id,
+            action,
+            run_at,
+            requested_entry_version,
+            requested_by_user_id,
+            state,
+            created_at,
+            updated_at,
+            executed_at,
+            cancelled_at,
+            failure_code,
+            failure_detail
+        """,
+        (failure_code, failure_detail, timestamp, schedule_id),
+    ).fetchone()

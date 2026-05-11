@@ -337,6 +337,90 @@ export interface ContentEntryPreviewResponse {
   expires_at: string
 }
 
+
+export interface ContentEntryAutosaveRequest {
+  base_version: number
+  slug: string | null
+  payload: Record<string, unknown>
+  seo_metadata: ContentEntrySeoMetadata
+}
+
+export interface ContentEntryAutosaveResponse {
+  entry_id: string
+  user_id: string
+  base_version: number
+  current_version: number
+  is_stale: boolean
+  slug: string
+  payload: Record<string, unknown>
+  seo_metadata: ContentEntrySeoMetadata
+  updated_at: string
+}
+
+export type ContentEntryActivityAction =
+  | 'create'
+  | 'update'
+  | 'autosave'
+  | 'publish'
+  | 'unpublish'
+  | 'restore'
+  | 'preview'
+  | 'delete'
+  | 'schedule_set'
+  | 'schedule_cancel'
+  | 'schedule_execute'
+  | 'schedule_fail'
+
+export interface ContentEntryActivityResponse {
+  id: string
+  entry_id: string
+  content_type_id: string | null
+  entry_slug: string | null
+  entry_version: number | null
+  action: ContentEntryActivityAction
+  actor_user_id: string | null
+  details: Record<string, unknown>
+  created_at: string
+}
+
+export interface ContentEntryActivityListResponse {
+  items: ContentEntryActivityResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface ContentEntryScheduleRequest {
+  expected_version: number
+  publish_at?: string | null
+  unpublish_at?: string | null
+}
+
+export type ContentEntryScheduleAction = 'publish' | 'unpublish'
+export type ContentEntryScheduleState = 'pending' | 'executed' | 'cancelled' | 'failed'
+
+export interface ContentEntryScheduleItemResponse {
+  id: string
+  entry_id: string
+  action: ContentEntryScheduleAction
+  run_at: string
+  requested_entry_version: number
+  requested_by_user_id: string | null
+  state: ContentEntryScheduleState
+  created_at: string
+  updated_at: string
+  executed_at: string | null
+  cancelled_at: string | null
+  failure_code: string | null
+  failure_detail: string | null
+}
+
+export interface ContentEntryScheduleResponse {
+  entry_id: string
+  publish: ContentEntryScheduleItemResponse | null
+  unpublish: ContentEntryScheduleItemResponse | null
+}
+
 export interface MediaSelection {
   id: string
   filename: string

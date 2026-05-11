@@ -8,6 +8,7 @@ export interface NavigationMenuItemRequest {
   content_entry_id?: string | null
   url?: string | null
   enabled?: boolean
+  children?: NavigationMenuItemRequest[]
 }
 
 export interface NavigationMenuReplaceRequest {
@@ -16,6 +17,7 @@ export interface NavigationMenuReplaceRequest {
 
 export interface NavigationMenuItemResponse {
   id: string
+  parent_item_id: string | null
   position: number
   label: string
   link_type: NavigationLinkType
@@ -26,6 +28,7 @@ export interface NavigationMenuItemResponse {
   content_type_slug: string | null
   entry_slug: string | null
   entry_status: string | null
+  children: NavigationMenuItemResponse[]
 }
 
 export interface NavigationWarningResponse {
@@ -42,6 +45,22 @@ export interface NavigationMenuResponse {
   warnings: NavigationWarningResponse[]
 }
 
+export interface NavigationContentOption {
+  id: string
+  label: string
+  content_type_slug: string
+  slug: string
+  status: string
+  href: string
+}
+
+export interface NavigationContentOptionListResponse {
+  items: NavigationContentOption[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export function getPrimaryNavigationMenu(): Promise<NavigationMenuResponse> {
   return authenticatedApiRequest<NavigationMenuResponse>('/navigation/primary')
 }
@@ -53,4 +72,17 @@ export function replacePrimaryNavigationMenu(
     method: 'PUT',
     body: payload,
   })
+}
+
+export function listNavigationContentOptions(
+  limit = 100,
+  offset = 0,
+): Promise<NavigationContentOptionListResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  return authenticatedApiRequest<NavigationContentOptionListResponse>(
+    `/navigation/content-options?${params.toString()}`,
+  )
 }

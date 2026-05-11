@@ -460,13 +460,18 @@ def render_content_preview(
         context.update({'post': asdict(entry_view), 'related_posts': []})
         template_name = 'post.html'
 
-    return render_public_template(
+    response = render_public_template(
         theme_runtime=theme_runtime,
         template_name=template_name,
         context=context,
         status_code=status.HTTP_200_OK,
         error_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive, nosnippet'
+    return response
 
 
 @router.get('/archive', response_class=HTMLResponse)

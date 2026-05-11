@@ -4,6 +4,17 @@
 {% set home_url = site.home_url|default(home_url|default('/', true), true) %}
 {% set navigation = navigation|default(site.navigation|default([{'label': 'Services', 'href': home_url ~ '#services'}, {'label': 'Testimonials', 'href': home_url ~ '#testimonials'}, {'label': 'Team', 'href': home_url ~ '#team'}, {'label': 'Insights', 'href': home_url ~ '#insights'}, {'label': 'Contact', 'href': home_url ~ '#contact'}], true), true) %}
 {% set header_cta = header_cta|default(site.header_cta|default({'label': 'Book a consultation', 'href': home_url ~ '#contact'}, true), true) %}
+{% macro navigation_items(items) %}
+    {% for item in items %}
+    {% set children = item.children|default([], true) %}
+    <li class="{{ 'has-children' if children else '' }}">
+        <a href="{{ item.href|default(home_url, true) }}">{{ item.label|default('Link', true) }}</a>
+        {% if children %}
+        <ul class="site-nav__children">{{ navigation_items(children) }}</ul>
+        {% endif %}
+    </li>
+    {% endfor %}
+{% endmacro %}
 <header class="site-header">
     <div class="shell-container header-bar">
         <a class="brand" href="{{ home_url }}" aria-label="{{ site_name }} home">
@@ -15,9 +26,7 @@
         </a>
         <nav class="site-nav" aria-label="Primary">
             <ul>
-                {% for item in navigation %}
-                <li><a href="{{ item.href|default(home_url, true) }}">{{ item.label|default('Link', true) }}</a></li>
-                {% endfor %}
+                {{ navigation_items(navigation) }}
             </ul>
         </nav>
         <div class="header-actions">

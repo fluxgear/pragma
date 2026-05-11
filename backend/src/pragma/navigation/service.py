@@ -14,6 +14,8 @@ from psycopg import Error as PsycopgError
 from pragma.content.models import ContentStatus
 from pragma.errors import PragmaError, StorageError
 from pragma.navigation.models import (
+    NavigationContentOptionListResponse,
+    NavigationContentOptionResponse,
     NavigationLinkType,
     NavigationMenuItemRequest,
     NavigationMenuItemResponse,
@@ -25,7 +27,9 @@ from pragma.storage.pool import DatabasePool
 from pragma.storage.queries.content import get_entry_by_id
 from pragma.storage.queries.navigation import (
     PRIMARY_MENU_KEY,
+    count_navigation_content_options,
     get_navigation_menu_by_key,
+    list_navigation_content_options,
     list_navigation_menu_items,
     replace_navigation_menu_items,
     upsert_navigation_menu,
@@ -79,6 +83,7 @@ def _build_item_response(row: dict[str, Any]) -> NavigationMenuItemResponse:
 
     return NavigationMenuItemResponse(
         id=row['id'],
+        parent_item_id=row.get('parent_item_id'),
         position=int(row['position']),
         label=str(row['label']),
         link_type=NavigationLinkType(link_type),
@@ -116,9 +121,29 @@ def _build_warnings(rows: list[dict[str, Any]]) -> list[NavigationWarningRespons
 def _build_menu_response(rows: list[dict[str, Any]]) -> NavigationMenuResponse:
     """Build the API response for the primary menu."""
 
+    items_by_id = {row['id']: _build_item_response(row) for row in rows}
+    top_level_items: list[NavigationMenuItemResponse] = []
+
+    for row in sorted(rows, key=lambda item: (int(item['position']), str(item['id']))):
+        item = items_by_id[row['id']]
+        parent_item_id = row.get('parent_item_id')
+        if parent_item_id is None or parent_item_id not in items_by_id:
+            top_level_items.append(item)
+            continue
+        items_by_id[parent_item_id].children.append(item)
+
+    def sort_children(item: NavigationMenuItemResponse) -> None:
+        item.children.sort(key=lambda child: (child.position, str(child.id)))
+        for child in item.children:
+            sort_children(child)
+
+    top_level_items.sort(key=lambda item: (item.position, str(item.id)))
+    for item in top_level_items:
+        sort_children(item)
+
     return NavigationMenuResponse(
         key=PRIMARY_MENU_KEY,
-        items=[_build_item_response(row) for row in rows],
+        items=top_level_items,
         warnings=_build_warnings(rows),
     )
 
@@ -143,6 +168,63 @@ def get_primary_menu_snapshot(storage: DatabasePool) -> NavigationMenuResponse:
     return _build_menu_response(rows)
 
 
+def _entry_option_label(row: Mapping[str, Any]) -> str:
+    """Return a readable picker label for a generic content entry row."""
+
+    payload = row.get('payload')
+    if isinstance(payload, Mapping):
+        for key in ('title', 'name'):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return ' '.join(value.split())
+    return str(row['slug'])
+
+
+def _build_content_option(row: Mapping[str, Any]) -> NavigationContentOptionResponse:
+    """Map one entry row to a navigation picker option."""
+
+    content_type_slug = str(row['content_type_slug'])
+    slug = str(row['slug'])
+    return NavigationContentOptionResponse(
+        id=row['id'],
+        label=_entry_option_label(row),
+        content_type_slug=content_type_slug,
+        slug=slug,
+        status=str(row['status']),
+        href=_build_entry_href(content_type_slug, slug),
+    )
+
+
+def list_navigation_content_picker_options(
+    storage: DatabasePool,
+    *,
+    limit: int,
+    offset: int,
+) -> NavigationContentOptionListResponse:
+    """Return content entries that can be selected as navigation targets."""
+
+    try:
+        with storage.connection() as connection:
+            rows = list_navigation_content_options(
+                connection,
+                limit=limit,
+                offset=offset,
+            )
+            total = count_navigation_content_options(connection)
+    except PsycopgError as exc:
+        raise StorageError(
+            detail='Unable to load navigation content options',
+            code='NAVIGATION_CONTENT_OPTIONS_LOAD_FAILED',
+        ) from exc
+
+    return NavigationContentOptionListResponse(
+        items=[_build_content_option(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
 def _serialize_request_item(
     item: NavigationMenuItemRequest,
     *,
@@ -162,7 +244,23 @@ def _serialize_request_item(
         ),
         'custom_url': item.url if link_type == NavigationLinkType.CUSTOM_URL.value else None,
         'enabled': item.enabled,
+        'children': [
+            _serialize_request_item(child, position=child_index)
+            for child_index, child in enumerate(item.children, start=1)
+        ],
     }
+
+
+def _flatten_serialized_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a pre-order flattened list of serialized menu items."""
+
+    flattened: list[dict[str, Any]] = []
+    for item in items:
+        flattened.append(item)
+        children = item.get('children')
+        if isinstance(children, list):
+            flattened.extend(_flatten_serialized_items(children))
+    return flattened
 
 
 def replace_primary_menu(
@@ -181,7 +279,7 @@ def replace_primary_menu(
 
     try:
         with storage.connection() as connection, connection.transaction():
-            for item in serialized_items:
+            for item in _flatten_serialized_items(serialized_items):
                 entry_id = item.get('content_entry_id')
                 if entry_id is None:
                     continue

@@ -1,11 +1,16 @@
 import { authenticatedApiRequest } from '@/api/authenticated'
 import type {
+  ContentEntryActivityListResponse,
+  ContentEntryAutosaveRequest,
+  ContentEntryAutosaveResponse,
   ContentEntryCreateRequest,
   ContentEntryListResponse,
   ContentEntryPreviewResponse,
   ContentEntryResponse,
   ContentEntryRevisionListResponse,
   ContentEntryRevisionRestoreRequest,
+  ContentEntryScheduleRequest,
+  ContentEntryScheduleResponse,
   ContentEntryStatus,
   ContentEntryTransitionRequest,
   ContentEntryUpdateRequest,
@@ -190,4 +195,60 @@ export function restoreContentEntryRevision(
       body: payload,
     },
   )
+}
+
+export function saveContentEntryAutosave(
+  entryId: string,
+  payload: ContentEntryAutosaveRequest,
+): Promise<ContentEntryAutosaveResponse> {
+  return authenticatedApiRequest<ContentEntryAutosaveResponse>(`/content/entries/${entryId}/autosave`, {
+    method: 'PUT',
+    body: payload,
+  })
+}
+
+export function getContentEntryAutosave(
+  entryId: string,
+): Promise<ContentEntryAutosaveResponse> {
+  return authenticatedApiRequest<ContentEntryAutosaveResponse>(`/content/entries/${entryId}/autosave`)
+}
+
+export function deleteContentEntryAutosave(entryId: string): Promise<void> {
+  return authenticatedApiRequest<void>(`/content/entries/${entryId}/autosave`, {
+    method: 'DELETE',
+  })
+}
+
+export function listContentEntryActivity(
+  entryId: string,
+  limit = 50,
+  offset = 0,
+): Promise<ContentEntryActivityListResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  return authenticatedApiRequest<ContentEntryActivityListResponse>(
+    `/content/entries/${entryId}/activity?${params.toString()}`,
+  )
+}
+
+export function getContentEntrySchedule(entryId: string): Promise<ContentEntryScheduleResponse> {
+  return authenticatedApiRequest<ContentEntryScheduleResponse>(`/content/entries/${entryId}/schedule`)
+}
+
+export function setContentEntrySchedule(
+  entryId: string,
+  payload: ContentEntryScheduleRequest,
+): Promise<ContentEntryScheduleResponse> {
+  return authenticatedApiRequest<ContentEntryScheduleResponse>(`/content/entries/${entryId}/schedule`, {
+    method: 'PUT',
+    body: payload,
+  })
+}
+
+export function cancelContentEntrySchedule(entryId: string): Promise<ContentEntryScheduleResponse> {
+  return authenticatedApiRequest<ContentEntryScheduleResponse>(`/content/entries/${entryId}/schedule`, {
+    method: 'DELETE',
+  })
 }

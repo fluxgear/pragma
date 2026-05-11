@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from typing import Any
 from uuid import uuid4
@@ -2551,3 +2551,151 @@ def test_block_document_schema_update_safety_with_existing_entries(
     )
     assert type_change_response.status_code == 409
     assert type_change_response.json()['code'] == 'CONTENT_TYPE_UPDATE_INVALID'
+
+
+def test_entry_autosave_records_user_snapshot_without_revision_spam(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify autosave stores a draft snapshot and activity without revisions."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {'title': 'Autosave Base', 'body': '<p>Base</p>', 'views': 1},
+        },
+    )
+    assert create_response.status_code == 201
+    entry = create_response.json()
+    initial_revisions = client.get(
+        f"/api/v1/content/entries/{entry['id']}/revisions",
+        headers=headers,
+    ).json()['items']
+
+    autosave_response = client.put(
+        f"/api/v1/content/entries/{entry['id']}/autosave",
+        headers=headers,
+        json={
+            'base_version': entry['version'],
+            'slug': 'autosave-draft',
+            'payload': {'title': 'Autosave Draft', 'body': '<p>Draft</p>', 'views': 2},
+            'seo_metadata': entry['seo_metadata'],
+        },
+    )
+    get_response = client.get(
+        f"/api/v1/content/entries/{entry['id']}/autosave",
+        headers=headers,
+    )
+    activity_response = client.get(
+        f"/api/v1/content/entries/{entry['id']}/activity",
+        headers=headers,
+    )
+    revisions_after_autosave = client.get(
+        f"/api/v1/content/entries/{entry['id']}/revisions",
+        headers=headers,
+    ).json()['items']
+
+    assert autosave_response.status_code == 200
+    autosave_payload = autosave_response.json()
+    assert autosave_payload['entry_id'] == entry['id']
+    assert autosave_payload['base_version'] == entry['version']
+    assert autosave_payload['current_version'] == entry['version']
+    assert autosave_payload['is_stale'] is False
+    assert autosave_payload['payload']['title'] == 'Autosave Draft'
+    assert get_response.status_code == 200
+    assert get_response.json()['payload']['title'] == 'Autosave Draft'
+    assert len(revisions_after_autosave) == len(initial_revisions)
+    assert activity_response.status_code == 200
+    assert any(item['action'] == 'autosave' for item in activity_response.json()['items'])
+
+
+def test_entry_schedule_set_cancel_and_execute_due_publish(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+    migrated_database: dict[str, str],
+) -> None:
+    """Verify schedule metadata, cancellation, and due publish execution."""
+
+    headers = _auth_headers(client, bootstrap_payload)
+    content_type = _create_content_type(client, headers)
+    create_response = client.post(
+        '/api/v1/content/entries',
+        headers=headers,
+        json={
+            'content_type_id': content_type['id'],
+            'status': 'draft',
+            'payload': {'title': 'Scheduled Entry', 'body': '<p>Schedule</p>', 'views': 1},
+        },
+    )
+    assert create_response.status_code == 201
+    entry = create_response.json()
+
+    future_publish_at = datetime.now(UTC) + timedelta(days=1)
+    schedule_response = client.put(
+        f"/api/v1/content/entries/{entry['id']}/schedule",
+        headers=headers,
+        json={
+            'expected_version': entry['version'],
+            'publish_at': future_publish_at.isoformat(),
+        },
+    )
+    get_schedule_response = client.get(
+        f"/api/v1/content/entries/{entry['id']}/schedule",
+        headers=headers,
+    )
+    cancel_response = client.delete(
+        f"/api/v1/content/entries/{entry['id']}/schedule",
+        headers=headers,
+    )
+    reschedule_response = client.put(
+        f"/api/v1/content/entries/{entry['id']}/schedule",
+        headers=headers,
+        json={
+            'expected_version': entry['version'],
+            'publish_at': future_publish_at.isoformat(),
+        },
+    )
+
+    assert schedule_response.status_code == 200
+    assert get_schedule_response.status_code == 200
+    assert get_schedule_response.json()['publish']['state'] == 'pending'
+    assert cancel_response.status_code == 200
+    assert cancel_response.json() == {'entry_id': entry['id'], 'publish': None, 'unpublish': None}
+    assert reschedule_response.status_code == 200
+
+    dsn = build_database_dsn(migrated_database, migrated_database['PRAGMA_DATABASE_NAME'])
+    with psycopg.connect(dsn) as connection, connection.transaction():
+        connection.execute(
+            """
+            UPDATE pragma_content_entry_schedules
+            SET run_at = %s
+            WHERE entry_id = %s AND state = 'pending'
+            """,
+            (datetime.now(UTC) - timedelta(minutes=1), entry['id']),
+        )
+
+    execute_response = client.post(
+        '/api/v1/content/schedules/execute',
+        headers=headers,
+    )
+    list_response = client.get('/api/v1/content/entries', headers=headers)
+    activity_response = client.get(
+        f"/api/v1/content/entries/{entry['id']}/activity",
+        headers=headers,
+    )
+
+    assert execute_response.status_code == 200
+    assert execute_response.json()['executed'] == 1
+    refreshed_entry = next(
+        item for item in list_response.json()['items'] if item['id'] == entry['id']
+    )
+    assert refreshed_entry['status'] == 'published'
+    assert any(
+        item['action'] == 'schedule_execute'
+        for item in activity_response.json()['items']
+    )

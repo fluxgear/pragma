@@ -284,3 +284,76 @@ def test_primary_navigation_replace_warns_for_drafts_and_renders_public_menu(
     assert 'Draft Link' not in public_response.text
     assert str(draft_entry['slug']) not in public_response.text
     assert 'Hidden Link' not in public_response.text
+
+
+def test_primary_navigation_supports_nested_items_and_content_picker(
+    client: TestClient,
+    bootstrap_payload: dict[str, str],
+) -> None:
+    """Verify nested menu persistence, public rendering, and picker options."""
+
+    headers = _admin_headers(client, bootstrap_payload)
+    page_type = _create_content_type(client, headers)
+    parent_entry = _create_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Parent Navigation Page',
+        status='published',
+    )
+    child_entry = _create_entry(
+        client,
+        headers,
+        str(page_type['id']),
+        title='Child Navigation Page',
+        status='published',
+    )
+
+    options_response = client.get('/api/v1/navigation/content-options', headers=headers)
+    save_response = client.put(
+        '/api/v1/navigation/primary',
+        headers=headers,
+        json={
+            'items': [
+                {
+                    'label': 'Parent',
+                    'link_type': 'content_entry',
+                    'content_entry_id': parent_entry['id'],
+                    'children': [
+                        {
+                            'label': 'Child',
+                            'link_type': 'content_entry',
+                            'content_entry_id': child_entry['id'],
+                        },
+                        {
+                            'label': 'Docs',
+                            'link_type': 'custom_url',
+                            'url': '/docs',
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    public_response = client.get('/')
+
+    assert options_response.status_code == 200
+    option_payload = options_response.json()
+    assert option_payload['total'] >= 2
+    assert {item['id'] for item in option_payload['items']} >= {
+        parent_entry['id'],
+        child_entry['id'],
+    }
+
+    assert save_response.status_code == 200
+    payload = save_response.json()
+    assert len(payload['items']) == 1
+    assert payload['items'][0]['label'] == 'Parent'
+    assert payload['items'][0]['children'][0]['label'] == 'Child'
+    assert payload['items'][0]['children'][0]['parent_item_id'] == payload['items'][0]['id']
+    assert payload['items'][0]['children'][1]['href'] == '/docs'
+
+    assert public_response.status_code == 200
+    assert 'Parent' in public_response.text
+    assert 'Child' in public_response.text
+    assert '/docs' in public_response.text

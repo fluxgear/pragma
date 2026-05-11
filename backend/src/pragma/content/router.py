@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from pragma.auth.dependencies import get_current_user, require_permission
 from pragma.auth.permissions import (
     PERMISSION_CONTENT_ENTRIES_DELETE,
+    PERMISSION_CONTENT_ENTRIES_PUBLISH,
     PERMISSION_CONTENT_ENTRIES_READ,
     PERMISSION_CONTENT_ENTRIES_WRITE,
     PERMISSION_CONTENT_TYPES_MANAGE,
@@ -28,6 +29,10 @@ from pragma.auth.permissions import (
 )
 from pragma.config import Settings, get_settings
 from pragma.content.models import (
+    ContentEntryActivityListParams,
+    ContentEntryActivityListResponse,
+    ContentEntryAutosaveRequest,
+    ContentEntryAutosaveResponse,
     ContentEntryCreateRequest,
     ContentEntryListParams,
     ContentEntryListResponse,
@@ -35,6 +40,9 @@ from pragma.content.models import (
     ContentEntryResponse,
     ContentEntryRevisionListResponse,
     ContentEntryRevisionRestoreRequest,
+    ContentEntryScheduleExecutionResult,
+    ContentEntryScheduleRequest,
+    ContentEntryScheduleResponse,
     ContentEntryTransitionRequest,
     ContentEntryUpdateRequest,
     ContentTypeCreateRequest,
@@ -44,18 +52,26 @@ from pragma.content.models import (
     ContentTypeUpdateRequest,
 )
 from pragma.content.service import (
+    cancel_entry_schedule_record,
     create_content_type_record,
     create_entry_preview_record,
     create_entry_record,
     delete_content_type_record,
+    delete_entry_autosave_record,
     delete_entry_record,
+    execute_due_content_entry_schedules,
     get_content_type_record,
+    get_entry_autosave_record,
     get_entry_record,
+    get_entry_schedule_record,
     list_content_type_records,
+    list_entry_activity_records,
     list_entry_records,
     list_entry_revision_records,
     publish_entry_record,
     restore_entry_revision_record,
+    save_entry_autosave_record,
+    set_entry_schedule_record,
     unpublish_entry_record,
     update_content_type_record,
     update_entry_record,
@@ -413,6 +429,149 @@ def update_entry(
     return update_entry_record(storage, entry_id, payload, current_user)
 
 
+@router.put(
+    "/entries/{entry_id}/autosave",
+    response_model=ContentEntryAutosaveResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
+def save_entry_autosave_for_content(
+    entry_id: UUID,
+    payload: ContentEntryAutosaveRequest,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> ContentEntryAutosaveResponse:
+    """Store the current user's autosave snapshot for a content entry."""
+
+    return save_entry_autosave_record(storage, entry_id, payload, current_user)
+
+
+@router.get(
+    "/entries/{entry_id}/autosave",
+    response_model=ContentEntryAutosaveResponse,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
+def get_entry_autosave_for_content(
+    entry_id: UUID,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> ContentEntryAutosaveResponse:
+    """Return the current user's autosave snapshot for a content entry."""
+
+    return get_entry_autosave_record(storage, entry_id, current_user)
+
+
+@router.delete(
+    "/entries/{entry_id}/autosave",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
+def delete_entry_autosave_for_content(
+    entry_id: UUID,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> Response:
+    """Discard the current user's autosave snapshot for a content entry."""
+
+    delete_entry_autosave_record(storage, entry_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/entries/{entry_id}/activity",
+    response_model=ContentEntryActivityListResponse,
+    responses=_CONTENT_BASE_ERROR_RESPONSES,
+)
+def list_entry_activity_for_content(
+    entry_id: UUID,
+    params: Annotated[ContentEntryActivityListParams, Query()],
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_READ))
+    ],
+) -> ContentEntryActivityListResponse:
+    """List durable activity for a content entry."""
+
+    _ = current_user
+    return list_entry_activity_records(storage, entry_id, params)
+
+
+@router.get(
+    "/entries/{entry_id}/schedule",
+    response_model=ContentEntryScheduleResponse,
+    responses=_CONTENT_DETAIL_ERROR_RESPONSES,
+)
+def get_entry_schedule_for_content(
+    entry_id: UUID,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_READ))
+    ],
+) -> ContentEntryScheduleResponse:
+    """Return pending schedule metadata for a content entry."""
+
+    _ = current_user
+    return get_entry_schedule_record(storage, entry_id)
+
+
+@router.put(
+    "/entries/{entry_id}/schedule",
+    response_model=ContentEntryScheduleResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
+def set_entry_schedule_for_content(
+    entry_id: UUID,
+    payload: ContentEntryScheduleRequest,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> ContentEntryScheduleResponse:
+    """Replace pending publish/unpublish schedules for a content entry."""
+
+    return set_entry_schedule_record(storage, entry_id, payload, current_user)
+
+
+@router.delete(
+    "/entries/{entry_id}/schedule",
+    response_model=ContentEntryScheduleResponse,
+    responses=_CONTENT_DETAIL_MUTATION_ERROR_RESPONSES,
+)
+def cancel_entry_schedule_for_content(
+    entry_id: UUID,
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
+    ],
+) -> ContentEntryScheduleResponse:
+    """Cancel pending publish/unpublish schedules for a content entry."""
+
+    return cancel_entry_schedule_record(storage, entry_id, current_user)
+
+
+@router.post(
+    "/schedules/execute",
+    response_model=ContentEntryScheduleExecutionResult,
+    responses=_CONTENT_MUTATION_ERROR_RESPONSES,
+)
+def execute_due_entry_schedules_for_content(
+    storage: Annotated[DatabasePool, Depends(get_storage)],
+    current_user: Annotated[
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_PUBLISH))
+    ],
+    limit: Annotated[int, Query(gt=0, le=500)] = 100,
+) -> ContentEntryScheduleExecutionResult:
+    """Execute due content-entry schedules once."""
+
+    _ = current_user
+    return execute_due_content_entry_schedules(storage, limit=limit)
+
+
 @router.get(
     "/entries/{entry_id}/revisions",
     response_model=ContentEntryRevisionListResponse,
@@ -441,13 +600,12 @@ def create_entry_preview_for_content(
     storage: Annotated[DatabasePool, Depends(get_storage)],
     settings: Annotated[Settings, Depends(get_settings)],
     current_user: Annotated[
-        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_READ))
+        dict[str, object], Depends(require_permission(PERMISSION_CONTENT_ENTRIES_WRITE))
     ],
 ) -> ContentEntryPreviewResponse:
     """Create a short-lived signed preview URL for a content entry."""
 
-    _ = current_user
-    return create_entry_preview_record(storage, settings, entry_id)
+    return create_entry_preview_record(storage, settings, entry_id, current_user)
 
 
 @router.post(
@@ -521,6 +679,5 @@ def delete_entry_for_content(
 ) -> Response:
     """Delete a content entry."""
 
-    _ = current_user
-    delete_entry_record(storage, entry_id)
+    delete_entry_record(storage, entry_id, current_user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
